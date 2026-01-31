@@ -1,0 +1,57 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+
+linters:
+  default: all
+  disable:
+    - prealloc # we're not that performance critical
+    - noinlineerr # I like inline error handling
+    - err113 # we use fmt.Errorf("context: %w")
+
+    # maybe enable in the future
+    - depguard # consider enabling when architecture stabilizes
+    - paralleltest # consider enabling if tests become too slow
+
+    # these don't check behavior, so relatively safe to disable
+    - wsl # deprecated
+    - wsl_v5
+    - nlreturn
+    - lll
+
+  settings:
+    varnamelen:
+      ignore-decls:
+        - i int
+        - sb *sandbox.Sandbox
+
+    exhaustive:
+      default-signifies-exhaustive: true
+
+    exhaustruct:
+      exclude:
+        - '.+/cobra\.Command$'
+
+    goconst:
+      ignore-tests: true
+
+    mnd:
+      ignored-numbers:
+        - "3"
+
+  exclusions:
+    rules:
+      - linters:
+          - varnamelen
+        path: '(.+)_test\.go'
+        text: "'tt'"
+
+      - linters:
+          - gochecknoglobals
+        path: 'export_test\.go'
+
+      - linters:
+          - goconst
+        path: '(.+)_test\.go'

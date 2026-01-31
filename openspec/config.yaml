@@ -1,20 +1,35 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  Security-critical Linux filesystem sandbox (bubblewrap + strace). Bugs enable sandbox escapes or unintended file access.
+  Tech: Go, Linux namespaces. Domain: Filesystem isolation, mount namespaces, rule-based access control. See docs/security-model.md.
+  Arch: CLI → rule resolver → bwrap wrapper → sandboxed process. Core: config, rules, sandbox, monitor.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - State security impact: does this change permission checks, rule resolution, sandbox boundaries,
+      config parsing, or bwrap invocation? Explain threat model implications.
+    - Identify affected trust boundaries (user input, config, child processes).
+    - Consider config format backward compatibility and whether features expand/restrict sandbox.
+
+  specs:
+    - Requirements must be security-verifiable, not vague. Use SHALL for security invariants,
+      MUST for correctness, SHOULD for robustness.
+    - Scenarios must describe observable behavior, not internal operations.
+    - Every scenario must map to an E2E test. Cover success and security-relevant failures
+      (invalid config, permission denials, malicious input).
+    - Modifying specs may require test updates.
+
+  design:
+    - Require threat analysis for security decisions: what if this fails?
+    - Use fail-safe defaults (deny by default, explicit allow lists). Explain auditability.
+    - Map sandbox boundary changes to bwrap/kernel guarantees. Show edge cases for rule changes.
+    - Reference docs/security-model.md, kernel capabilities, bwrap documentation.
+    - Include important implementation details.
+
+  tasks:
+    - [SECURITY] tasks require reading docs/security-model.md first.
+    - Strict TDD: failing test → implement → verify. E2E tests mandatory for new scenarios.
+    - Follow docs/error-handling.md. Config format breaks need migration examples.
+    - When adding fuzz tests or changing code covered by existing ones, run affected fuzz targets
+      for at least 30 seconds to catch regressions.

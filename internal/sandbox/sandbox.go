@@ -1,0 +1,210 @@
+// Package sandbox executes commands in a bubblewrap container with restricted filesystem access.
+package sandbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/rules"
+)
+
+// ManagedDirs are directories the sandbox handles automatically.
+// Includes: runtime infrastructure (/dev, /proc), isolation (/tmp),
+// and bwrap's internal pivot_root directories (/newroot, /oldroot).
+//
+//nolint:gochecknoglobals // used read-only
+var ManagedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
+
+// Sandbox manages the bubblewrap sandbox configuration and execution.
+type Sandbox struct {
+	cfg        *config.Config
+	configPath string
+}
+
+// New creates a new Sandbox.
+// configPath must be empty or absolute.
+func New(cfg *config.Config, configPath string) *Sandbox {
+	if configPath != "" && !filepath.IsAbs(configPath) {
+		panic("internal error: configPath must be absolute: " + configPath)
+	}
+	return &Sandbox{
+		cfg:        cfg,
+		configPath: configPath,
+	}
+}
+
+// Run executes a command in the sandbox and returns its exit code.
+func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
+	if len(command) == 0 {
+		return 1, errors.New("no command specified")
+	}
+
+	if _, err := exec.LookPath("bwrap"); err != nil {
+		return 1, fmt.Errorf("bubblewrap (bwrap) not found in PATH: %w", err)
+	}
+
+	bwrapArgs := s.BuildBwrapArgs(command)
+
+	cmd := exec.CommandContext(ctx, "bwrap", bwrapArgs...) // #nosec G204 -- args built from validated config
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	err := cmd.Run()
+	if err != nil {
+		exitErr := new(exec.ExitError)
+		if errors.As(err, &exitErr) {
+			// Command ran but exited with non-zero code
+			return exitErr.ExitCode(), nil
+		}
+		// Failed to execute bwrap itself
+		return 1, fmt.Errorf("execute bwrap: %w", err)
+	}
+
+	return 0, nil
+}
+
+// BuildBwrapArgs constructs bwrap arguments (exported for monitor integration).
+func (s *Sandbox) BuildBwrapArgs(command []string) []string {
+	args := []string{}
+
+	// Unshare all namespaces (PID, IPC, UTS, cgroup) for process isolation.
+	// Re-share network to allow network access.
+	args = append(args, "--unshare-all")
+	args = append(args, "--share-net")
+
+	// Create new session to prevent TIOCSTI terminal injection attacks (CVE-2017-5226).
+	args = append(args, "--new-session")
+
+	// Environment variables pass through from host (no --clearenv)
+
+	// Note: No --chdir flag. The sandboxed process inherits host cwd.
+	// If cwd is not mounted, bwrap falls back to /.
+	args = append(args, "--die-with-parent")
+
+	args = append(args, "--dev", "/dev")
+	args = append(args, "--proc", "/proc")
+	args = append(args, "--tmpfs", "/tmp")
+
+	writableConfig := false
+	if s.configPath != "" {
+		resolver := rules.New(s.cfg)
+		accessLevel := resolver.PermissionFor(s.configPath)
+		if accessLevel <= config.PermissionReadWrite {
+			writableConfig = true
+			fmt.Fprintln(os.Stderr, "execave: config file forced read-only")
+		}
+	}
+
+	args = s.addRuleMounts(args, writableConfig)
+
+	args = append(args, "--")
+	args = append(args, command...)
+
+	return args
+}
+
+// addRuleMounts adds bind mounts for config rules.
+// If writableConfig, forces config file read-only.
+func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
+	mounted := make(map[string]bool)
+	rules := s.getSortedRules()
+
+	if writableConfig {
+		syntheticRule := config.Rule{
+			Resource:   config.ResourceFS,
+			Permission: config.PermissionReadOnly,
+			Path:       s.configPath,
+			RawRule:    "fs:ro:" + s.configPath,
+		}
+		// Append so it comes after parent directory (overlays with ro permission)
+		rules = append(rules, syntheticRule)
+	}
+
+	for _, rule := range rules {
+		path := rule.Path
+
+		if mounted[path] {
+			panic("internal error: duplicate mount path: " + path)
+		}
+
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "execave: skipping rule %q: %v\n", rule.RawRule, err)
+			continue
+		}
+
+		args = appendMountArgs(args, rule, info)
+		mounted[path] = true
+
+		// Restrict permissions on fs:none directory tmpfs mounts.
+		// Without this, the empty tmpfs would be world-readable/writable (0755),
+		// which contradicts the guarantee that fs:none paths are inaccessible.
+		// Dirs with child rules get 0111 (execute-only) to allow path traversal
+		// to child mounts. Dirs without children get 0000 (completely blocked).
+		if rule.Permission == config.PermissionNone && info.IsDir() {
+			if hasChildRules(rules, path) {
+				args = append(args, "--chmod", "0111", path)
+			} else {
+				args = append(args, "--chmod", "0000", path)
+			}
+		}
+	}
+
+	return args
+}
+
+func (s *Sandbox) getSortedRules() []config.Rule {
+	sorted := make([]config.Rule, len(s.cfg.Rules))
+	copy(sorted, s.cfg.Rules)
+	// Sort by shortest path first (parents before children).
+	// In bwrap, later mounts overlay earlier ones, so children with
+	// different permissions must come after their parents.
+	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i].Path) < len(sorted[j].Path) })
+	return sorted
+}
+
+// hasChildRules reports whether any rule's path is a strict descendant of parentPath.
+func hasChildRules(rules []config.Rule, parentPath string) bool {
+	prefix := parentPath + "/"
+	for _, r := range rules {
+		if strings.HasPrefix(r.Path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// appendMountArgs adds bwrap arguments for a single rule.
+func appendMountArgs(args []string, rule config.Rule, info os.FileInfo) []string {
+	path := rule.Path
+
+	switch rule.Permission {
+	case config.PermissionReadWrite:
+		return append(args, "--bind", path, path)
+
+	case config.PermissionReadOnly:
+		return append(args, "--ro-bind", path, path)
+
+	case config.PermissionNone:
+		// Block access by overlaying with inaccessible content.
+		// For directories: empty tmpfs hides original contents.
+		// For files: /dev/null returns Permission denied.
+		if info.IsDir() {
+			return append(args, "--tmpfs", path)
+		}
+		return append(args, "--bind", "/dev/null", path)
+
+	case config.PermissionUnknown:
+		panic("internal error: rule has PermissionUnknown: " + rule.RawRule)
+	}
+
+	return args
+}

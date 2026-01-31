@@ -1,0 +1,37 @@
+{
+  "rules": [
+    "fs:ro:/usr",
+    "fs:ro:/lib",
+    "fs:ro:/lib64",
+    "fs:ro:/bin",
+    "fs:ro:/sbin",
+
+    "fs:ro:/etc/ld.so.cache",
+    "fs:ro:/etc/ld.so.preload",
+    "fs:ro:/etc/ld.so.conf",
+    "fs:ro:/etc/ld.so.conf.d",
+
+    "fs:ro:/etc/passwd",
+    "fs:ro:/etc/group",
+    "fs:ro:/etc/nsswitch.conf",
+
+    "fs:ro:/etc/localtime",
+    "fs:ro:/etc/timezone",
+
+    "fs:ro:/etc/hosts",
+    "fs:ro:/etc/resolv.conf",
+    "fs:ro:/etc/host.conf",
+    "fs:ro:/etc/gai.conf",
+    "fs:ro:/etc/protocols",
+    "fs:ro:/etc/services",
+
+    "fs:ro:/etc/ssl/certs",
+    "fs:ro:/etc/pki",
+    "fs:ro:/etc/ca-certificates",
+
+    "fs:ro:/etc/shells",
+    "fs:ro:/etc/mime.types",
+
+    "fs:rw:."
+  ]
+}
