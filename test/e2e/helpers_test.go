@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -214,6 +216,58 @@ func (env monitorTestEnv) runMonitored(t *testing.T, rules []string, args ...str
 	execArgs = append(execArgs, "--config", configPath, "--monitor="+env.LogPath, "--")
 	execArgs = append(execArgs, args...)
 	return runExecave(t, "", execArgs...)
+}
+
+// runMonitoredWithInterrupt runs execave with monitoring enabled and sends SIGINT
+// to the process group after a short delay, simulating terminal ctrl-c behavior.
+func (env monitorTestEnv) runMonitoredWithInterrupt(t *testing.T, rules []string, args ...string) execaveResult {
+	t.Helper()
+	configPath := writeConfig(t, rules)
+	execArgs := make([]string, 0, 4+len(args))
+	execArgs = append(execArgs, "--config", configPath, "--monitor="+env.LogPath, "--")
+	execArgs = append(execArgs, args...)
+
+	cmd := exec.CommandContext(context.Background(), binaryPath, execArgs...) // #nosec G204 -- test code with controlled args
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Put execave in its own process group so we can send SIGINT to the entire
+	// group (execave + strace + bwrap + child), mimicking terminal ctrl-c.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} //nolint:exhaustruct
+
+	err := cmd.Start()
+	require.NoError(t, err)
+
+	// Give the process tree time to start
+	time.Sleep(200 * time.Millisecond)
+
+	// Send SIGINT to the process group (negative PID). This reaches all
+	// processes in the group: execave (ignores it via signal.Notify),
+	// strace, bwrap, and the child command.
+	err = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+	require.NoError(t, err)
+
+	// Wait for the process to exit
+	waitErr := cmd.Wait()
+
+	result := execaveResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: 0,
+	}
+
+	if waitErr != nil {
+		exitErr := new(exec.ExitError)
+		if errors.As(waitErr, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			t.Fatalf("unexpected error waiting for execave: %v", waitErr)
+		}
+	}
+
+	return result
 }
 
 // readLog reads and returns the monitor log content.

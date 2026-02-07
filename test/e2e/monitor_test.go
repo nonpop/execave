@@ -301,3 +301,23 @@ func TestE2E_Monitor_NamespaceOperationsNotLogged(t *testing.T) {
 
 	assert.NotContains(t, logContent, "/ns/")
 }
+
+// TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT tests that the access log
+// is written even when the child process is terminated by SIGINT (ctrl-c).
+func TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT(t *testing.T) {
+	env := newMonitorTest(t)
+
+	// Start execave with --monitor and a long-running command
+	// We'll send SIGINT to the process group after a short delay
+	result := env.runMonitoredWithInterrupt(t, systemPaths(), "sleep", "60")
+
+	// Exit code should be 130 (128 + SIGINT=2)
+	assertExitCode(t, result, 130)
+
+	// Access log should exist and contain entries
+	assertLogExists(t, env.LogPath)
+
+	// The log should have at least system path accesses
+	logContent := env.readLog(t)
+	assert.NotEmpty(t, logContent)
+}

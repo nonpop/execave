@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/monitor"
@@ -91,6 +93,12 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath strin
 	if err != nil {
 		return fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
 	}
+
+	// Prevent SIGINT from terminating the Go process so it can process strace
+	// output and write the access log after the child exits.
+	// See fix-sigint-access-log/design.md for why we use signal.Notify instead of signal.Ignore.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT)
 
 	ctx := context.Background()
 	var exitCode int
