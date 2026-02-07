@@ -20,9 +20,10 @@ import (
 
 // Monitor wraps command execution with strace to log filesystem access.
 type Monitor struct {
-	resolver  *fsrules.Resolver
-	logger    *accesslog.Logger
-	bwrapArgs []string // strace wraps bwrap
+	resolver       *fsrules.Resolver
+	logger         *accesslog.Logger
+	bwrapArgs      []string // strace wraps bwrap
+	hasNetworkPath bool     // tunnel adds an extra execve to setup
 }
 
 // OperationType classifies filesystem operations as read or write.
@@ -39,11 +40,13 @@ const (
 
 // New creates a new Monitor.
 // bwrapArgs configures sandbox integration. If empty, strace traces the command directly.
-func New(logger *accesslog.Logger, resolver *fsrules.Resolver, bwrapArgs []string) *Monitor {
+// hasNetworkPath indicates whether the sandbox has a network tunnel (adds an extra execve to setup).
+func New(logger *accesslog.Logger, resolver *fsrules.Resolver, bwrapArgs []string, hasNetworkPath bool) *Monitor {
 	return &Monitor{
-		logger:    logger,
-		resolver:  resolver,
-		bwrapArgs: bwrapArgs,
+		logger:         logger,
+		resolver:       resolver,
+		bwrapArgs:      bwrapArgs,
+		hasNetworkPath: hasNetworkPath,
 	}
 }
 
@@ -117,10 +120,14 @@ func (m *Monitor) processStraceOutput(output io.Reader) error {
 
 	// When bwrap is used, strace captures bwrap's sandbox setup (namespace,
 	// mount, pivot_root) before the user command starts. The strace output
-	// contains at least two execve calls: bwrap's own (first) and the user
-	// command (second). Skip all lines until the second execve.
+	// contains execve calls for setup: bwrap's own (first), optionally the
+	// tunnel (second when net rules present), and the user command (last).
+	// Skip all lines until the final setup execve.
 	inSetup := len(m.bwrapArgs) > 0
-	const expectedExecves = 2
+	expectedExecves := 2
+	if m.hasNetworkPath {
+		expectedExecves = 3
+	}
 	seenExecves := 0
 
 	for scanner.Scan() {
@@ -202,7 +209,7 @@ func (m *Monitor) processAccessEntry(syscall, path, line string) error {
 func (m *Monitor) handleRelativePath(opType OperationType, cleanPath string) error {
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationType(opType),
-		Path:      cleanPath,
+		Target:    cleanPath,
 		Result:    accesslog.ResultUnknown,
 		Rule:      accesslog.RuleUnresolvedRelativePath,
 	}
@@ -215,7 +222,7 @@ func (m *Monitor) handleRelativePath(opType OperationType, cleanPath string) err
 func (m *Monitor) handleUncertainResult(opType OperationType, cleanPath string) error {
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationType(opType),
-		Path:      cleanPath,
+		Target:    cleanPath,
 		Result:    accesslog.ResultUnknown,
 		Rule:      accesslog.RuleSymlinkTargetUnresolvable,
 	}
@@ -239,7 +246,7 @@ func (m *Monitor) handleDepthLimitExceeded(opType OperationType, result fsrules.
 	lastHop := result.Symlink.Hops[len(result.Symlink.Hops)-1]
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationType(opType),
-		Path:      lastHop.Path,
+		Target:    lastHop.Path,
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleSymlinkDepthExceeded,
 	}
@@ -302,7 +309,7 @@ func (m *Monitor) logPathAccess(
 
 	entry := accesslog.Entry{
 		Operation: operation,
-		Path:      path,
+		Target:    path,
 		Result:    result,
 		Rule:      ruleStr,
 	}

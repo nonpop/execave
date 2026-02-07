@@ -14,6 +14,7 @@ import (
 func makeTestConfig(rules []fsrules.Rule) *config.Config {
 	return &config.Config{
 		FSRules:      rules,
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 }

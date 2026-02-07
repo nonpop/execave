@@ -26,6 +26,10 @@ linters:
       ignore-decls:
         - i int
         - sb *sandbox.Sandbox
+        - wg sync.WaitGroup
+        - wg *sync.WaitGroup
+        - w http.ResponseWriter
+        - r *http.Request
 
     exhaustive:
       default-signifies-exhaustive: true
@@ -33,6 +37,7 @@ linters:
     exhaustruct:
       exclude:
         - '.+/cobra\.Command$'
+        - '(net|net/http|crypto/tls)\..+' # stdlib structs are well-known, well-behaved, and stable
 
     goconst:
       ignore-tests: true
@@ -54,4 +59,5 @@ linters:
 
       - linters:
           - goconst
+          - noctx
         path: '(.+)_test\.go'

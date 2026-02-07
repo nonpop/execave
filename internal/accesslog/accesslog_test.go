@@ -19,7 +19,7 @@ func TestLogger_LogEntry(t *testing.T) {
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
-		Path:      "/etc/passwd",
+		Target:    "/etc/passwd",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/etc",
 	}
@@ -40,7 +40,7 @@ func TestLogger_Deduplication(t *testing.T) {
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
-		Path:      "/etc/passwd",
+		Target:    "/etc/passwd",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/etc",
 	}
@@ -68,14 +68,14 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 
 	readEntry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
-		Path:      testFile,
+		Target:    testFile,
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:rw:" + tmpDir,
 	}
 
 	writeEntry := accesslog.Entry{
 		Operation: accesslog.OperationWrite,
-		Path:      testFile,
+		Target:    testFile,
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:rw:" + tmpDir,
 	}
@@ -127,7 +127,7 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 
 			entry := accesslog.Entry{
 				Operation: accesslog.OperationRead,
-				Path:      tt.path,
+				Target:    tt.path,
 				Result:    accesslog.ResultOK,
 				Rule:      "fs:ro:/",
 			}
@@ -155,7 +155,7 @@ func TestLogger_NonExistentReadLogged(t *testing.T) {
 
 	readEntry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
-		Path:      nonExistentPath,
+		Target:    nonExistentPath,
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
 	}
@@ -177,7 +177,7 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
-		Path:      existingFile,
+		Target:    existingFile,
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:" + tmpDir,
 	}
@@ -237,7 +237,7 @@ func TestLogger_LogFormat(t *testing.T) {
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationWrite,
-		Path:      "/home/user/project/file.txt",
+		Target:    "/home/user/project/file.txt",
 		Result:    accesslog.ResultDeny,
 		Rule:      "fs:ro:/home/user/project",
 	}
@@ -254,6 +254,134 @@ func TestLogger_LogFormat(t *testing.T) {
 	assert.Equal(t, "/home/user/project/file.txt", parts[1])
 	assert.Equal(t, "DENY", parts[2])
 	assert.Equal(t, "fs:ro:/home/user/project", parts[3])
+}
+
+func TestLogger_HTTPSEntry(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:api.example.com:443",
+	}
+
+	err := logger.Log(entry)
+	require.NoError(t, err)
+
+	logStr := buf.String()
+	assert.Contains(t, logStr, "HTTPS")
+	assert.Contains(t, logStr, "api.example.com:443")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "net:https:api.example.com:443")
+}
+
+func TestLogger_HTTPEntry(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTP,
+		Target:    "localhost:3000",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:http:localhost:3000",
+	}
+
+	err := logger.Log(entry)
+	require.NoError(t, err)
+
+	logStr := buf.String()
+	assert.Contains(t, logStr, "HTTP")
+	assert.Contains(t, logStr, "localhost:3000")
+}
+
+func TestLogger_HTTPSDenied(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "malicious.example.com:443",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	}
+
+	err := logger.Log(entry)
+	require.NoError(t, err)
+
+	logStr := buf.String()
+	assert.Contains(t, logStr, "HTTPS")
+	assert.Contains(t, logStr, "malicious.example.com:443")
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, "no-matching-rule")
+}
+
+func TestLogger_HTTPSDeduplication(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:api.example.com:443",
+	}
+
+	// Log the same entry three times
+	for range 3 {
+		err := logger.Log(entry)
+		require.NoError(t, err)
+	}
+
+	logStr := buf.String()
+	lines := strings.Split(strings.TrimSpace(logStr), "\n")
+	assert.Len(t, lines, 1)
+}
+
+func TestLogger_HTTPSAndHTTPSeparate(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	httpsEntry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:example.com:443",
+	}
+
+	httpEntry := accesslog.Entry{
+		Operation: accesslog.OperationHTTP,
+		Target:    "example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:http:example.com:443",
+	}
+
+	err := logger.Log(httpsEntry)
+	require.NoError(t, err)
+	err = logger.Log(httpEntry)
+	require.NoError(t, err)
+
+	// Both should be logged (different operations)
+	logStr := buf.String()
+	lines := strings.Split(strings.TrimSpace(logStr), "\n")
+	assert.Len(t, lines, 2)
+}
+
+func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, []string{"/dev", "/proc", "/tmp"})
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:api.example.com:443",
+	}
+
+	err := logger.Log(entry)
+	require.NoError(t, err)
+	assert.NotEmpty(t, buf.String())
 }
 
 func TestLogger_RuleReasonConstants(t *testing.T) {
@@ -281,7 +409,7 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 
 			entry := accesslog.Entry{
 				Operation: accesslog.OperationWrite, // Use WRITE so non-existent path filtering doesn't apply
-				Path:      testFile,
+				Target:    testFile,
 				Result:    accesslog.ResultUnknown,
 				Rule:      tt.rule,
 			}

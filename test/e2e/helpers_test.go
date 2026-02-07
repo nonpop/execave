@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,6 +56,18 @@ func failIfNoBwrap(t *testing.T) {
 func failIfNoStrace(t *testing.T) {
 	t.Helper()
 	_, err := exec.LookPath("strace")
+	require.NoError(t, err)
+}
+
+func failIfNoCurl(t *testing.T) {
+	t.Helper()
+	_, err := exec.LookPath("curl")
+	require.NoError(t, err)
+}
+
+func failIfNoPython3(t *testing.T) {
+	t.Helper()
+	_, err := exec.LookPath("python3")
 	require.NoError(t, err)
 }
 
@@ -287,4 +304,69 @@ func systemPaths() []string {
 		"fs:ro:/lib64",
 		"fs:ro:/etc/ld.so.cache",
 	}
+}
+
+// testHTTPServer starts a plain HTTP server that returns body.
+// Returns the listener host and port.
+func testHTTPServer(t *testing.T, body string) (string, string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	h, p, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	return h, p
+}
+
+// testHTTPSServer starts a TLS HTTP server that returns body.
+// Returns the listener host and port.
+func testHTTPSServer(t *testing.T, body string) (string, string) {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	h, p, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	return h, p
+}
+
+// assertInvalidNetRuleRejected verifies that a config with an invalid net rule
+// causes execave to exit with code 1 and print an error containing errSubstr.
+func assertInvalidNetRuleRejected(t *testing.T, rule, errSubstr string) {
+	t.Helper()
+
+	configPath := writeConfig(t, append(systemPaths(), rule))
+
+	result := runExecave(t, "", "--config", configPath, "--", "true")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, errSubstr)
+}
+
+// assertDuplicateNetRuleRejected verifies that a config with duplicate net rules
+// causes execave to exit with code 1 and print an error about duplicates.
+func assertDuplicateNetRuleRejected(t *testing.T, rules []string) {
+	t.Helper()
+
+	configPath := writeConfig(t, rules)
+
+	result := runExecave(t, "", "--config", configPath, "--", "true")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "duplicate net rule")
+}
+
+// assertMixedPortPatternsRejected verifies that a config with mixed port patterns
+// causes execave to exit with code 1 and print an error about mixed patterns.
+func assertMixedPortPatternsRejected(t *testing.T, rules []string) {
+	t.Helper()
+
+	configPath := writeConfig(t, rules)
+
+	result := runExecave(t, "", "--config", configPath, "--", "true")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "mixed port patterns")
 }

@@ -15,7 +15,10 @@ import (
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
+	"github.com/nonpop/execave/internal/netrules"
+	"github.com/nonpop/execave/internal/proxy"
 	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/spf13/cobra"
 )
 
@@ -70,7 +73,43 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 	cmd.Flags().StringVar(&monitorPath, "monitor", "", "Enable access monitoring (optionally specify log path)")
 	cmd.Flags().Lookup("monitor").NoOptDefVal = defaultLogPath
 
+	cmd.AddCommand(newNetworkTunnelCommand())
+
 	return cmd
+}
+
+// newNetworkTunnelCommand creates the network-tunnel subcommand.
+// This command runs inside the sandbox to bridge TCP to the proxy UDS.
+func newNetworkTunnelCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:    "network-tunnel <uds-path> [--] <command>",
+		Short:  "TCP-to-UDS bridge for network proxy (internal)",
+		Hidden: false,
+		Args:   cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			udsPath := args[0]
+
+			// Find the command after optional "--"
+			var command []string
+			argsLenAtDash := cmd.ArgsLenAtDash()
+			if argsLenAtDash == -1 {
+				command = args[1:]
+			} else {
+				command = args[argsLenAtDash:]
+			}
+
+			if len(command) == 0 {
+				return errors.New("no command specified")
+			}
+
+			exitCode, err := tunnel.Run(udsPath, command)
+			if err != nil {
+				return fmt.Errorf("run tunnel: %w", err)
+			}
+			os.Exit(exitCode)
+			return nil
+		},
+	}
 }
 
 func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath string) error {
@@ -83,13 +122,7 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath strin
 }
 
 func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath string) (int, error) {
-	var command []string
-	argsLenAtDash := cmd.ArgsLenAtDash()
-	if argsLenAtDash == -1 {
-		command = args
-	} else {
-		command = args[argsLenAtDash:]
-	}
+	command := extractCommand(cmd, args)
 
 	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
 	if err != nil {
@@ -112,11 +145,29 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 	signal.Notify(sigCh, syscall.SIGINT)
 
 	ctx := context.Background()
-	if monitorEnabled {
-		return runMonitored(ctx, cfg, absConfigPath, monitorPath, resolver, command)
+
+	logger, logCleanup, err := setupAccessLog(monitorEnabled, monitorPath)
+	if err != nil {
+		return 0, err
+	}
+	if logCleanup != nil {
+		defer logCleanup()
 	}
 
-	sb := sandbox.New(cfg, absConfigPath)
+	netPath, proxyCleanup, err := setupNetworking(cfg, logger, monitorEnabled)
+	if err != nil {
+		return 0, err
+	}
+	if proxyCleanup != nil {
+		defer proxyCleanup()
+	}
+
+	sb := sandbox.New(cfg, absConfigPath, netPath)
+
+	if monitorEnabled {
+		return runMonitored(ctx, sb, logger, resolver, command)
+	}
+
 	exitCode, err := sb.Run(ctx, command)
 	if err != nil {
 		return 0, fmt.Errorf("run sandbox: %w", err)
@@ -124,32 +175,106 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 	return exitCode, nil
 }
 
-// runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring. It writes the access log to monitorPath.
-func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath, monitorPath string, resolver *fsrules.Resolver, command []string) (int, error) {
-	logFile, err := os.Create(monitorPath) //nolint:gosec // monitorPath is user-provided CLI flag
-	if err != nil {
-		return 0, fmt.Errorf("create access log %s: %w", monitorPath, err)
+// extractCommand extracts the command to run from cobra arguments.
+func extractCommand(cmd *cobra.Command, args []string) []string {
+	argsLenAtDash := cmd.ArgsLenAtDash()
+	if argsLenAtDash == -1 {
+		return args
 	}
-	defer func() {
-		_ = logFile.Close() // Best effort close
-	}()
+	return args[argsLenAtDash:]
+}
 
-	writer := bufio.NewWriter(logFile)
-	defer func() {
-		if err := writer.Flush(); err != nil {
-			fmt.Fprintf(os.Stderr, "execave: flush access log: %v\n", err)
+// setupAccessLog initializes the access logger if monitoring is enabled.
+func setupAccessLog(monitorEnabled bool, monitorPath string) (*accesslog.Logger, func(), error) {
+	if !monitorEnabled {
+		return nil, nil, nil
+	}
+	logWriter, logCleanup, err := createAccessLogWriter(monitorPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	logger := accesslog.New(logWriter, sandbox.ManagedDirs)
+	return logger, logCleanup, nil
+}
+
+// setupNetworking initializes the proxy and network path if net rules are present
+// or if monitoring is enabled. When monitoring is enabled without net rules, the
+// proxy starts with an empty rule set (deny-all) so that HTTP-proxy-aware
+// programs' network access attempts are logged.
+func setupNetworking(cfg *config.Config, logger *accesslog.Logger, monitorEnabled bool) (*sandbox.NetworkPath, func(), error) {
+	if !cfg.HasNetRules() && !monitorEnabled {
+		return nil, nil, nil
+	}
+	netPath, proxyInstance, err := startProxy(cfg, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		if err := proxyInstance.Stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: stop proxy: %v\n", err)
 		}
-	}()
-	logger := accesslog.New(writer, sandbox.ManagedDirs)
+	}
+	return netPath, cleanup, nil
+}
 
-	sb := sandbox.New(cfg, absConfigPath)
+func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkPath, *proxy.Proxy, error) {
+	tmpDir, err := os.MkdirTemp("", "execave-proxy-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create proxy temp dir: %w", err)
+	}
+
+	udsPath := filepath.Join(tmpDir, "proxy.sock")
+
+	netResolver := netrules.NewResolver(cfg.NetRules)
+	httpProxy := proxy.New(netResolver, logger)
+
+	if err := httpProxy.Start(udsPath); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, nil, fmt.Errorf("start proxy: %w", err)
+	}
+
+	execaveBinary, err := os.Executable()
+	if err != nil {
+		_ = httpProxy.Stop()
+		_ = os.RemoveAll(tmpDir)
+		return nil, nil, fmt.Errorf("resolve execave binary path: %w", err)
+	}
+
+	netPath := &sandbox.NetworkPath{
+		UDSPath:       udsPath,
+		ExecaveBinary: execaveBinary,
+	}
+
+	return netPath, httpProxy, nil
+}
+
+// runMonitored runs the command inside a sandbox with strace-based filesystem
+// access monitoring.
+func runMonitored(ctx context.Context, sb *sandbox.Sandbox, logger *accesslog.Logger, resolver *fsrules.Resolver, command []string) (int, error) {
 	bwrapArgs := sb.BuildBwrapArgs(command)
-	mon := monitor.New(logger, resolver, bwrapArgs)
+	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath())
 
 	exitCode, err := mon.Run(ctx, command)
 	if err != nil {
 		return 0, fmt.Errorf("run monitor+sandbox: %w", err)
 	}
 	return exitCode, nil
+}
+
+func createAccessLogWriter(monitorPath string) (*bufio.Writer, func(), error) {
+	logFile, err := os.Create(monitorPath) //nolint:gosec // monitorPath is user-provided CLI flag
+	if err != nil {
+		return nil, nil, fmt.Errorf("create access log %s: %w", monitorPath, err)
+	}
+
+	writer := bufio.NewWriter(logFile)
+
+	cleanup := func() {
+		if err := writer.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: flush access log: %v\n", err)
+		}
+		_ = logFile.Close()
+	}
+
+	return writer, cleanup, nil
 }

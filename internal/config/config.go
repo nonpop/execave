@@ -10,17 +10,24 @@ import (
 	"strings"
 
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/netrules"
 )
 
 // Config represents the parsed configuration file.
 type Config struct {
 	FSRules      []fsrules.Rule
+	NetRules     []netrules.Rule
 	ManagedPaths []string // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
 }
 
+// HasNetRules reports whether the configuration contains any network rules.
+func (c *Config) HasNetRules() bool {
+	return len(c.NetRules) > 0
+}
+
 // Load reads and parses a configuration file.
-// It routes rules by resource prefix: "fs:" rules go to fsrules package.
-// managedPaths are path prefixes that rules cannot target (e.g., /proc, /dev).
+// It routes rules by resource prefix: "fs:" rules go to fsrules, "net:" rules go to netrules.
+// managedPaths are path prefixes that fs rules cannot target (e.g., /proc, /dev).
 func Load(path string, managedPaths []string) (*Config, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path is user-provided config file from CLI
 	if err != nil {
@@ -43,7 +50,7 @@ func Load(path string, managedPaths []string) (*Config, error) {
 	}
 	configDir := filepath.Dir(absPath)
 
-	fsRules, err := parseRules(raw.Rules, configDir)
+	fsRules, netRules, err := parseRules(raw.Rules, configDir)
 	if err != nil {
 		return nil, fmt.Errorf("parse rules in %s: %w", path, err)
 	}
@@ -52,8 +59,13 @@ func Load(path string, managedPaths []string) (*Config, error) {
 		return nil, fmt.Errorf("validate config %s: %w", path, err)
 	}
 
+	if err := netrules.Validate(netRules); err != nil {
+		return nil, fmt.Errorf("validate config %s: %w", path, err)
+	}
+
 	cfg := &Config{
 		FSRules:      fsRules,
+		NetRules:     netRules,
 		ManagedPaths: managedPaths,
 	}
 
@@ -61,14 +73,15 @@ func Load(path string, managedPaths []string) (*Config, error) {
 }
 
 // parseRules routes each raw rule string to the appropriate parser based on resource prefix.
-func parseRules(rawRules []string, configDir string) ([]fsrules.Rule, error) {
-	rules := make([]fsrules.Rule, 0, len(rawRules))
+func parseRules(rawRules []string, configDir string) ([]fsrules.Rule, []netrules.Rule, error) {
+	fsRules := make([]fsrules.Rule, 0)
+	netRules := make([]netrules.Rule, 0)
 
 	for i, rawRule := range rawRules {
 		// Split on first colon to get resource prefix
 		before, after, ok := strings.Cut(rawRule, ":")
 		if !ok {
-			return nil, fmt.Errorf("rule %d: malformed rule %q (expected format: resource:permission:path)", i, rawRule)
+			return nil, nil, fmt.Errorf("rule %d: malformed rule %q (expected format: resource:...)", i, rawRule)
 		}
 
 		resourcePrefix := before
@@ -78,14 +91,21 @@ func parseRules(rawRules []string, configDir string) ([]fsrules.Rule, error) {
 		case "fs":
 			rule, err := fsrules.Parse(ruleBody, configDir)
 			if err != nil {
-				return nil, fmt.Errorf("rule %d: %w", i, err)
+				return nil, nil, fmt.Errorf("rule %d: %w", i, err)
 			}
 			rule.RawRule = rawRule
-			rules = append(rules, rule)
+			fsRules = append(fsRules, rule)
+		case "net":
+			rule, err := netrules.Parse(ruleBody)
+			if err != nil {
+				return nil, nil, fmt.Errorf("rule %d: %w", i, err)
+			}
+			rule.RawRule = rawRule
+			netRules = append(netRules, rule)
 		default:
-			return nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs')", i, resourcePrefix)
+			return nil, nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs' or 'net')", i, resourcePrefix)
 		}
 	}
 
-	return rules, nil
+	return fsRules, netRules, nil
 }

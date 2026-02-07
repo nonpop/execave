@@ -49,11 +49,66 @@ func TestLoad_InvalidJSON(t *testing.T) {
 	assert.ErrorContains(t, err, "parse config")
 }
 
-func TestLoad_InvalidResource(t *testing.T) {
+func TestLoad_UnknownResourceType(t *testing.T) {
 	_, err := loadTestConfig(t, `{
-		"rules": ["net:allow:443"]
+		"rules": ["dns:allow:example.com"]
 	}`)
 	assert.ErrorContains(t, err, "unknown resource type")
+}
+
+func TestLoad_ValidNetRule(t *testing.T) {
+	cfg, err := loadTestConfig(t, `{
+		"rules": [
+			"fs:ro:/usr/bin",
+			"net:https:api.anthropic.com:443"
+		]
+	}`)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Len(t, cfg.NetRules, 1)
+}
+
+func TestLoad_HasNetRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `{
+		"rules": ["net:https:api.anthropic.com:443"]
+	}`)
+	require.NoError(t, err)
+	assert.True(t, cfg.HasNetRules())
+}
+
+func TestLoad_HasNoNetRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `{
+		"rules": ["fs:ro:/usr/bin"]
+	}`)
+	require.NoError(t, err)
+	assert.False(t, cfg.HasNetRules())
+}
+
+func TestLoad_InvalidNetRule(t *testing.T) {
+	_, err := loadTestConfig(t, `{
+		"rules": ["net:https:example.com"]
+	}`)
+	assert.ErrorContains(t, err, "malformed rule")
+}
+
+func TestLoad_NetRuleDuplicateIdentityRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `{
+		"rules": [
+			"net:https:example.com:443",
+			"net:none:example.com:443"
+		]
+	}`)
+	assert.ErrorContains(t, err, "duplicate net rule")
+}
+
+func TestLoad_NetRuleMixedPortPatternsRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `{
+		"rules": [
+			"net:https:example.com:*",
+			"net:none:example.com:443"
+		]
+	}`)
+	assert.ErrorContains(t, err, "mixed port patterns")
 }
 
 func TestValidate_NoneWithChildAllowed(t *testing.T) {

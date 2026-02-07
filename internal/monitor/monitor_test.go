@@ -40,7 +40,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	logger := accesslog.New(logFile, cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := monitor.New(logger, resolver, nil)
+	mon := monitor.New(logger, resolver, nil, false)
 
 	return &monitorTestEnv{
 		t:       t,
@@ -89,7 +89,7 @@ func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapAr
 
 	logger := accesslog.New(logFile, cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	return monitor.New(logger, resolver, bwrapArgs), logFile
+	return monitor.New(logger, resolver, bwrapArgs, false), logFile
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -129,6 +129,7 @@ func TestMonitor_Integration(t *testing.T) {
 
 		return &config.Config{
 			FSRules:      []fsrules.Rule{roRule(testFile)},
+			NetRules:     nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -183,6 +184,7 @@ func TestMonitor_WriteOperation(t *testing.T) {
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
 			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			NetRules:     nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -205,6 +207,7 @@ func TestMonitor_Deduplication(t *testing.T) {
 
 		return &config.Config{
 			FSRules:      []fsrules.Rule{roRule(testFile)},
+			NetRules:     nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -307,6 +310,7 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{roRule("/usr")},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 	// Non-nil bwrapArgs enables setup phase detection
@@ -380,7 +384,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := monitor.New(nil, nil, nil)
+	mon := monitor.New(nil, nil, nil, false)
 
 	args := mon.BuildStraceArgs("/tmp/strace.out", []string{"echo", "hello"})
 
@@ -415,7 +419,7 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, ManagedPaths: nil}
+	cfg := &config.Config{FSRules: configRules, NetRules: nil, ManagedPaths: nil}
 	logPath := filepath.Join(t.TempDir(), "access.log")
 	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
@@ -469,6 +473,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{roRule(mountDir)},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
@@ -524,6 +529,7 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
@@ -571,6 +577,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{rwRule(mountDir)},
+		NetRules:     nil,
 		ManagedPaths: []string{managedDir},
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
@@ -615,6 +622,7 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{roRule(testBase)},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")

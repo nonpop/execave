@@ -40,10 +40,11 @@ func TestBuildBwrapArgs(t *testing.T) {
 		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "/tmp/execave-test.json")
+	sb := sandbox.New(cfg, "/tmp/execave-test.json", nil)
 	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
 
 	// Verify essential arguments
@@ -89,10 +90,11 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "")
+	sb := sandbox.New(cfg, "", nil)
 	args := sb.BuildBwrapArgs([]string{"true"})
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir),
@@ -113,10 +115,11 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 			fsRule(fsrules.PermissionNone, noneDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "")
+	sb := sandbox.New(cfg, "", nil)
 	args := sb.BuildBwrapArgs([]string{"true"})
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir),
@@ -135,10 +138,11 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
+		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "")
+	sb := sandbox.New(cfg, "", nil)
 	args := sb.BuildBwrapArgs([]string{"true"})
 
 	// File should use /dev/null bind, not tmpfs
@@ -149,4 +153,70 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 		"unexpected --chmod 0000 %s in args: %v", noneFile, args)
 	assert.False(t, argsContainSequence(args, "--chmod", "0111", noneFile),
 		"unexpected --chmod 0111 %s in args: %v", noneFile, args)
+}
+
+func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	sb := sandbox.New(cfg, "", nil)
+	args := sb.BuildBwrapArgs([]string{"true"})
+
+	assert.Contains(t, args, "--unshare-all")
+	assert.NotContains(t, args, "--share-net")
+}
+
+func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	netPath := &sandbox.NetworkPath{
+		UDSPath:       "/tmp/test-proxy.sock",
+		ExecaveBinary: "/usr/local/bin/execave",
+	}
+
+	sb := sandbox.New(cfg, "", netPath)
+	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
+
+	// Should bind-mount UDS and execave binary
+	assert.True(t, argsContainSequence(args, "--ro-bind", "/tmp/test-proxy.sock", "/tmp/execave-proxy.sock"))
+	assert.True(t, argsContainSequence(args, "--ro-bind", "/usr/local/bin/execave", "/tmp/execave"))
+
+	// Command should be wrapped with tunnel
+	assert.True(t, argsContainSequence(args, "--", "/tmp/execave", "network-tunnel", "/tmp/execave-proxy.sock", "--", "echo", "hello"))
+}
+
+func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	sb := sandbox.New(cfg, "", nil)
+	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
+
+	// Should not have tunnel wrapping
+	assert.False(t, argsContainSequence(args, "network-tunnel"))
+	// Command should follow -- directly
+	assert.True(t, argsContainSequence(args, "--", "echo", "hello"))
+}
+
+func TestHasNetworkPath(t *testing.T) {
+	cfg := new(config.Config)
+
+	sb := sandbox.New(cfg, "", nil)
+	assert.False(t, sb.HasNetworkPath())
+
+	sb = sandbox.New(cfg, "", &sandbox.NetworkPath{
+		UDSPath:       "/tmp/proxy.sock",
+		ExecaveBinary: "/usr/bin/execave",
+	})
+	assert.True(t, sb.HasNetworkPath())
 }

@@ -1,8 +1,8 @@
 # Execave
 
-Filesystem sandbox for Linux using bubblewrap.
+Filesystem and network sandbox for Linux using bubblewrap.
 
-⚠️ Personal project, not a security expert. Uses established tools but may have configuration bugs. Filesystem and process isolation only (for now). See `docs/security-model.md`.
+⚠️ Personal project, not a security expert. Uses established tools but may have configuration bugs. See `docs/security-model.md`.
 
 ## Quick Start
 
@@ -22,7 +22,9 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 ## Configuration
 
-Rules: `fs:<permission>:<path>` where permission is `ro`, `rw`, or `none`. More specific paths win.
+**Filesystem rules:** `fs:<permission>:<path>` where permission is `ro`, `rw`, or `none`. More specific paths win.
+
+**Network rules:** `net:<protocol>:<target>:<port>` where protocol is `https`, `http`, or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
 ```json
 {
@@ -33,12 +35,18 @@ Rules: `fs:<permission>:<path>` where permission is `ro`, `rw`, or `none`. More 
     "fs:ro:/etc/ld.so.cache",
 
     "fs:rw:/home/user/project",
-    "fs:none:."
+    "fs:none:.",
+
+    "net:https:api.example.com:443",
+    "net:http:*.internal.corp:*",
+    "net:none:evil.example.com:443"
   ]
 }
 ```
 
 **Automatic mounts** (not in config): `/dev`, `/proc`, `/tmp`
+
+**Network is isolated by default.** Only connections matching net rules are allowed. The internal proxy is the only way out, so apps that ignore `HTTP_PROXY`/`HTTPS_PROXY` have no network access.
 
 **Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `--monitor` to narrow down what's actually needed.
 
@@ -56,12 +64,14 @@ cat execave-access.log
 ```
 
 ```
-READ  /usr/lib/libc.so.6       OK     fs:ro:/usr
-WRITE /home/user/output.txt    DENY   fs:ro:/home/user
-READ  /etc/passwd              DENY   no-matching-rule
+READ   /usr/lib/libc.so.6       OK     fs:ro:/usr
+WRITE  /home/user/output.txt    DENY   fs:ro:/home/user
+READ   /etc/passwd              DENY   no-matching-rule
+HTTPS  api.example.com:443      OK     net:https:api.example.com:443
+HTTP   evil.example.com:80      DENY   no-matching-rule
 ```
 
-Each line: operation, path, result (OK/DENY), matching rule.
+Each line: operation, target, result (OK/DENY), matching rule. Network entries (`HTTPS`/`HTTP`) appear when net rules are configured.
 
 **Workflow:** Start with `execave.json.example`, run with `--monitor`, check for DENY entries, grant only what's necessary, repeat.
 

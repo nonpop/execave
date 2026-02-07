@@ -23,22 +23,47 @@ import (
 //nolint:gochecknoglobals // used read-only
 var ManagedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
 
+const (
+	// sandboxUDSPath is the fixed path where the proxy UDS is mounted inside the sandbox.
+	sandboxUDSPath = "/tmp/execave-proxy.sock"
+	// sandboxExecavePath is the fixed path where the execave binary is mounted inside the sandbox.
+	sandboxExecavePath = "/tmp/execave"
+)
+
+// NetworkPath holds paths for proxy-tunnel network setup.
+// When non-nil, the sandbox bind-mounts the UDS and execave binary,
+// and wraps the user command with the network tunnel.
+type NetworkPath struct {
+	// UDSPath is the host-side path to the proxy Unix domain socket.
+	UDSPath string
+	// ExecaveBinary is the host-side path to the execave binary.
+	ExecaveBinary string
+}
+
 // Sandbox manages the bubblewrap sandbox configuration and execution.
 type Sandbox struct {
 	cfg        *config.Config
 	configPath string
+	netPath    *NetworkPath
 }
 
 // New creates a new Sandbox.
 // configPath must be empty or absolute.
-func New(cfg *config.Config, configPath string) *Sandbox {
+// netPath may be nil when no net rules are configured.
+func New(cfg *config.Config, configPath string, netPath *NetworkPath) *Sandbox {
 	if configPath != "" && !filepath.IsAbs(configPath) {
 		panic("internal error: configPath must be absolute: " + configPath)
 	}
 	return &Sandbox{
 		cfg:        cfg,
 		configPath: configPath,
+		netPath:    netPath,
 	}
+}
+
+// HasNetworkPath reports whether the sandbox has network proxy-tunnel configuration.
+func (s *Sandbox) HasNetworkPath() bool {
+	return s.netPath != nil
 }
 
 // Run executes a command in the sandbox and returns its exit code.
@@ -82,10 +107,8 @@ func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	args := []string{}
 
-	// Unshare all namespaces (PID, IPC, UTS, cgroup) for process isolation.
-	// Re-share network to allow network access.
+	// Unshare all namespaces (PID, IPC, UTS, network, cgroup) for process isolation.
 	args = append(args, "--unshare-all")
-	args = append(args, "--share-net")
 
 	// Create new session to prevent TIOCSTI terminal injection attacks (CVE-2017-5226).
 	args = append(args, "--new-session")
@@ -112,8 +135,19 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 
 	args = s.addRuleMounts(args, writableConfig)
 
-	args = append(args, "--")
-	args = append(args, command...)
+	// When net rules are present, bind-mount the proxy UDS and execave binary,
+	// then wrap the user command with the network tunnel.
+	if s.netPath != nil {
+		args = append(args, "--ro-bind", s.netPath.UDSPath, sandboxUDSPath)
+		args = append(args, "--ro-bind", s.netPath.ExecaveBinary, sandboxExecavePath)
+
+		args = append(args, "--")
+		args = append(args, sandboxExecavePath, "network-tunnel", sandboxUDSPath, "--")
+		args = append(args, command...)
+	} else {
+		args = append(args, "--")
+		args = append(args, command...)
+	}
 
 	return args
 }

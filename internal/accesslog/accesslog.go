@@ -1,9 +1,9 @@
 // Package accesslog provides access log writing with formatting, deduplication, and filtering.
 //
-// The Logger writes access log entries for filesystem operations, handling:
-// - Entry formatting (<OP> <PATH> <RESULT> <RULE>)
-// - Deduplication (each unique operation+path logged once)
-// - Infrastructure path filtering (/dev, /proc, /tmp)
+// The Logger writes access log entries for filesystem and network operations, handling:
+// - Entry formatting (<OP> <TARGET> <RESULT> <RULE>)
+// - Deduplication (each unique operation+target+result logged once)
+// - Infrastructure path filtering (/dev, /proc, /tmp) for filesystem entries
 package accesslog
 
 import (
@@ -13,14 +13,18 @@ import (
 	"strings"
 )
 
-// OperationType classifies filesystem operations as read or write.
+// OperationType classifies access operations.
 type OperationType string
 
 const (
-	// OperationRead represents read operations (stat, open for read, etc).
+	// OperationRead represents filesystem read operations (stat, open for read, etc).
 	OperationRead OperationType = "READ"
-	// OperationWrite represents write operations (write, unlink, mkdir, etc).
+	// OperationWrite represents filesystem write operations (write, unlink, mkdir, etc).
 	OperationWrite OperationType = "WRITE"
+	// OperationHTTPS represents HTTPS (CONNECT) requests through the proxy.
+	OperationHTTPS OperationType = "HTTPS"
+	// OperationHTTP represents plain HTTP requests through the proxy.
+	OperationHTTP OperationType = "HTTP"
 )
 
 // ResultType represents the outcome of an access check.
@@ -50,10 +54,10 @@ const (
 
 // Entry represents a single access log entry.
 type Entry struct {
-	// Operation is the type of filesystem operation (READ or WRITE).
+	// Operation is the type of operation (READ, WRITE, HTTPS, or HTTP).
 	Operation OperationType
-	// Path is the absolute path accessed.
-	Path string
+	// Target is the absolute path for filesystem ops, host:port for network ops.
+	Target string
 	// Result is the outcome of the access check (OK, DENY, or UNKNOWN).
 	Result ResultType
 	// Rule is the rule that matched or a reason string for why access was denied.
@@ -63,7 +67,7 @@ type Entry struct {
 // accessKey uniquely identifies a log entry for deduplication.
 type accessKey struct {
 	operation OperationType
-	path      string
+	target    string
 	result    ResultType
 }
 
@@ -88,13 +92,13 @@ func New(writer io.Writer, managedPaths []string) *Logger {
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
 func (l *Logger) Log(entry Entry) error {
-	if l.isManagedPath(entry.Path) {
+	if l.isManagedPath(entry.Target) {
 		return nil
 	}
 
 	key := accessKey{
 		operation: entry.Operation,
-		path:      entry.Path,
+		target:    entry.Target,
 		result:    entry.Result,
 	}
 	if l.seen[key] {
@@ -118,7 +122,7 @@ func (l *Logger) isManagedPath(path string) bool {
 
 // writeLogEntry formats and writes a log entry: <OP> <PATH> <RESULT> <RULE>.
 func (l *Logger) writeLogEntry(entry Entry) error {
-	logLine := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Path, entry.Result, entry.Rule)
+	logLine := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
 	_, err := fmt.Fprintln(l.writer, logLine)
 	return err //nolint:wrapcheck // callers provide context
 }
