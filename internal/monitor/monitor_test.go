@@ -75,6 +75,25 @@ func roRule(path string) config.Rule {
 	}
 }
 
+// assertLogContainsLine checks that the log contains at least one line
+// that includes all of the given components (in any order).
+func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
+	t.Helper()
+	for line := range strings.SplitSeq(strings.TrimSpace(logStr), "\n") {
+		allFound := true
+		for _, component := range components {
+			if !strings.Contains(line, component) {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
+			return
+		}
+	}
+	t.Errorf("no line found containing all components: %v", components)
+}
+
 func rwRule(path string) config.Rule {
 	return config.Rule{
 		Resource:   config.ResourceFS,
@@ -91,7 +110,8 @@ func TestMonitor_Integration(t *testing.T) {
 
 	// Add rule after env creation to use testFile path
 	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules: []config.Rule{roRule(testFile)},
+		Rules:        []config.Rule{roRule(testFile)},
+		ManagedPaths: nil,
 	}), nil)
 
 	exitCode, err := env.run([]string{"cat", testFile})
@@ -112,14 +132,15 @@ func TestMonitor_Integration(t *testing.T) {
 }
 
 func TestMonitor_DeniedAccess(t *testing.T) {
-	env := newMonitorTestEnv(t, &config.Config{Rules: []config.Rule{}})
+	cfg := new(config.Config)
+	env := newMonitorTestEnv(t, cfg)
 	testFile := env.createFile("test.txt", "test content")
 
 	_, _ = env.run([]string{"cat", testFile})
 
 	logStr := env.readLog()
 	assert.Contains(t, logStr, "DENY")
-	assert.Contains(t, logStr, "no-matching-rule")
+	assert.Contains(t, logStr, monitor.ExportedRuleNoMatch)
 }
 
 func TestMonitor_WriteOperation(t *testing.T) {
@@ -139,7 +160,8 @@ func TestMonitor_WriteOperation(t *testing.T) {
 	testFile := filepath.Join(absTestDir, "output.txt")
 
 	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules: []config.Rule{rwRule(absTestDir)},
+		Rules:        []config.Rule{rwRule(absTestDir)},
+		ManagedPaths: nil,
 	}), nil)
 
 	exitCode, err := env.run([]string{"sh", "-c", "echo 'test' > " + testFile})
@@ -157,7 +179,8 @@ func TestMonitor_Deduplication(t *testing.T) {
 	testFile := env.createFile("test.txt", "line1\nline2\nline3\n")
 
 	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules: []config.Rule{roRule(testFile)},
+		Rules:        []config.Rule{roRule(testFile)},
+		ManagedPaths: nil,
 	}), nil)
 
 	exitCode, err := env.run([]string{"sh", "-c", "cat " + testFile + " && cat " + testFile})
@@ -250,10 +273,7 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 
-	assert.Contains(t, logStr, "READ")
-	assert.Contains(t, logStr, "foo/bar.txt")
-	assert.Contains(t, logStr, "UNKNOWN")
-	assert.Contains(t, logStr, "unresolved-relative-path")
+	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", monitor.ExportedRuleUnresolvedRelativePath)
 }
 
 // TestMonitor_SetupPhaseSkipped tests that bwrap setup lines are skipped
@@ -262,7 +282,8 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "access.log")
 	resolver := rules.New(&config.Config{
-		Rules: []config.Rule{roRule("/usr")},
+		Rules:        []config.Rule{roRule("/usr")},
+		ManagedPaths: nil,
 	})
 	// Non-nil bwrapArgs enables setup phase detection
 	mon := monitor.New(logPath, resolver, []string{"--ro-bind", "/usr", "/usr"})
@@ -390,4 +411,273 @@ func TestIsManagedPath(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+// testSymlinkAccessHelper sets up a symlink test scenario and validates the access log.
+func testSymlinkAccessHelper(
+	t *testing.T,
+	configRules []config.Rule,
+	straceFlags string,
+	expectedHopOp, expectedTargetOp string,
+) {
+	t.Helper()
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	err := os.MkdirAll(testBase, 0o700)
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(testBase) }()
+
+	linkPath := filepath.Join(testBase, "link.txt")
+	targetPath := filepath.Join(testBase, "target.txt")
+
+	err = os.WriteFile(targetPath, []byte("test"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(targetPath, linkPath)
+	require.NoError(t, err)
+
+	cfg := &config.Config{Rules: configRules, ManagedPaths: nil}
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	resolver := rules.New(cfg)
+	mon := monitor.New(logPath, resolver, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 openat(AT_FDCWD, "` + linkPath + `", ` + straceFlags + `) = 3`,
+	}, "\n") + "\n")
+
+	//nolint:gosec // Test code with controlled file path
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+
+	err = mon.ProcessStraceOutput(straceData, logFile)
+	require.NoError(t, err)
+	require.NoError(t, logFile.Close())
+
+	//nolint:gosec // Test code with controlled file path
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logStr := string(data)
+	t.Logf("Log content:\n%s", logStr)
+
+	assertLogContainsLine(t, logStr, expectedHopOp, linkPath, "OK")
+	assertLogContainsLine(t, logStr, expectedTargetOp, targetPath, "OK")
+}
+
+func TestMonitor_SymlinkWithinMount(t *testing.T) {
+	// Use /home prefix to avoid /tmp managed path filtering
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	testSymlinkAccessHelper(t, []config.Rule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
+}
+
+func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	err := os.MkdirAll(testBase, 0o700)
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(testBase) }()
+
+	mountDir := filepath.Join(testBase, "mount")
+	outsideDir := filepath.Join(testBase, "outside")
+
+	err = os.Mkdir(mountDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(outsideDir, 0o700)
+	require.NoError(t, err)
+
+	linkPath := filepath.Join(mountDir, "escape.txt")
+	targetPath := filepath.Join(outsideDir, "secret.txt")
+
+	err = os.WriteFile(targetPath, []byte("secret"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(targetPath, linkPath)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Rules:        []config.Rule{roRule(mountDir)},
+		ManagedPaths: nil,
+	}
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	resolver := rules.New(cfg)
+	mon := monitor.New(logPath, resolver, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = -1 EACCES`,
+	}, "\n") + "\n")
+
+	//nolint:gosec // Test code with controlled file path
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+
+	err = mon.ProcessStraceOutput(straceData, logFile)
+	require.NoError(t, err)
+	require.NoError(t, logFile.Close())
+
+	//nolint:gosec // Test code with controlled file path
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logStr := string(data)
+	t.Logf("Log content:\n%s", logStr)
+
+	// Hop should be OK, target should be denied
+	assertLogContainsLine(t, logStr, "READ", linkPath, "OK")
+	assertLogContainsLine(t, logStr, "READ", targetPath, "DENY")
+}
+
+func TestMonitor_SymlinkWriteOperation(t *testing.T) {
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	testSymlinkAccessHelper(t, []config.Rule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
+}
+
+func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	err := os.MkdirAll(testBase, 0o700)
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(testBase) }()
+
+	roDir := filepath.Join(testBase, "readonly")
+	rwDir := filepath.Join(testBase, "writable")
+
+	err = os.Mkdir(roDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(rwDir, 0o700)
+	require.NoError(t, err)
+
+	linkPath := filepath.Join(roDir, "link.txt")
+	targetPath := filepath.Join(rwDir, "target.txt")
+
+	err = os.WriteFile(targetPath, []byte("test"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(targetPath, linkPath)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Rules:        []config.Rule{roRule(roDir), rwRule(rwDir)},
+		ManagedPaths: nil,
+	}
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	resolver := rules.New(cfg)
+	mon := monitor.New(logPath, resolver, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 openat(AT_FDCWD, "` + linkPath + `", O_WRONLY) = 3`,
+	}, "\n") + "\n")
+
+	//nolint:gosec // Test code with controlled file path
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+
+	err = mon.ProcessStraceOutput(straceData, logFile)
+	require.NoError(t, err)
+	require.NoError(t, logFile.Close())
+
+	//nolint:gosec // Test code with controlled file path
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logStr := string(data)
+	t.Logf("Log content:\n%s", logStr)
+
+	// Hop is READ (symlink in ro dir), target is WRITE (in rw dir)
+	assertLogContainsLine(t, logStr, "READ", linkPath, "OK")
+	assertLogContainsLine(t, logStr, "WRITE", targetPath, "OK")
+}
+
+func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	mountDir := filepath.Join(testBase, "mount")
+	managedDir := filepath.Join(testBase, "managed")
+
+	err := os.MkdirAll(mountDir, 0o700)
+	require.NoError(t, err)
+	err = os.MkdirAll(managedDir, 0o700)
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(testBase) }()
+
+	linkPath := filepath.Join(mountDir, "link.txt")
+	managedTarget := filepath.Join(managedDir, "target.txt")
+
+	err = os.WriteFile(managedTarget, []byte("data"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(managedTarget, linkPath)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Rules:        []config.Rule{rwRule(mountDir)},
+		ManagedPaths: []string{managedDir},
+	}
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	resolver := rules.New(cfg)
+	mon := monitor.New(logPath, resolver, nil)
+
+	straceData := strings.NewReader(
+		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = 3` + "\n",
+	)
+
+	//nolint:gosec // Test code with controlled file path
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+
+	err = mon.ProcessStraceOutput(straceData, logFile)
+	require.NoError(t, err)
+	require.NoError(t, logFile.Close())
+
+	//nolint:gosec // Test code with controlled file path
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logStr := string(data)
+	t.Logf("Log content:\n%s", logStr)
+
+	// Original path should be logged as UNKNOWN since symlink target is in managed area
+	assertLogContainsLine(t, logStr, "READ", linkPath, "UNKNOWN", monitor.ExportedRuleSymlinkTargetUnresolvable)
+}
+
+func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
+	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
+	err := os.MkdirAll(testBase, 0o700)
+	require.NoError(t, err)
+	defer func() { _ = os.RemoveAll(testBase) }()
+
+	link1 := filepath.Join(testBase, "link1")
+	link2 := filepath.Join(testBase, "link2")
+	targetPath := filepath.Join(testBase, "target.txt")
+
+	err = os.WriteFile(targetPath, []byte("test"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(targetPath, link1)
+	require.NoError(t, err)
+	err = os.Symlink(targetPath, link2)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Rules:        []config.Rule{roRule(testBase)},
+		ManagedPaths: nil,
+	}
+	logPath := filepath.Join(t.TempDir(), "access.log")
+	resolver := rules.New(cfg)
+	mon := monitor.New(logPath, resolver, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 openat(AT_FDCWD, "` + link1 + `", O_RDONLY) = 3`,
+		`12345 openat(AT_FDCWD, "` + link2 + `", O_RDONLY) = 3`,
+	}, "\n") + "\n")
+
+	//nolint:gosec // Test code with controlled file path
+	logFile, err := os.Create(logPath)
+	require.NoError(t, err)
+
+	err = mon.ProcessStraceOutput(straceData, logFile)
+	require.NoError(t, err)
+	require.NoError(t, logFile.Close())
+
+	//nolint:gosec // Test code with controlled file path
+	data, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	logStr := string(data)
+	t.Logf("Log content:\n%s", logStr)
+
+	// Target should appear only once
+	lines := strings.Split(strings.TrimSpace(logStr), "\n")
+	targetCount := 0
+	for _, line := range lines {
+		if strings.Contains(line, targetPath) {
+			targetCount++
+		}
+	}
+	assert.Equal(t, 1, targetCount)
 }

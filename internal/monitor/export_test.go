@@ -19,3 +19,11 @@ func (m *Monitor) ProcessStraceOutput(output io.Reader, logFile *os.File) error 
 var MapSyscallToOperation = mapSyscallToOperation
 
 var IsManagedPath = isManagedPath
+
+// Export constants for testing.
+const (
+	ExportedRuleNoMatch                   = RuleNoMatch
+	ExportedRuleUnresolvedRelativePath    = RuleUnresolvedRelativePath
+	ExportedRuleSymlinkTargetUnresolvable = RuleSymlinkTargetUnresolvable
+	ExportedRuleSymlinkDepthExceeded      = RuleSymlinkDepthExceeded
+)

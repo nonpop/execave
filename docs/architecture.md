@@ -73,6 +73,7 @@ Optional (`--monitor`). Traces filesystem access via strace and logs with rule a
 
 - Wraps bwrap: `strace -- bwrap [args] -- cmd`
 - Resolves symlinks, matches against rules
+- Symlinks targeting managed paths (`/tmp`, `/dev`, `/proc`) logged as UNKNOWN (host can't resolve sandbox-internal filesystems)
 - Filters out infrastructure paths and bwrap internals
 - Logs only user-controllable filesystem access
 

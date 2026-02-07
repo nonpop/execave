@@ -70,6 +70,7 @@ func FuzzCheckAccess(f *testing.F) {
 				{Resource: config.ResourceFS, Path: "/etc", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/etc"},
 				{Resource: config.ResourceFS, Path: "/tmp", Permission: config.PermissionReadWrite, RawRule: "fs:rw:/tmp"},
 			},
+			ManagedPaths: nil,
 		}
 
 		resolver := rules.New(cfg)
@@ -177,6 +178,7 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 				{Resource: config.ResourceFS, Path: "/home/user/.ssh", Permission: config.PermissionNone, RawRule: "fs:none:/home/user/.ssh"},
 				{Resource: config.ResourceFS, Path: "/etc", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/etc"},
 			},
+			ManagedPaths: nil,
 		}
 
 		resolver := rules.New(cfg)

@@ -1,11 +1,13 @@
 package e2e_test
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestE2E_Monitor_MonitorDisabledByDefault tests that monitoring is disabled by default.
@@ -320,4 +322,418 @@ func TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT(t *testing.T) 
 	// The log should have at least system path accesses
 	logContent := env.readLog(t)
 	assert.NotEmpty(t, logContent)
+}
+
+// Symlink resolution tests
+
+// TestE2E_Monitor_RuleBoundarySymlinkLoggedWithoutResolution tests that symlinks matching
+// rule paths exactly are logged without resolution.
+func TestE2E_Monitor_RuleBoundarySymlinkLoggedWithoutResolution(t *testing.T) {
+	env := newMonitorTest(t)
+
+	linkFile := filepath.Join(env.TmpDir, "link-file")
+	targetFile := filepath.Join(env.TmpDir, "target-file")
+
+	createFile(t, targetFile, "target content")
+	createSymlink(t, targetFile, linkFile)
+
+	rules := append(systemPaths(), "fs:ro:"+linkFile)
+
+	result := env.runMonitored(t, rules, "cat", linkFile)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "target content", result.Stdout)
+
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkFile, "OK", "fs:ro:"+linkFile)
+
+	logContent := env.readLog(t)
+	// Target should NOT be in log - bwrap resolves at mount time
+	assert.NotContains(t, logContent, targetFile)
+}
+
+// TestE2E_Monitor_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution
+// tests that intermediate directory symlinks matching rule paths are not resolved.
+func TestE2E_Monitor_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution(t *testing.T) {
+	env := newMonitorTest(t)
+
+	realDir := filepath.Join(env.TmpDir, "real-dir")
+	linkDir := filepath.Join(env.TmpDir, "link-dir")
+	targetFile := filepath.Join(realDir, "file.txt")
+
+	createFile(t, targetFile, "target content")
+	createSymlink(t, realDir, linkDir)
+
+	rules := append(systemPaths(), "fs:ro:"+linkDir)
+
+	linkPath := filepath.Join(linkDir, "file.txt")
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "target content", result.Stdout)
+
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:ro:"+linkDir)
+
+	logContent := env.readLog(t)
+	// Real path should NOT be in log
+	assert.NotContains(t, logContent, targetFile)
+}
+
+// TestE2E_Monitor_SymlinkWithinMountResolvedAndLogged tests that symlinks within
+// a mounted directory are resolved and both hop and target are logged.
+func TestE2E_Monitor_SymlinkWithinMountResolvedAndLogged(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	linkPath := filepath.Join(mountDir, "link.txt")
+	targetPath := filepath.Join(mountDir, "target.txt")
+
+	createFile(t, targetPath, "target content")
+	createSymlink(t, targetPath, linkPath)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "target content", result.Stdout)
+
+	// Both hop and target should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", targetPath, "OK", "fs:ro:"+mountDir)
+}
+
+// TestE2E_Monitor_RelativeSymlinkWithinMountResolvedAndLogged tests that relative
+// symlinks within a mount are resolved and both hop and target are logged.
+func TestE2E_Monitor_RelativeSymlinkWithinMountResolvedAndLogged(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	linkPath := filepath.Join(mountDir, "link.txt")
+	targetPath := filepath.Join(mountDir, "target.txt")
+
+	createFile(t, targetPath, "target content")
+	// Create relative symlink (not absolute path)
+	require.NoError(t, os.Symlink("target.txt", linkPath))
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "target content", result.Stdout)
+
+	// Both hop and target should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", targetPath, "OK", "fs:ro:"+mountDir)
+}
+
+// TestE2E_Monitor_RelativeSymlinkChainResolvedAndLogged tests that a chain of
+// relative symlinks is fully resolved with all hops logged in order.
+func TestE2E_Monitor_RelativeSymlinkChainResolvedAndLogged(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	linkPath := filepath.Join(mountDir, "link")
+	hop2Path := filepath.Join(mountDir, "hop2")
+	finalPath := filepath.Join(mountDir, "final.txt")
+
+	createFile(t, finalPath, "final content")
+	// Create relative symlink chain: link -> hop2 -> final.txt
+	require.NoError(t, os.Symlink("final.txt", hop2Path))
+	require.NoError(t, os.Symlink("hop2", linkPath))
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "final content", result.Stdout)
+
+	// All hops and final target should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", hop2Path, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", finalPath, "OK", "fs:ro:"+mountDir)
+}
+
+// TestE2E_Monitor_SymlinkWithinMountPointingOutsideRulesDenied tests that symlinks
+// within a mount pointing to paths outside any rule are denied.
+func TestE2E_Monitor_SymlinkWithinMountPointingOutsideRulesDenied(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	outsideDir := filepath.Join(env.TmpDir, "outside")
+	escapeLink := filepath.Join(mountDir, "escape.txt")
+	secretFile := filepath.Join(outsideDir, "secret.txt")
+
+	createFile(t, secretFile, "secret")
+	createSymlink(t, secretFile, escapeLink)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", escapeLink)
+	assertExitCode(t, result, 1) // Should fail
+	assert.Contains(t, result.Stderr, "escape.txt: No such file")
+
+	// Hop should be OK, target should be denied
+	assertLogLineContainsAll(t, env.LogPath, "READ", escapeLink, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", secretFile, "DENY", "no-matching-rule")
+}
+
+// TestE2E_Monitor_MultiHopSymlinkChainWithinMount tests that multi-hop symlink chains
+// within a mount are fully logged.
+func TestE2E_Monitor_MultiHopSymlinkChainWithinMount(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	hop1 := filepath.Join(mountDir, "hop1")
+	hop2 := filepath.Join(mountDir, "hop2")
+	final := filepath.Join(mountDir, "final.txt")
+
+	createFile(t, final, "final content")
+	createSymlink(t, final, hop2)
+	createSymlink(t, hop2, hop1)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", hop1)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "final content", result.Stdout)
+
+	// All hops and final target should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", hop1, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", hop2, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", final, "OK", "fs:ro:"+mountDir)
+}
+
+// TestE2E_Monitor_MultiHopChainBreaksAtDeniedIntermediateHop tests that symlink chains
+// stop at a denied intermediate hop.
+func TestE2E_Monitor_MultiHopChainBreaksAtDeniedIntermediateHop(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	nomatchDir := filepath.Join(env.TmpDir, "nomatch")
+	hop1 := filepath.Join(mountDir, "hop1")
+	hop2 := filepath.Join(nomatchDir, "hop2")
+	final := filepath.Join(mountDir, "final.txt")
+
+	createFile(t, final, "final content")
+	createSymlink(t, final, hop2)
+	createSymlink(t, hop2, hop1)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", hop1)
+	assertExitCode(t, result, 1) // Should fail
+	assert.Contains(t, result.Stderr, "hop1: No such file")
+
+	// First hop OK, second hop denied
+	assertLogLineContainsAll(t, env.LogPath, "READ", hop1, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", hop2, "DENY", "no-matching-rule")
+
+	logContent := env.readLog(t)
+	// Final target should NOT be logged
+	assert.NotContains(t, logContent, final)
+}
+
+// TestE2E_Monitor_SymlinkInIntermediatePathComponentResolved tests that symlinks
+// in intermediate path components are resolved.
+func TestE2E_Monitor_SymlinkInIntermediatePathComponentResolved(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	realSubdir := filepath.Join(mountDir, "real-subdir")
+	linkSubdir := filepath.Join(mountDir, "link-subdir")
+	targetFile := filepath.Join(realSubdir, "file.txt")
+
+	createFile(t, targetFile, "target content")
+	createSymlink(t, realSubdir, linkSubdir)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	linkPath := filepath.Join(linkSubdir, "file.txt")
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 0)
+	assert.Equal(t, "target content", result.Stdout)
+
+	// Symlink hop and final path should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkSubdir, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", targetFile, "OK", "fs:ro:"+mountDir)
+}
+
+// TestE2E_Monitor_WriteOperationThroughSymlinkWithinMount tests that write operations
+// through symlinks log the hop as READ and the target as WRITE.
+func TestE2E_Monitor_WriteOperationThroughSymlinkWithinMount(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	linkPath := filepath.Join(mountDir, "link.txt")
+	realPath := filepath.Join(mountDir, "real.txt")
+
+	createFile(t, realPath, "original content")
+	createSymlink(t, realPath, linkPath)
+
+	rules := append(systemPaths(), "fs:rw:"+mountDir)
+
+	result := env.runMonitored(t, rules, "sh", "-c", "echo new > "+linkPath)
+	assertExitCode(t, result, 0)
+
+	// Verify the write succeeded
+	data, err := os.ReadFile(realPath) // #nosec G304 -- test code reading controlled test files
+	require.NoError(t, err)
+	assert.Equal(t, "new\n", string(data))
+
+	// Hop is READ, target is WRITE
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:rw:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "WRITE", realPath, "OK", "fs:rw:"+mountDir)
+}
+
+// TestE2E_Monitor_WriteThroughSymlinkToReadOnlyTargetDenied tests that writing through
+// a symlink to a read-only target is denied.
+func TestE2E_Monitor_WriteThroughSymlinkToReadOnlyTargetDenied(t *testing.T) {
+	env := newMonitorTest(t)
+
+	rwDir := filepath.Join(env.TmpDir, "writable")
+	roDir := filepath.Join(env.TmpDir, "readonly")
+	linkPath := filepath.Join(rwDir, "link.txt")
+	targetPath := filepath.Join(roDir, "target.txt")
+
+	createFile(t, targetPath, "readonly content")
+	createSymlink(t, targetPath, linkPath)
+
+	rules := append(systemPaths(), "fs:rw:"+rwDir, "fs:ro:"+roDir)
+
+	result := env.runMonitored(t, rules, "sh", "-c", "echo new > "+linkPath)
+	assertExitCode(t, result, 1) // Should fail
+	assert.Contains(t, result.Stderr, "link.txt: Read-only file system")
+
+	// Hop OK (read), target denied (write to ro)
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:rw:"+rwDir)
+	assertLogLineContainsAll(t, env.LogPath, "WRITE", targetPath, "DENY", "fs:ro:"+roDir)
+}
+
+// TestE2E_Monitor_WriteThroughReadOnlySymlinkToWritableTargetAllowed tests that writing
+// through a symlink in a read-only directory to a writable target succeeds.
+func TestE2E_Monitor_WriteThroughReadOnlySymlinkToWritableTargetAllowed(t *testing.T) {
+	env := newMonitorTest(t)
+
+	roDir := filepath.Join(env.TmpDir, "readonly")
+	rwDir := filepath.Join(env.TmpDir, "writable")
+	linkPath := filepath.Join(roDir, "link.txt")
+	targetPath := filepath.Join(rwDir, "file.txt")
+
+	createFile(t, targetPath, "original content")
+	createSymlink(t, targetPath, linkPath)
+
+	rules := append(systemPaths(), "fs:ro:"+roDir, "fs:rw:"+rwDir)
+
+	result := env.runMonitored(t, rules, "sh", "-c", "echo new > "+linkPath)
+	assertExitCode(t, result, 0)
+
+	// Verify the write succeeded
+	data, err := os.ReadFile(targetPath) // #nosec G304 -- test code reading controlled test files
+	require.NoError(t, err)
+	assert.Equal(t, "new\n", string(data))
+
+	// Hop is READ (symlink in ro dir), target is WRITE (in rw dir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "OK", "fs:ro:"+roDir)
+	assertLogLineContainsAll(t, env.LogPath, "WRITE", targetPath, "OK", "fs:rw:"+rwDir)
+}
+
+// TestE2E_Monitor_SymlinkDepthLimitExceeded tests that symlink loops are detected
+// and denied.
+func TestE2E_Monitor_SymlinkDepthLimitExceeded(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	loopA := filepath.Join(mountDir, "loop-a")
+	loopB := filepath.Join(mountDir, "loop-b")
+
+	createSymlink(t, loopB, loopA)
+	createSymlink(t, loopA, loopB)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", loopA)
+	assertExitCode(t, result, 1) // Should fail
+	assert.Contains(t, result.Stderr, "loop-a: Too many levels of symbolic links")
+
+	// Reads the hops successfully until limit exceeded. One successful entry for each hop
+	// (deduplicated), then DENY with depth-limit reason when limit exceeded.
+	assertLogLineContainsAll(t, env.LogPath, "READ", loopA, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", loopB, "OK", "fs:ro:"+mountDir)
+	// The 40th hop (where limit is exceeded) could be either loop-a or loop-b depending on
+	// which one we started with. We started with loop-a, so the 40th hop is loop-b.
+	assertLogLineContainsAll(t, env.LogPath, "READ", loopB, "DENY", "symlink-depth-limit-exceeded")
+}
+
+// TestE2E_Monitor_ResolvedSymlinkPathsDeduplicated tests that multiple symlinks to the
+// same target only log the target once.
+func TestE2E_Monitor_ResolvedSymlinkPathsDeduplicated(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	link1 := filepath.Join(mountDir, "link1")
+	link2 := filepath.Join(mountDir, "link2")
+	target := filepath.Join(mountDir, "target.txt")
+
+	createFile(t, target, "target content")
+	createSymlink(t, target, link1)
+	createSymlink(t, target, link2)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "sh", "-c", "cat "+link1+" && cat "+link2)
+	assertExitCode(t, result, 0)
+	// Should print the content twice (once for each cat)
+	assert.Equal(t, "target contenttarget content", result.Stdout)
+
+	logContent := env.readLog(t)
+
+	// Both symlinks should be logged
+	assertLogLineContainsAll(t, env.LogPath, "READ", link1, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", link2, "OK", "fs:ro:"+mountDir)
+	assertLogLineContainsAll(t, env.LogPath, "READ", target, "OK", "fs:ro:"+mountDir)
+
+	// Target should appear exactly once in log (deduplicated)
+	targetCount := strings.Count(logContent, target)
+	assert.Equal(t, 1, targetCount)
+}
+
+// TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown tests that symlinks pointing
+// into managed paths (e.g., /tmp tmpfs) are logged as UNKNOWN since the host-side resolver
+// cannot see the sandbox's tmpfs contents.
+func TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	linkPath := filepath.Join(mountDir, "link.txt")
+
+	// Symlink points into /tmp, which is a managed tmpfs inside the sandbox.
+	// The target doesn't exist on the sandbox's tmpfs, so cat fails.
+	createSymlink(t, "/tmp/target.txt", linkPath)
+
+	rules := append(systemPaths(), "fs:rw:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", linkPath)
+	assertExitCode(t, result, 1) // Fails: /tmp/target.txt doesn't exist on sandbox tmpfs
+
+	// Resolver detects symlink target is under managed /tmp — logs UNKNOWN
+	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "UNKNOWN", "symlink-target-unresolvable")
+}
+
+// TestE2E_Monitor_NonExistentPathNotResolved tests that non-existent paths are not
+// resolved as symlinks.
+func TestE2E_Monitor_NonExistentPathNotResolved(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	nonExistent := filepath.Join(mountDir, "does-not-exist.txt")
+
+	// Create mount directory but not the file
+	err := os.MkdirAll(mountDir, 0o750)
+	require.NoError(t, err)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", nonExistent)
+	assertExitCode(t, result, 1) // Should fail (file doesn't exist)
+	assert.Contains(t, result.Stderr, "does-not-exist.txt: No such file")
+
+	// Should log based on the original path, no resolution
+	assertLogLineContainsAll(t, env.LogPath, "READ", nonExistent, "OK", "fs:ro:"+mountDir)
 }

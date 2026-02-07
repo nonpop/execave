@@ -39,6 +39,7 @@ func TestBuildBwrapArgs(t *testing.T) {
 		Rules: []config.Rule{
 			fsRule(config.PermissionReadOnly, "/usr/bin"),
 		},
+		ManagedPaths: nil,
 	}
 
 	sb := sandbox.New(cfg, "/tmp/execave-test.json")
@@ -87,6 +88,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 			fsRule(config.PermissionReadOnly, dir),
 			fsRule(config.PermissionNone, noneDir),
 		},
+		ManagedPaths: nil,
 	}
 
 	sb := sandbox.New(cfg, "")
@@ -110,6 +112,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 			fsRule(config.PermissionNone, noneDir),
 			fsRule(config.PermissionReadWrite, childDir),
 		},
+		ManagedPaths: nil,
 	}
 
 	sb := sandbox.New(cfg, "")
@@ -131,6 +134,7 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 			fsRule(config.PermissionReadWrite, dir),
 			fsRule(config.PermissionNone, noneFile),
 		},
+		ManagedPaths: nil,
 	}
 
 	sb := sandbox.New(cfg, "")

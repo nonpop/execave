@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/rules"
 	"github.com/nonpop/execave/internal/sandbox"
 )
@@ -29,6 +30,7 @@ type Monitor struct {
 type accessKey struct {
 	operation OperationType
 	path      string
+	result    ResultType
 }
 
 // OperationType classifies filesystem operations as read or write.
@@ -41,6 +43,31 @@ const (
 	OperationRead OperationType = "READ"
 	// OperationWrite represents write operations (write, unlink, mkdir, etc).
 	OperationWrite OperationType = "WRITE"
+)
+
+// ResultType represents the outcome of an access check.
+type ResultType string
+
+const (
+	// ResultOK indicates the access was allowed by rules.
+	ResultOK ResultType = "OK"
+	// ResultDeny indicates the access was denied by rules.
+	ResultDeny ResultType = "DENY"
+	// ResultUnknown indicates the result could not be determined (e.g., unresolved relative path).
+	ResultUnknown ResultType = "UNKNOWN"
+)
+
+const (
+	// RuleUnresolvedRelativePath is used when a relative path could not be resolved.
+	RuleUnresolvedRelativePath = "unresolved-relative-path"
+	// RuleNoMatch is used when no matching rule was found for a path.
+	RuleNoMatch = "no-matching-rule"
+	// RuleSymlinkTargetUnresolvable is used when a symlink chain enters a managed path
+	// where host-side resolution is unreliable (e.g., sandbox tmpfs).
+	RuleSymlinkTargetUnresolvable = "symlink-target-unresolvable"
+	// RuleSymlinkDepthExceeded is used when the symlink resolution chain exceeded
+	// the maximum depth (MAXSYMLINKS).
+	RuleSymlinkDepthExceeded = "symlink-depth-limit-exceeded"
 )
 
 // New creates a new Monitor.
@@ -182,21 +209,10 @@ func (m *Monitor) processAccessEntry(writer *bufio.Writer, syscall, path, line s
 
 	cleanPath := normalizePath(path)
 
-	if !m.isFirstEntryFor(opType, cleanPath) {
-		return nil
-	}
-
 	// Handle relative paths specially - we can't resolve them without cwd tracking,
 	// but log them so the user knows something was accessed.
 	if !filepath.IsAbs(cleanPath) {
-		if err := writeLogEntry(writer, opType, cleanPath, "UNKNOWN", "unresolved-relative-path"); err != nil {
-			return fmt.Errorf("write log entry: %w", err)
-		}
-		return nil
-	}
-
-	if isManagedPath(cleanPath) {
-		return nil
+		return m.handleRelativePath(writer, opType, cleanPath)
 	}
 
 	operation := rules.OperationRead
@@ -206,28 +222,131 @@ func (m *Monitor) processAccessEntry(writer *bufio.Writer, syscall, path, line s
 
 	result := m.resolver.CheckAccess(cleanPath, operation)
 
-	resultStr := "OK"
-	if !result.Allowed {
-		resultStr = "DENY"
-	}
-	ruleStr := "no-matching-rule"
-	if result.Rule != nil {
-		ruleStr = result.Rule.RawRule
+	// If symlink chain is unresolvable (entered managed path), log as UNKNOWN
+	if result.Uncertain {
+		return m.handleUncertainResult(writer, opType, cleanPath)
 	}
 
-	if err := writeLogEntry(writer, opType, cleanPath, resultStr, ruleStr); err != nil {
+	// If symlink chain exceeded depth limit, handle specially
+	if result.Symlink != nil && result.Symlink.DepthLimitExceeded {
+		return m.handleDepthLimitExceeded(writer, opType, result)
+	}
+
+	// If symlink chain exists, emit entries for each hop plus the target
+	if result.Symlink != nil {
+		return m.handleSymlinkChain(writer, opType, result)
+	}
+
+	// No symlink - emit single entry for the path
+	return m.logPathAccess(writer, opType, cleanPath, result.Allowed, result.Rule, "path")
+}
+
+func (m *Monitor) handleRelativePath(writer *bufio.Writer, opType OperationType, cleanPath string) error {
+	if m.alreadyLogged(opType, cleanPath, ResultUnknown) {
+		return nil
+	}
+	if err := writeLogEntry(writer, opType, cleanPath, ResultUnknown, RuleUnresolvedRelativePath); err != nil {
 		return fmt.Errorf("write log entry: %w", err)
 	}
 	return nil
 }
 
-func (m *Monitor) isFirstEntryFor(opType OperationType, path string) bool {
-	key := accessKey{operation: opType, path: path}
+func (m *Monitor) handleUncertainResult(writer *bufio.Writer, opType OperationType, cleanPath string) error {
+	if m.alreadyLogged(opType, cleanPath, ResultUnknown) {
+		return nil
+	}
+	if err := writeLogEntry(writer, opType, cleanPath, ResultUnknown, RuleSymlinkTargetUnresolvable); err != nil {
+		return fmt.Errorf("write log entry for unresolvable symlink: %w", err)
+	}
+	return nil
+}
+
+func (m *Monitor) handleDepthLimitExceeded(writer *bufio.Writer, opType OperationType, result rules.AccessResult) error {
+	// Log each successful hop first
+	for _, hop := range result.Symlink.Hops {
+		if !hop.Allowed {
+			break // This is the depth-limit hop
+		}
+		if err := m.logPathAccess(writer, OperationRead, hop.Path, hop.Allowed, hop.Rule, "symlink hop"); err != nil {
+			return err
+		}
+	}
+	// Log the denied hop with the depth-limit reason
+	lastHop := result.Symlink.Hops[len(result.Symlink.Hops)-1]
+	if !m.alreadyLogged(opType, lastHop.Path, ResultDeny) {
+		if err := writeLogEntry(writer, opType, lastHop.Path, ResultDeny, RuleSymlinkDepthExceeded); err != nil {
+			return fmt.Errorf("write log entry for depth limit: %w", err)
+		}
+	}
+	return nil
+}
+
+func (m *Monitor) handleSymlinkChain(writer *bufio.Writer, opType OperationType, result rules.AccessResult) error {
+	// Emit one READ entry per hop
+	for _, hop := range result.Symlink.Hops {
+		if err := m.logPathAccess(writer, OperationRead, hop.Path, hop.Allowed, hop.Rule, "symlink hop"); err != nil {
+			return err
+		}
+
+		// If hop was denied, stop - no target entry
+		if !hop.Allowed {
+			return nil
+		}
+	}
+
+	// All hops were OK, emit target entry if we have a resolved path
+	if result.Symlink.ResolvedPath != "" {
+		if err := m.logPathAccess(writer, opType, result.Symlink.ResolvedPath, result.Allowed, result.Rule, "symlink target"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *Monitor) alreadyLogged(opType OperationType, path string, result ResultType) bool {
+	key := accessKey{operation: opType, path: path, result: result}
 	if m.seen[key] {
-		return false // Already logged
+		return true
 	}
 	m.seen[key] = true
-	return true
+	return false
+}
+
+// logPathAccess writes a log entry for a path access if it isn't managed and hasn't been logged
+// yet. Returns nil if the entry was logged or skipped (managed/duplicate), or an error if writing
+// failed.
+func (m *Monitor) logPathAccess(
+	writer *bufio.Writer,
+	opType OperationType,
+	path string,
+	allowed bool,
+	rule *config.Rule,
+	errorContext string,
+) error {
+	if isManagedPath(path) {
+		return nil
+	}
+
+	result := ResultOK
+	if !allowed {
+		result = ResultDeny
+	}
+
+	if m.alreadyLogged(opType, path, result) {
+		return nil
+	}
+
+	ruleStr := RuleNoMatch
+	if rule != nil {
+		ruleStr = rule.RawRule
+	}
+
+	if err := writeLogEntry(writer, opType, path, result, ruleStr); err != nil {
+		return fmt.Errorf("write log entry for %s: %w", errorContext, err)
+	}
+
+	return nil
 }
 
 func createStraceOutputFile() (string, func(), error) {
@@ -298,7 +417,7 @@ func normalizePath(path string) string {
 }
 
 // writeLogEntry writes a log entry: <OP> <PATH> <RESULT> <RULE>.
-func writeLogEntry(writer io.Writer, opType OperationType, path, result, rule string) error {
+func writeLogEntry(writer io.Writer, opType OperationType, path string, result ResultType, rule string) error {
 	logEntry := fmt.Sprintf("%-5s %-50s %-4s  %s", opType, path, result, rule)
 	_, err := fmt.Fprintln(writer, logEntry)
 	return err //nolint:wrapcheck // callers provide context

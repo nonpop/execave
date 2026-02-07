@@ -13,7 +13,8 @@ import (
 
 func makeTestConfig(rules []config.Rule) *config.Config {
 	return &config.Config{
-		Rules: rules,
+		Rules:        rules,
+		ManagedPaths: nil,
 	}
 }
 
@@ -59,9 +60,9 @@ func assertReadOnly(t *testing.T, resolver *rules.Resolver, path string) {
 func assertReadWrite(t *testing.T, resolver *rules.Resolver, path string) {
 	t.Helper()
 	readResult := resolver.CheckAccess(path, rules.OperationRead)
-	assert.True(t, readResult.Allowed, "read access should be allowed for %s", path)
+	assert.True(t, readResult.Allowed)
 	writeResult := resolver.CheckAccess(path, rules.OperationWrite)
-	assert.True(t, writeResult.Allowed, "write access should be allowed for %s", path)
+	assert.True(t, writeResult.Allowed)
 }
 
 func TestCheckAccess_NoMatchingRule(t *testing.T) {
@@ -294,6 +295,7 @@ func TestCheckAccess_RuleAttribution(t *testing.T) {
 		result := resolver.CheckAccess("/opt/secret", rules.OperationRead)
 		assert.False(t, result.Allowed)
 		assert.Nil(t, result.Rule)
+		assert.Nil(t, result.Symlink)
 	})
 
 	t.Run("matching rule is returned", func(t *testing.T) {
@@ -337,4 +339,546 @@ func TestCheckAccess_RuleAttribution(t *testing.T) {
 		require.NotNil(t, result.Rule)
 		assert.Equal(t, config.PermissionUnknown, result.Rule.Permission)
 	})
+}
+
+func TestCheckAccess_SymlinkWithinMount(t *testing.T) {
+	// Create temp directory structure
+	tmpDir := t.TempDir()
+	targetFile := filepath.Join(tmpDir, "target.txt")
+	linkFile := filepath.Join(tmpDir, "link.txt")
+
+	// Create target file
+	err := os.WriteFile(targetFile, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create symlink
+	err = os.Symlink(targetFile, linkFile)
+	require.NoError(t, err)
+
+	// Rule allows the mount directory
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access via symlink should resolve and log the hop
+	result := resolver.CheckAccess(linkFile, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	assert.Len(t, result.Symlink.Hops, 1)
+	assert.Equal(t, linkFile, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	assert.Equal(t, targetFile, result.Symlink.ResolvedPath)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, tmpDir, result.Rule.Path)
+}
+
+func TestCheckAccess_RelativeSymlinkWithinMount(t *testing.T) {
+	// Create temp directory structure
+	tmpDir := t.TempDir()
+	targetFile := filepath.Join(tmpDir, "target.txt")
+	linkFile := filepath.Join(tmpDir, "link.txt")
+
+	// Create target file
+	err := os.WriteFile(targetFile, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create relative symlink (not absolute path)
+	err = os.Symlink("target.txt", linkFile)
+	require.NoError(t, err)
+
+	// Rule allows the mount directory
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access via relative symlink should resolve and log the hop
+	result := resolver.CheckAccess(linkFile, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	assert.Len(t, result.Symlink.Hops, 1)
+	assert.Equal(t, linkFile, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	assert.Equal(t, targetFile, result.Symlink.ResolvedPath)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, tmpDir, result.Rule.Path)
+}
+
+func TestCheckAccess_RelativeSymlinkChain(t *testing.T) {
+	// Create temp directory structure with relative symlink chain
+	tmpDir := t.TempDir()
+	link := filepath.Join(tmpDir, "link")
+	hop2 := filepath.Join(tmpDir, "hop2")
+	final := filepath.Join(tmpDir, "final.txt")
+
+	// Create final target file
+	err := os.WriteFile(final, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create relative symlink chain: link -> hop2 -> final.txt
+	err = os.Symlink("final.txt", hop2)
+	require.NoError(t, err)
+	err = os.Symlink("hop2", link)
+	require.NoError(t, err)
+
+	// Rule allows the mount directory
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access via relative symlink chain
+	result := resolver.CheckAccess(link, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 2)
+
+	// First hop: link -> hop2
+	assert.Equal(t, link, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	require.NotNil(t, result.Symlink.Hops[0].Rule)
+
+	// Second hop: hop2 -> final.txt
+	assert.Equal(t, hop2, result.Symlink.Hops[1].Path)
+	assert.True(t, result.Symlink.Hops[1].Allowed)
+	require.NotNil(t, result.Symlink.Hops[1].Rule)
+
+	// Final target
+	assert.Equal(t, final, result.Symlink.ResolvedPath)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Rule)
+}
+
+func TestCheckAccess_RuleBoundarySymlink(t *testing.T) {
+	// Create temp directory structure
+	tmpDir := t.TempDir()
+	targetFile := filepath.Join(tmpDir, "target.txt")
+	linkFile := filepath.Join(tmpDir, "link.txt")
+
+	// Create target file
+	err := os.WriteFile(targetFile, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create symlink
+	err = os.Symlink(targetFile, linkFile)
+	require.NoError(t, err)
+
+	// Rule path exactly matches symlink path (bwrap mounts target at this path)
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, linkFile),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Symlink at rule boundary should NOT be resolved
+	result := resolver.CheckAccess(linkFile, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	assert.Nil(t, result.Symlink)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, linkFile, result.Rule.Path)
+}
+
+func TestCheckAccess_RuleBoundarySymlinkIntermediateComponent(t *testing.T) {
+	// Create temp directory structure
+	tmpDir := t.TempDir()
+	realDir := filepath.Join(tmpDir, "real-dir")
+	linkDir := filepath.Join(tmpDir, "link-dir")
+	targetFile := filepath.Join(realDir, "file.txt")
+
+	// Create real directory and file
+	err := os.Mkdir(realDir, 0o700)
+	require.NoError(t, err)
+	err = os.WriteFile(targetFile, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create symlink to directory
+	err = os.Symlink(realDir, linkDir)
+	require.NoError(t, err)
+
+	// Rule path matches the symlink directory (bwrap mounts target at this path)
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, linkDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access to descendant via rule-boundary symlink should not resolve the symlink
+	linkPath := filepath.Join(linkDir, "file.txt")
+	result := resolver.CheckAccess(linkPath, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	assert.Nil(t, result.Symlink)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, linkDir, result.Rule.Path)
+}
+
+func TestCheckAccess_SymlinkChainMultiHop(t *testing.T) {
+	// Create temp directory structure with multi-hop chain
+	tmpDir := t.TempDir()
+	hop1 := filepath.Join(tmpDir, "hop1")
+	hop2 := filepath.Join(tmpDir, "hop2")
+	final := filepath.Join(tmpDir, "final.txt")
+
+	// Create final target file
+	err := os.WriteFile(final, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create symlink chain: hop1 -> hop2 -> final.txt
+	err = os.Symlink(final, hop2)
+	require.NoError(t, err)
+	err = os.Symlink(hop2, hop1)
+	require.NoError(t, err)
+
+	// Rule allows the mount directory
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access via multi-hop chain
+	result := resolver.CheckAccess(hop1, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 2)
+
+	// First hop: hop1 -> hop2
+	assert.Equal(t, hop1, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	require.NotNil(t, result.Symlink.Hops[0].Rule)
+
+	// Second hop: hop2 -> final.txt
+	assert.Equal(t, hop2, result.Symlink.Hops[1].Path)
+	assert.True(t, result.Symlink.Hops[1].Allowed)
+	require.NotNil(t, result.Symlink.Hops[1].Rule)
+
+	// Final target
+	assert.Equal(t, final, result.Symlink.ResolvedPath)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Rule)
+}
+
+func TestCheckAccess_SymlinkChainDeniedHop(t *testing.T) {
+	// Create temp directory structure with chain that breaks
+	tmpDir := t.TempDir()
+	outsideDir := filepath.Join(tmpDir, "outside")
+	mountDir := filepath.Join(tmpDir, "mount")
+
+	err := os.Mkdir(outsideDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(mountDir, 0o700)
+	require.NoError(t, err)
+
+	hop1 := filepath.Join(mountDir, "hop1")
+	hop2 := filepath.Join(outsideDir, "hop2")
+	final := filepath.Join(mountDir, "final.txt")
+
+	// Create final target file
+	err = os.WriteFile(final, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create chain: hop1 -> outside/hop2 -> final.txt (chain breaks at hop2)
+	err = os.Symlink(final, hop2)
+	require.NoError(t, err)
+	err = os.Symlink(hop2, hop1)
+	require.NoError(t, err)
+
+	// Rule only allows mount directory, not outside
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, mountDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access should be denied at the intermediate hop
+	result := resolver.CheckAccess(hop1, rules.OperationRead)
+	assert.False(t, result.Allowed)
+	assert.Nil(t, result.Rule)
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 2)
+
+	// First hop should be OK
+	assert.Equal(t, hop1, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+
+	// Second hop should be denied
+	assert.Equal(t, hop2, result.Symlink.Hops[1].Path)
+	assert.False(t, result.Symlink.Hops[1].Allowed)
+	assert.Nil(t, result.Symlink.Hops[1].Rule)
+
+	// ResolvedPath should be empty when chain breaks
+	assert.Empty(t, result.Symlink.ResolvedPath)
+}
+
+func TestCheckAccess_SymlinkEscapesMount(t *testing.T) {
+	// Create temp directory structure
+	tmpDir := t.TempDir()
+	mountDir := filepath.Join(tmpDir, "mount")
+	outsideDir := filepath.Join(tmpDir, "outside")
+
+	err := os.Mkdir(mountDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(outsideDir, 0o700)
+	require.NoError(t, err)
+
+	escapeLink := filepath.Join(mountDir, "escape.txt")
+	outsideTarget := filepath.Join(outsideDir, "secret.txt")
+
+	err = os.WriteFile(outsideTarget, []byte("secret"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(outsideTarget, escapeLink)
+	require.NoError(t, err)
+
+	// Rule only allows mount directory
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, mountDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Symlink hop should be OK, but target should be denied
+	result := resolver.CheckAccess(escapeLink, rules.OperationRead)
+	assert.False(t, result.Allowed)
+	assert.Nil(t, result.Rule)
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 1)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	assert.Equal(t, outsideTarget, result.Symlink.ResolvedPath)
+}
+
+func TestCheckAccess_SymlinkDepthLimit(t *testing.T) {
+	// Create a symlink loop
+	tmpDir := t.TempDir()
+	loopA := filepath.Join(tmpDir, "loop-a")
+	loopB := filepath.Join(tmpDir, "loop-b")
+
+	err := os.Symlink(loopB, loopA)
+	require.NoError(t, err)
+	err = os.Symlink(loopA, loopB)
+	require.NoError(t, err)
+
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Should detect loop and deny at the 40th hop (MAXSYMLINKS)
+	// The kernel checks if (count >= MAXSYMLINKS) where MAXSYMLINKS=40,
+	// so it allows up to 39 hops
+	result := resolver.CheckAccess(loopA, rules.OperationRead)
+	assert.False(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	// Should have 40 hops (0-39 allowed, 40th denied)
+	assert.Len(t, result.Symlink.Hops, 40)
+	// Last hop should be denied
+	assert.False(t, result.Symlink.Hops[39].Allowed)
+	assert.Nil(t, result.Symlink.Hops[39].Rule)
+}
+
+func TestCheckAccess_SymlinkIntermediateComponent(t *testing.T) {
+	// Create temp directory structure with symlink in middle of path
+	tmpDir := t.TempDir()
+	realDir := filepath.Join(tmpDir, "real-subdir")
+	linkDir := filepath.Join(tmpDir, "link-subdir")
+
+	err := os.Mkdir(realDir, 0o700)
+	require.NoError(t, err)
+
+	targetFile := filepath.Join(realDir, "file.txt")
+	err = os.WriteFile(targetFile, []byte("test"), 0o600)
+	require.NoError(t, err)
+
+	// Create symlink to directory
+	err = os.Symlink(realDir, linkDir)
+	require.NoError(t, err)
+
+	// Rule allows the parent directory (so both link and target are within mount)
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Access file through symlink directory in path
+	linkPath := filepath.Join(linkDir, "file.txt")
+	result := resolver.CheckAccess(linkPath, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	// Should have hop for the symlink directory
+	require.Len(t, result.Symlink.Hops, 1)
+	assert.Equal(t, linkDir, result.Symlink.Hops[0].Path)
+	assert.Equal(t, targetFile, result.Symlink.ResolvedPath)
+}
+
+// testSymlinkWriteThroughHelper sets up a symlink between two directories with different permissions
+// and validates write-through behavior.
+func testSymlinkWriteThroughHelper(
+	t *testing.T,
+	linkDir, targetDir string,
+	linkPerm, targetPerm config.Permission,
+	expectedAllowed bool,
+	expectedRulePerm config.Permission,
+) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	linkDirPath := filepath.Join(tmpDir, linkDir)
+	targetDirPath := filepath.Join(tmpDir, targetDir)
+
+	err := os.Mkdir(linkDirPath, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(targetDirPath, 0o700)
+	require.NoError(t, err)
+
+	link := filepath.Join(linkDirPath, "link.txt")
+	target := filepath.Join(targetDirPath, "target.txt")
+
+	err = os.WriteFile(target, []byte("test"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(target, link)
+	require.NoError(t, err)
+
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(linkPerm, linkDirPath),
+		fsRule(targetPerm, targetDirPath),
+	})
+
+	resolver := rules.New(cfg)
+
+	result := resolver.CheckAccess(link, rules.OperationWrite)
+	assert.Equal(t, expectedAllowed, result.Allowed)
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 1)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, expectedRulePerm, result.Rule.Permission)
+}
+
+func TestCheckAccess_SymlinkWriteThroughToReadOnly(t *testing.T) {
+	// Write through symlink - hop is readable, target write is denied
+	testSymlinkWriteThroughHelper(
+		t, "writable", "readonly",
+		config.PermissionReadWrite, config.PermissionReadOnly,
+		false, config.PermissionReadOnly,
+	)
+}
+
+func TestCheckAccess_SymlinkWriteThroughReadOnlyLinkToWritableTarget(t *testing.T) {
+	// Write through ro symlink to rw target - hop is readable, target write is allowed
+	testSymlinkWriteThroughHelper(
+		t, "readonly", "writable",
+		config.PermissionReadOnly, config.PermissionReadWrite,
+		true, config.PermissionReadWrite,
+	)
+}
+
+func TestCheckAccess_SymlinkThroughManagedPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	mountDir := filepath.Join(tmpDir, "mount")
+	managedDir := filepath.Join(tmpDir, "managed")
+
+	err := os.Mkdir(mountDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(managedDir, 0o700)
+	require.NoError(t, err)
+
+	// Create symlink: mount/link -> managed/target
+	linkPath := filepath.Join(mountDir, "link")
+	managedTarget := filepath.Join(managedDir, "target.txt")
+
+	err = os.WriteFile(managedTarget, []byte("data"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(managedTarget, linkPath)
+	require.NoError(t, err)
+
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadWrite, mountDir),
+	})
+	cfg.ManagedPaths = []string{managedDir}
+
+	resolver := rules.New(cfg)
+
+	result := resolver.CheckAccess(linkPath, rules.OperationRead)
+
+	// Can't determine true target — result is uncertain
+	assert.True(t, result.Uncertain)
+	assert.False(t, result.Allowed)
+
+	// Symlink chain should record the hop and be marked unresolvable
+	require.NotNil(t, result.Symlink)
+	require.Len(t, result.Symlink.Hops, 1)
+	assert.Equal(t, linkPath, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	assert.True(t, result.Symlink.Unresolvable)
+	assert.Empty(t, result.Symlink.ResolvedPath)
+}
+
+func TestCheckAccess_SymlinkChainThroughManagedPath(t *testing.T) {
+	// mount/hop1 -> mount/hop2 -> managed/target -> mount/final
+	// Chain should break when it enters the managed area at hop2's target
+	tmpDir := t.TempDir()
+	mountDir := filepath.Join(tmpDir, "mount")
+	managedDir := filepath.Join(tmpDir, "managed")
+
+	err := os.Mkdir(mountDir, 0o700)
+	require.NoError(t, err)
+	err = os.Mkdir(managedDir, 0o700)
+	require.NoError(t, err)
+
+	hop1 := filepath.Join(mountDir, "hop1")
+	hop2 := filepath.Join(mountDir, "hop2")
+	managedLink := filepath.Join(managedDir, "link")
+	finalTarget := filepath.Join(mountDir, "final.txt")
+
+	err = os.WriteFile(finalTarget, []byte("data"), 0o600)
+	require.NoError(t, err)
+	err = os.Symlink(finalTarget, managedLink)
+	require.NoError(t, err)
+	err = os.Symlink(managedLink, hop2)
+	require.NoError(t, err)
+	err = os.Symlink(hop2, hop1)
+	require.NoError(t, err)
+
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadWrite, mountDir),
+	})
+	cfg.ManagedPaths = []string{managedDir}
+
+	resolver := rules.New(cfg)
+
+	result := resolver.CheckAccess(hop1, rules.OperationRead)
+
+	// Chain enters managed area after hop2, so result is uncertain
+	assert.True(t, result.Uncertain)
+	assert.False(t, result.Allowed)
+
+	require.NotNil(t, result.Symlink)
+	// hop1 and hop2 were resolved before entering managed area
+	require.Len(t, result.Symlink.Hops, 2)
+	assert.Equal(t, hop1, result.Symlink.Hops[0].Path)
+	assert.True(t, result.Symlink.Hops[0].Allowed)
+	assert.Equal(t, hop2, result.Symlink.Hops[1].Path)
+	assert.True(t, result.Symlink.Hops[1].Allowed)
+	assert.True(t, result.Symlink.Unresolvable)
+}
+
+func TestCheckAccess_NonExistentPathNotResolved(t *testing.T) {
+	tmpDir := t.TempDir()
+	nonExistent := filepath.Join(tmpDir, "does-not-exist.txt")
+
+	cfg := makeTestConfig([]config.Rule{
+		fsRule(config.PermissionReadOnly, tmpDir),
+	})
+
+	resolver := rules.New(cfg)
+
+	// Non-existent path should not be resolved as symlink
+	result := resolver.CheckAccess(nonExistent, rules.OperationRead)
+	assert.True(t, result.Allowed)
+	assert.Nil(t, result.Symlink)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, tmpDir, result.Rule.Path)
 }

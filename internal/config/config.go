@@ -12,7 +12,8 @@ import (
 
 // Config represents the parsed configuration file.
 type Config struct {
-	Rules []Rule
+	Rules        []Rule
+	ManagedPaths []string // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
 }
 
 // Rule represents a parsed access rule.
@@ -77,7 +78,8 @@ func Load(path string, managedPaths []string) (*Config, error) {
 	}
 
 	cfg := &Config{
-		Rules: rules,
+		Rules:        rules,
+		ManagedPaths: managedPaths,
 	}
 
 	if err := cfg.validate(absPath, managedPaths); err != nil {
