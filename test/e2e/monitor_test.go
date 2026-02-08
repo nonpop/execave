@@ -716,6 +716,29 @@ func TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "UNKNOWN", "symlink-target-unresolvable")
 }
 
+// TestE2E_Monitor_NonExistentPathFilteredFromLog tests that non-existent paths are filtered
+// from the access log to reduce noise.
+func TestE2E_Monitor_NonExistentPathFilteredFromLog(t *testing.T) {
+	env := newMonitorTest(t)
+
+	mountDir := filepath.Join(env.TmpDir, "mount")
+	nonExistent := filepath.Join(mountDir, "noexist.txt")
+
+	// Create mount directory but not the file
+	err := os.MkdirAll(mountDir, 0o750)
+	require.NoError(t, err)
+
+	rules := append(systemPaths(), "fs:ro:"+mountDir)
+
+	result := env.runMonitored(t, rules, "cat", nonExistent)
+	assertExitCode(t, result, 1) // Should fail (file doesn't exist)
+	assert.Contains(t, result.Stderr, "noexist.txt: No such file")
+
+	// Non-existent path should NOT be in the log
+	logContent := env.readLog(t)
+	assert.NotContains(t, logContent, nonExistent)
+}
+
 // TestE2E_Monitor_NonExistentPathNotResolved tests that non-existent paths are not
 // resolved as symlinks.
 func TestE2E_Monitor_NonExistentPathNotResolved(t *testing.T) {
@@ -734,6 +757,39 @@ func TestE2E_Monitor_NonExistentPathNotResolved(t *testing.T) {
 	assertExitCode(t, result, 1) // Should fail (file doesn't exist)
 	assert.Contains(t, result.Stderr, "does-not-exist.txt: No such file")
 
-	// Should log based on the original path, no resolution
-	assertLogLineContainsAll(t, env.LogPath, "READ", nonExistent, "OK", "fs:ro:"+mountDir)
+	// Non-existent path should NOT be in the log
+	logContent := env.readLog(t)
+	assert.NotContains(t, logContent, nonExistent)
+}
+
+// TestE2E_Monitor_StatErrorStillLogged tests that non-ENOENT stat errors (permission
+// denied, I/O errors) result in logging (fail-safe behavior).
+func TestE2E_Monitor_StatErrorStillLogged(t *testing.T) {
+	env := newMonitorTest(t)
+
+	// Create a directory with restricted permissions to trigger permission denied
+	restrictedDir := filepath.Join(env.TmpDir, "restricted")
+	err := os.MkdirAll(restrictedDir, 0o750)
+	require.NoError(t, err)
+
+	restrictedFile := filepath.Join(restrictedDir, "secret.txt")
+	createFile(t, restrictedFile, "secret")
+
+	// Remove all permissions on the directory to prevent stat access from monitor
+	err = os.Chmod(restrictedDir, 0o000)
+	require.NoError(t, err)
+	defer func() {
+		_ = os.Chmod(restrictedDir, 0o700) //nolint:gosec // G302: need execute bit for cleanup
+		_ = os.RemoveAll(restrictedDir)
+	}()
+
+	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+
+	// The sandboxed process can access the file (bwrap mounted it before permission change),
+	// but the monitor's os.Stat will fail with permission denied
+	_ = env.runMonitored(t, rules, "cat", restrictedFile)
+	// May succeed or fail depending on bwrap mount behavior - we don't care about exit code
+
+	// Despite stat error, the path should be logged (fail-safe)
+	assertLogLineContainsAll(t, env.LogPath, "READ", restrictedFile, "DENY")
 }

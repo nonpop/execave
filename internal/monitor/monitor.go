@@ -314,8 +314,8 @@ func (m *Monitor) alreadyLogged(opType OperationType, path string, result Result
 }
 
 // logPathAccess writes a log entry for a path access if it isn't managed and hasn't been logged
-// yet. Returns nil if the entry was logged or skipped (managed/duplicate), or an error if writing
-// failed.
+// yet. Returns nil if the entry was logged or skipped (managed/duplicate/nonexistent), or an error
+// if writing failed.
 func (m *Monitor) logPathAccess(
 	writer *bufio.Writer,
 	opType OperationType,
@@ -335,6 +335,18 @@ func (m *Monitor) logPathAccess(
 
 	if m.alreadyLogged(opType, path, result) {
 		return nil
+	}
+
+	// Only filter nonexistent paths for read operations
+	// Write operations should always be logged (shows intent to create files)
+	if opType == OperationRead {
+		_, err := os.Stat(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil // Skip nonexistent paths for reads
+			}
+			// Other stat errors (permission denied, I/O error, etc): proceed with logging
+		}
 	}
 
 	ruleStr := RuleNoMatch

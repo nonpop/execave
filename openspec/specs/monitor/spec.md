@@ -150,6 +150,8 @@ When the accessed path contains symlinks, the monitor SHALL resolve them compone
 - **Rule-boundary symlinks** (the symlink path exactly matches a config rule path): bwrap resolves these at mount time. The monitor SHALL NOT resolve them and SHALL log the access against the original (unresolved) path.
 - **Symlinks within a rule's scope** (the symlink path is a descendant of a config rule path, or has no matching rule): the kernel resolves these at access time inside the sandbox. The monitor SHALL resolve them step by step, logging a `READ` entry for each symlink hop, followed by the final target access with the original operation.
 
+When a path does not exist on the host filesystem, the resolver SHALL NOT attempt symlink resolution for that path. Non-existent paths are not symlinks and MUST be treated as literal paths.
+
 If any hop in the resolution chain is denied (no matching rule or insufficient permission), the chain SHALL stop and subsequent hops and the final target SHALL NOT be logged.
 
 The symlink resolution depth SHALL be limited to 40 links (matching the Linux kernel's `MAXSYMLINKS`). Exceeding this limit SHALL be treated as a denial.
@@ -319,7 +321,7 @@ The monitor's access log SHALL be consistent with sandbox enforcement: if the fi
 - **AND** config contains `fs:ro:<tmp>/mount`
 - **AND** sandboxed process attempts to read `<tmp>/mount/noexist.txt`
 - **THEN** the read fails
-- **AND** log contains: `READ <tmp>/mount/noexist.txt OK fs:ro:<tmp>/mount`
+- **AND** log does NOT contain an entry for `<tmp>/mount/noexist.txt`
 
 #### Scenario: Symlink through managed path logged as unknown
 
@@ -329,3 +331,33 @@ The monitor's access log SHALL be consistent with sandbox enforcement: if the fi
 - **AND** sandboxed process reads `<tmp>/mount/link.txt`
 - **THEN** the read fails (target does not exist on sandbox tmpfs)
 - **AND** log contains: `READ <tmp>/mount/link.txt UNKNOWN symlink-target-unresolvable`
+
+### Requirement: Non-existent path filtering for reads
+
+Read operations to paths that do not exist on the host filesystem SHALL NOT be logged. This filters noise from programs probing nonexistent paths (library search paths, config fallbacks). Write operations to nonexistent paths SHALL be logged, as they represent the program's intent to create files.
+
+#### Scenario: Non-existent read filtered from log
+
+- **WHEN** monitoring is enabled
+- **AND** `<tmp>/mount/noexist.txt` does not exist on the host filesystem
+- **AND** config contains `fs:ro:<tmp>/mount`
+- **AND** sandboxed process attempts to read `<tmp>/mount/noexist.txt`
+- **THEN** the read fails
+- **AND** log does NOT contain an entry for `<tmp>/mount/noexist.txt`
+
+#### Scenario: Non-existent write logged
+
+- **WHEN** monitoring is enabled
+- **AND** `<tmp>/mount/newfile.txt` does not exist on the host filesystem
+- **AND** config contains `fs:ro:<tmp>/mount`
+- **AND** sandboxed process attempts to write `<tmp>/mount/newfile.txt`
+- **THEN** the write fails (read-only)
+- **AND** log contains `WRITE <tmp>/mount/newfile.txt DENY`
+
+#### Scenario: Stat error other than ENOENT still logged (fail-safe)
+
+- **WHEN** monitoring is enabled
+- **AND** `<tmp>/restricted/secret.txt` exists but `os.Stat` fails with permission denied
+- **AND** config contains `fs:ro:<tmp>`
+- **AND** sandboxed process attempts to read `<tmp>/restricted/secret.txt`
+- **THEN** log contains `READ <tmp>/restricted/secret.txt DENY` (fail-safe: when in doubt, log it)
