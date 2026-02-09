@@ -76,20 +76,6 @@ Rules with `fs:none:<path>` SHALL deny all operations (read and write) on `<path
 - **THEN** access to `/home/user/project/src` is allowed (child rule overrides)
 - **AND** listing `/home/user/project` is denied with EACCES (parent is execute-only for traversal)
 
-### Requirement: Most specific rule wins
-
-When multiple rules match a path, the most specific rule (longest matching path prefix) SHALL take precedence.
-
-#### Scenario: Specific ro overrides general rw
-- **WHEN** config contains `fs:rw:/home/user/project` and `fs:ro:/home/user/project/.git`
-- **AND** sandboxed process attempts to write `/home/user/project/.git/config`
-- **THEN** access is denied with EACCES (ro rule is more specific)
-
-#### Scenario: Specific rw overrides general ro
-- **WHEN** config contains `fs:ro:/home/user` and `fs:rw:/home/user/project`
-- **AND** sandboxed process attempts to write `/home/user/project/file.txt`
-- **THEN** access is allowed (rw rule is more specific)
-
 ### Requirement: Symlink resolution
 
 Access through a symlink SHALL require `ro` or `rw` permission on the symlink path, and the appropriate permission for the requested operation on the resolved target path.

@@ -23,7 +23,7 @@ golangci-lint run --fix                   # Lint
 - Every package and exported type, function, const, and var must have a godoc comment.
 - `docs/{architecture,security-model}.md` and `README.md` must be kept in sync with code.
 - Use concise language; assume readers are experienced developers.
-- `openspec/config.yaml` must be kept up to date for new specs.
+- Context section in `openspec/config.yaml` must be kept up to date. Also add, update, or remove rules to reflect changed project requirements.
 
 ## Security
 

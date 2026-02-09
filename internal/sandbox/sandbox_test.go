@@ -6,28 +6,29 @@ import (
 	"testing"
 
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func fsRule(permission config.Permission, path string) config.Rule {
+func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
 	var permStr string
 	switch permission {
-	case config.PermissionReadOnly:
+	case fsrules.PermissionReadOnly:
 		permStr = "ro"
-	case config.PermissionReadWrite:
+	case fsrules.PermissionReadWrite:
 		permStr = "rw"
-	case config.PermissionNone:
+	case fsrules.PermissionNone:
 		permStr = "none"
-	case config.PermissionUnknown:
+	case fsrules.PermissionUnknown:
 		permStr = "unknown"
 	default:
 		permStr = "unknown"
 	}
 
-	return config.Rule{
-		Resource:   config.ResourceFS,
+	return fsrules.Rule{
+		Resource:   fsrules.ResourceFS,
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
@@ -36,8 +37,8 @@ func fsRule(permission config.Permission, path string) config.Rule {
 
 func TestBuildBwrapArgs(t *testing.T) {
 	cfg := &config.Config{
-		Rules: []config.Rule{
-			fsRule(config.PermissionReadOnly, "/usr/bin"),
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		ManagedPaths: nil,
 	}
@@ -84,9 +85,9 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 	require.NoError(t, os.Mkdir(noneDir, 0o750))
 
 	cfg := &config.Config{
-		Rules: []config.Rule{
-			fsRule(config.PermissionReadOnly, dir),
-			fsRule(config.PermissionNone, noneDir),
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadOnly, dir),
+			fsRule(fsrules.PermissionNone, noneDir),
 		},
 		ManagedPaths: nil,
 	}
@@ -107,10 +108,10 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 	require.NoError(t, os.MkdirAll(childDir, 0o750))
 
 	cfg := &config.Config{
-		Rules: []config.Rule{
-			fsRule(config.PermissionReadOnly, dir),
-			fsRule(config.PermissionNone, noneDir),
-			fsRule(config.PermissionReadWrite, childDir),
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadOnly, dir),
+			fsRule(fsrules.PermissionNone, noneDir),
+			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
 		ManagedPaths: nil,
 	}
@@ -130,9 +131,9 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 	require.NoError(t, os.WriteFile(noneFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		Rules: []config.Rule{
-			fsRule(config.PermissionReadWrite, dir),
-			fsRule(config.PermissionNone, noneFile),
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadWrite, dir),
+			fsRule(fsrules.PermissionNone, noneFile),
 		},
 		ManagedPaths: nil,
 	}

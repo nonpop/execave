@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_Sandbox_NoMatchingRule tests that access without a matching rule is denied.
-func TestE2E_Sandbox_NoMatchingRule(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_NoMatchingRule tests that access without a matching rule is denied.
+func TestE2E_Sandbox_AccessControl_NoMatchingRule(t *testing.T) {
 	failIfNoBwrap(t)
 
 	// Create a real file that the sandbox has no rule for
@@ -28,8 +28,8 @@ func TestE2E_Sandbox_NoMatchingRule(t *testing.T) {
 	assert.Contains(t, result.Stderr, "secret.txt: No such file or directory")
 }
 
-// TestE2E_Sandbox_AllowedPathAccessible tests that allowed paths are accessible.
-func TestE2E_Sandbox_AllowedPathAccessible(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_AllowedPathAccessible tests that allowed paths are accessible.
+func TestE2E_Sandbox_AccessControl_AllowedPathAccessible(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -45,8 +45,8 @@ func TestE2E_Sandbox_AllowedPathAccessible(t *testing.T) {
 	assert.Contains(t, result.Stdout, "hello from sandbox")
 }
 
-// TestE2E_Sandbox_ReadAllowed tests that read is allowed on fs:ro paths.
-func TestE2E_Sandbox_ReadAllowed(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_ReadAllowed tests that read is allowed on fs:ro paths.
+func TestE2E_Sandbox_AccessControl_ReadAllowed(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -62,8 +62,8 @@ func TestE2E_Sandbox_ReadAllowed(t *testing.T) {
 	assert.Contains(t, result.Stdout, "hello from sandbox")
 }
 
-// TestE2E_Sandbox_WriteDeniedOnReadOnlyPath tests that write is denied on fs:ro paths.
-func TestE2E_Sandbox_WriteDeniedOnReadOnlyPath(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_WriteDeniedOnReadOnlyPath tests that write is denied on fs:ro paths.
+func TestE2E_Sandbox_AccessControl_WriteDeniedOnReadOnlyPath(t *testing.T) {
 	failIfNoBwrap(t)
 
 	// Create a temp directory for testing writes
@@ -80,8 +80,8 @@ func TestE2E_Sandbox_WriteDeniedOnReadOnlyPath(t *testing.T) {
 	assert.Contains(t, result.Stderr, "test.txt: Read-only file system")
 }
 
-// TestE2E_Sandbox_ReadAllowedOnReadWritePath tests that read is allowed on fs:rw paths.
-func TestE2E_Sandbox_ReadAllowedOnReadWritePath(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_ReadAllowedOnReadWritePath tests that read is allowed on fs:rw paths.
+func TestE2E_Sandbox_AccessControl_ReadAllowedOnReadWritePath(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -97,8 +97,8 @@ func TestE2E_Sandbox_ReadAllowedOnReadWritePath(t *testing.T) {
 	assert.Contains(t, result.Stdout, "hello from rw")
 }
 
-// TestE2E_Sandbox_WriteAllowedOnReadWritePath tests that write is allowed on fs:rw paths.
-func TestE2E_Sandbox_WriteAllowedOnReadWritePath(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_WriteAllowedOnReadWritePath tests that write is allowed on fs:rw paths.
+func TestE2E_Sandbox_AccessControl_WriteAllowedOnReadWritePath(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -117,8 +117,8 @@ func TestE2E_Sandbox_WriteAllowedOnReadWritePath(t *testing.T) {
 	assert.Contains(t, string(data), "written")
 }
 
-// TestE2E_Sandbox_ReadDeniedByNoneRule tests that read is denied on fs:none paths.
-func TestE2E_Sandbox_ReadDeniedByNoneRule(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_ReadDeniedByNoneRule tests that read is denied on fs:none paths.
+func TestE2E_Sandbox_AccessControl_ReadDeniedByNoneRule(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -138,8 +138,8 @@ func TestE2E_Sandbox_ReadDeniedByNoneRule(t *testing.T) {
 	assert.Contains(t, result.Stderr, "secret.txt: Permission denied")
 }
 
-// TestE2E_Sandbox_WriteDeniedByNoneRule tests that write is denied on fs:none paths.
-func TestE2E_Sandbox_WriteDeniedByNoneRule(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_WriteDeniedByNoneRule tests that write is denied on fs:none paths.
+func TestE2E_Sandbox_AccessControl_WriteDeniedByNoneRule(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -159,8 +159,8 @@ func TestE2E_Sandbox_WriteDeniedByNoneRule(t *testing.T) {
 	assert.Contains(t, result.Stderr, "secret.txt: Permission denied")
 }
 
-// TestE2E_Sandbox_NoneDirectoryInaccessible tests that fs:none on a directory blocks listing and file creation.
-func TestE2E_Sandbox_NoneDirectoryInaccessible(t *testing.T) {
+// TestE2E_Sandbox_AccessControl_NoneDirectoryInaccessible tests that fs:none on a directory blocks listing and file creation.
+func TestE2E_Sandbox_AccessControl_NoneDirectoryInaccessible(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -185,9 +185,9 @@ func TestE2E_Sandbox_NoneDirectoryInaccessible(t *testing.T) {
 	assert.Contains(t, result.Stderr, "test': Permission denied")
 }
 
-// TestE2E_Sandbox_NoneDirectoryWithChildRuleAllowsChildAccess tests that fs:none with a child rule
+// TestE2E_Sandbox_AccessControl_NoneDirectoryWithChildRuleAllowsChildAccess tests that fs:none with a child rule
 // blocks listing on the parent but allows access to the child.
-func TestE2E_Sandbox_NoneDirectoryWithChildRuleAllowsChildAccess(t *testing.T) {
+func TestE2E_Sandbox_AccessControl_NoneDirectoryWithChildRuleAllowsChildAccess(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -217,64 +217,8 @@ func TestE2E_Sandbox_NoneDirectoryWithChildRuleAllowsChildAccess(t *testing.T) {
 	assert.Contains(t, result.Stderr, "parent': Permission denied")
 }
 
-// TestE2E_Sandbox_SpecificRoOverridesGeneralRw tests that fs:ro on a more specific path overrides fs:rw on parent.
-func TestE2E_Sandbox_SpecificRoOverridesGeneralRw(t *testing.T) {
-	failIfNoBwrap(t)
-
-	tmpDir := testTempDir(t)
-	projDir := filepath.Join(tmpDir, "proj")
-	gitDir := filepath.Join(projDir, ".git")
-	gitFile := filepath.Join(gitDir, "config")
-
-	err := os.MkdirAll(gitDir, 0o750)
-	require.NoError(t, err)
-	createFile(t, gitFile, "existing")
-
-	// rw on project, ro on .git (with system paths so sh can execute)
-	rules := append(systemPaths(),
-		"fs:rw:"+projDir,
-		"fs:ro:"+gitDir,
-	)
-	configPath := writeConfig(t, rules)
-
-	// Try to write to .git - should fail
-	result := runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo test > "+gitFile)
-
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "config: Read-only file system")
-}
-
-// TestE2E_Sandbox_SpecificRwOverridesGeneralRo tests that fs:rw on a more specific path overrides fs:ro on parent.
-func TestE2E_Sandbox_SpecificRwOverridesGeneralRo(t *testing.T) {
-	failIfNoBwrap(t)
-
-	tmpDir := testTempDir(t)
-	homeDir := filepath.Join(tmpDir, "home")
-	projDir := filepath.Join(homeDir, "proj")
-	projFile := filepath.Join(projDir, "file.txt")
-
-	err := os.MkdirAll(projDir, 0o750)
-	require.NoError(t, err)
-
-	// ro on home, rw on proj
-	rules := append(systemPaths(),
-		"fs:ro:"+homeDir,
-		"fs:rw:"+projDir,
-	)
-	configPath := writeConfig(t, rules)
-
-	// Write to proj - should succeed
-	result := runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo 'written' > "+projFile)
-	assertExitCode(t, result, 0)
-
-	// Verify file was written
-	data, err := os.ReadFile(projFile) // #nosec G304 -- test code reading controlled test files
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "written")
-}
-
-// TestE2E_Sandbox_SymlinkWithAccessiblePathAndAllowedTarget tests that symlinks to allowed paths work.
-func TestE2E_Sandbox_SymlinkWithAccessiblePathAndAllowedTarget(t *testing.T) {
+// TestE2E_Sandbox_SymlinkHandling_SymlinkWithAccessiblePathAndAllowedTarget tests that symlinks to allowed paths work.
+func TestE2E_Sandbox_SymlinkHandling_SymlinkWithAccessiblePathAndAllowedTarget(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -304,8 +248,8 @@ func TestE2E_Sandbox_SymlinkWithAccessiblePathAndAllowedTarget(t *testing.T) {
 	assert.Contains(t, result.Stdout, "target content")
 }
 
-// TestE2E_Sandbox_SymlinkWithInaccessiblePath tests that symlinks in inaccessible directories fail.
-func TestE2E_Sandbox_SymlinkWithInaccessiblePath(t *testing.T) {
+// TestE2E_Sandbox_SymlinkHandling_SymlinkWithInaccessiblePath tests that symlinks in inaccessible directories fail.
+func TestE2E_Sandbox_SymlinkHandling_SymlinkWithInaccessiblePath(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -333,8 +277,8 @@ func TestE2E_Sandbox_SymlinkWithInaccessiblePath(t *testing.T) {
 	assert.Contains(t, result.Stderr, "link.txt: No such file or directory")
 }
 
-// TestE2E_Sandbox_SymlinkWithAccessiblePathButDeniedTarget tests that symlinks to denied paths fail.
-func TestE2E_Sandbox_SymlinkWithAccessiblePathButDeniedTarget(t *testing.T) {
+// TestE2E_Sandbox_SymlinkHandling_SymlinkWithAccessiblePathButDeniedTarget tests that symlinks to denied paths fail.
+func TestE2E_Sandbox_SymlinkHandling_SymlinkWithAccessiblePathButDeniedTarget(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -362,8 +306,8 @@ func TestE2E_Sandbox_SymlinkWithAccessiblePathButDeniedTarget(t *testing.T) {
 	assert.Contains(t, result.Stderr, "link.txt: No such file or directory")
 }
 
-// TestE2E_Sandbox_CommandExecution tests that commands can be executed in the sandbox.
-func TestE2E_Sandbox_CommandExecution(t *testing.T) {
+// TestE2E_Sandbox_CommandExecution_CommandExecution tests that commands can be executed in the sandbox.
+func TestE2E_Sandbox_CommandExecution_CommandExecution(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -383,8 +327,8 @@ func TestE2E_Sandbox_CommandExecution(t *testing.T) {
 	assert.Contains(t, result.Stdout, "hello from python")
 }
 
-// TestE2E_Sandbox_ExitCodePropagation tests that exit codes are propagated from the command.
-func TestE2E_Sandbox_ExitCodePropagation(t *testing.T) {
+// TestE2E_Sandbox_CommandExecution_ExitCodePropagation tests that exit codes are propagated from the command.
+func TestE2E_Sandbox_CommandExecution_ExitCodePropagation(t *testing.T) {
 	failIfNoBwrap(t)
 
 	configPath := writeConfig(t, systemPaths())
@@ -394,8 +338,8 @@ func TestE2E_Sandbox_ExitCodePropagation(t *testing.T) {
 	assertExitCode(t, result, 42)
 }
 
-// TestE2E_Sandbox_ConfigFileInRwDirectoryForcedToRo tests that a config file in a rw directory is forced read-only.
-func TestE2E_Sandbox_ConfigFileInRwDirectoryForcedToRo(t *testing.T) {
+// TestE2E_Sandbox_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo tests that a config file in a rw directory is forced read-only.
+func TestE2E_Sandbox_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -413,8 +357,8 @@ func TestE2E_Sandbox_ConfigFileInRwDirectoryForcedToRo(t *testing.T) {
 	assert.Contains(t, result.Stderr, "execave.json: Read-only file system")
 }
 
-// TestE2E_Sandbox_ConfigFileProtectionDoesNotBlockSiblingAccess tests that sibling files remain accessible when config is protected.
-func TestE2E_Sandbox_ConfigFileProtectionDoesNotBlockSiblingAccess(t *testing.T) {
+// TestE2E_Sandbox_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblingAccess tests that sibling files remain accessible when config is protected.
+func TestE2E_Sandbox_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblingAccess(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -444,8 +388,8 @@ func TestE2E_Sandbox_ConfigFileProtectionDoesNotBlockSiblingAccess(t *testing.T)
 	assert.Contains(t, string(data), "new data")
 }
 
-// TestE2E_Sandbox_ConfigFileNotMountedStaysUnmounted tests that a config file not covered by any rule stays unmounted.
-func TestE2E_Sandbox_ConfigFileNotMountedStaysUnmounted(t *testing.T) {
+// TestE2E_Sandbox_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted tests that a config file not covered by any rule stays unmounted.
+func TestE2E_Sandbox_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -472,8 +416,8 @@ func TestE2E_Sandbox_ConfigFileNotMountedStaysUnmounted(t *testing.T) {
 	assert.NotContains(t, result.Stderr, "force")
 }
 
-// TestE2E_Sandbox_ConfigFileAlreadyRoStaysRo tests that a config file already ro stays ro without a message.
-func TestE2E_Sandbox_ConfigFileAlreadyRoStaysRo(t *testing.T) {
+// TestE2E_Sandbox_ConfigFileProtection_ConfigFileAlreadyRoStaysRo tests that a config file already ro stays ro without a message.
+func TestE2E_Sandbox_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
@@ -492,8 +436,8 @@ func TestE2E_Sandbox_ConfigFileAlreadyRoStaysRo(t *testing.T) {
 	assert.NotContains(t, result.Stderr, "force")
 }
 
-// TestE2E_Sandbox_ConfigFileDeletionPossibleButAcceptable tests that config file deletion is possible but acceptable.
-func TestE2E_Sandbox_ConfigFileDeletionPossibleButAcceptable(t *testing.T) {
+// TestE2E_Sandbox_ConfigFileProtection_ConfigFileDeletionPossibleButAcceptable tests that config file deletion is possible but acceptable.
+func TestE2E_Sandbox_ConfigFileProtection_ConfigFileDeletionPossibleButAcceptable(t *testing.T) {
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)

@@ -3,7 +3,7 @@ schema: spec-driven
 context: |
   Security-critical Linux filesystem sandbox (bubblewrap + strace). Bugs enable sandbox escapes or unintended file access.
   Tech: Go, Linux namespaces. Domain: Filesystem isolation, mount namespaces, rule-based access control. See docs/security-model.md.
-  Arch: CLI → rule resolver → bwrap wrapper → sandboxed process. Core: config, rules, sandbox, monitor.
+  Arch: CLI → rule resolver → bwrap wrapper → sandboxed process. Core: config, fsrules, accesslog, sandbox, monitor.
 
 rules:
   proposal:

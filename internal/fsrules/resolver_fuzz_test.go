@@ -1,37 +1,37 @@
-package rules_test
+package fsrules_test
 
 import (
 	"path/filepath"
 	"testing"
 
 	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/rules"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 )
 
 // parseOperation converts a string to a rules.Operation for fuzz testing.
 // Unknown strings are converted directly to test that arbitrary values don't cause panics.
-func parseOperation(opStr string) rules.Operation {
+func parseOperation(opStr string) fsrules.Operation {
 	switch opStr {
 	case "read":
-		return rules.OperationRead
+		return fsrules.OperationRead
 	case "write":
-		return rules.OperationWrite
+		return fsrules.OperationWrite
 	default:
-		return rules.Operation(opStr)
+		return fsrules.Operation(opStr)
 	}
 }
 
 // assertLongestPrefixWins checks that no rule in cfg has a longer matching prefix than result.Rule.
-func assertLongestPrefixWins(t *testing.T, cfg *config.Config, result rules.AccessResult, cleanPath string) {
+func assertLongestPrefixWins(t *testing.T, cfg *config.Config, result fsrules.AccessResult, cleanPath string) {
 	t.Helper()
 
 	if result.Rule == nil {
 		return
 	}
 
-	for _, r := range cfg.Rules {
-		if rules.MatchesPath(r.Path, cleanPath) {
+	for _, r := range cfg.FSRules {
+		if fsrules.MatchesPath(r.Path, cleanPath) {
 			assert.LessOrEqual(t, len(r.Path), len(result.Rule.Path))
 		}
 	}
@@ -63,17 +63,17 @@ func FuzzCheckAccess(f *testing.F) {
 
 		// Create a test config with various rules
 		cfg := &config.Config{
-			Rules: []config.Rule{
-				{Resource: config.ResourceFS, Path: "/home/user/project", Permission: config.PermissionReadWrite, RawRule: "fs:rw:/home/user/project"},
-				{Resource: config.ResourceFS, Path: "/home/user/project/.git", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/home/user/project/.git"},
-				{Resource: config.ResourceFS, Path: "/home/user/.ssh", Permission: config.PermissionNone, RawRule: "fs:none:/home/user/.ssh"},
-				{Resource: config.ResourceFS, Path: "/etc", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/etc"},
-				{Resource: config.ResourceFS, Path: "/tmp", Permission: config.PermissionReadWrite, RawRule: "fs:rw:/tmp"},
+			FSRules: []fsrules.Rule{
+				{Resource: fsrules.ResourceFS, Path: "/home/user/project", Permission: fsrules.PermissionReadWrite, RawRule: "fs:rw:/home/user/project"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user/project/.git", Permission: fsrules.PermissionReadOnly, RawRule: "fs:ro:/home/user/project/.git"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user/.ssh", Permission: fsrules.PermissionNone, RawRule: "fs:none:/home/user/.ssh"},
+				{Resource: fsrules.ResourceFS, Path: "/etc", Permission: fsrules.PermissionReadOnly, RawRule: "fs:ro:/etc"},
+				{Resource: fsrules.ResourceFS, Path: "/tmp", Permission: fsrules.PermissionReadWrite, RawRule: "fs:rw:/tmp"},
 			},
 			ManagedPaths: nil,
 		}
 
-		resolver := rules.New(cfg)
+		resolver := newResolver(cfg)
 		result := resolver.CheckAccess(path, operation)
 
 		// Invariant 1: Determinism - same input gives same output
@@ -87,16 +87,16 @@ func FuzzCheckAccess(f *testing.F) {
 
 		// Invariant 2: If rule returned, it must match the cleaned path
 		if result.Rule != nil {
-			assert.True(t, rules.MatchesPath(result.Rule.Path, cleanPath))
+			assert.True(t, fsrules.MatchesPath(result.Rule.Path, cleanPath))
 		}
 
 		// Invariant 3: No other rule has a longer matching prefix
 		assertLongestPrefixWins(t, cfg, result, cleanPath)
 
 		// Invariant 4: Write allowed only if rw permission
-		if result.Allowed && operation == rules.OperationWrite {
+		if result.Allowed && operation == fsrules.OperationWrite {
 			assert.NotNil(t, result.Rule)
-			assert.Equal(t, config.PermissionReadWrite, result.Rule.Permission)
+			assert.Equal(t, fsrules.PermissionReadWrite, result.Rule.Permission)
 		}
 
 		// Invariant 5: No matching rule means denied
@@ -105,7 +105,7 @@ func FuzzCheckAccess(f *testing.F) {
 		}
 
 		// Invariant 6: none permission always denies
-		if result.Rule != nil && result.Rule.Permission == config.PermissionNone {
+		if result.Rule != nil && result.Rule.Permission == fsrules.PermissionNone {
 			assert.False(t, result.Allowed)
 		}
 	})
@@ -132,7 +132,7 @@ func FuzzMatchesPath(f *testing.F) {
 		cleanRulePath := filepath.Clean(rulePath)
 		cleanTargetPath := filepath.Clean(targetPath)
 
-		result := rules.MatchesPath(cleanRulePath, cleanTargetPath)
+		result := fsrules.MatchesPath(cleanRulePath, cleanTargetPath)
 
 		// Invariant 1: Exact match always succeeds
 		if cleanRulePath == cleanTargetPath {
@@ -170,18 +170,18 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 
 		// Create config with overlapping rules at different levels
 		cfg := &config.Config{
-			Rules: []config.Rule{
-				{Resource: config.ResourceFS, Path: "/home", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/home"},
-				{Resource: config.ResourceFS, Path: "/home/user", Permission: config.PermissionReadWrite, RawRule: "fs:rw:/home/user"},
-				{Resource: config.ResourceFS, Path: "/home/user/project", Permission: config.PermissionReadWrite, RawRule: "fs:rw:/home/user/project"},
-				{Resource: config.ResourceFS, Path: "/home/user/project/.git", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/home/user/project/.git"},
-				{Resource: config.ResourceFS, Path: "/home/user/.ssh", Permission: config.PermissionNone, RawRule: "fs:none:/home/user/.ssh"},
-				{Resource: config.ResourceFS, Path: "/etc", Permission: config.PermissionReadOnly, RawRule: "fs:ro:/etc"},
+			FSRules: []fsrules.Rule{
+				{Resource: fsrules.ResourceFS, Path: "/home", Permission: fsrules.PermissionReadOnly, RawRule: "fs:ro:/home"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user", Permission: fsrules.PermissionReadWrite, RawRule: "fs:rw:/home/user"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user/project", Permission: fsrules.PermissionReadWrite, RawRule: "fs:rw:/home/user/project"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user/project/.git", Permission: fsrules.PermissionReadOnly, RawRule: "fs:ro:/home/user/project/.git"},
+				{Resource: fsrules.ResourceFS, Path: "/home/user/.ssh", Permission: fsrules.PermissionNone, RawRule: "fs:none:/home/user/.ssh"},
+				{Resource: fsrules.ResourceFS, Path: "/etc", Permission: fsrules.PermissionReadOnly, RawRule: "fs:ro:/etc"},
 			},
 			ManagedPaths: nil,
 		}
 
-		resolver := rules.New(cfg)
+		resolver := newResolver(cfg)
 		result := resolver.CheckAccess(path, operation)
 
 		// Invariant: Longest prefix always wins
@@ -190,15 +190,15 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 		// Invariant: Permission hierarchy is respected
 		if result.Rule != nil {
 			switch result.Rule.Permission {
-			case config.PermissionNone:
+			case fsrules.PermissionNone:
 				assert.False(t, result.Allowed)
-			case config.PermissionReadOnly:
-				if operation == rules.OperationWrite {
+			case fsrules.PermissionReadOnly:
+				if operation == fsrules.OperationWrite {
 					assert.False(t, result.Allowed)
 				}
-			case config.PermissionReadWrite:
+			case fsrules.PermissionReadWrite:
 				assert.True(t, result.Allowed)
-			case config.PermissionUnknown:
+			case fsrules.PermissionUnknown:
 				t.Fatal("resolved rule has PermissionUnknown")
 			}
 		}

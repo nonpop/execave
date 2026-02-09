@@ -13,7 +13,7 @@ import (
 	"syscall"
 
 	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/rules"
+	"github.com/nonpop/execave/internal/fsrules"
 )
 
 // ManagedDirs are directories the sandbox handles automatically.
@@ -102,9 +102,9 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 
 	writableConfig := false
 	if s.configPath != "" {
-		resolver := rules.New(s.cfg)
+		resolver := fsrules.NewResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
 		accessLevel := resolver.PermissionFor(s.configPath)
-		if accessLevel <= config.PermissionReadWrite {
+		if accessLevel <= fsrules.PermissionReadWrite {
 			writableConfig = true
 			fmt.Fprintln(os.Stderr, "execave: config file forced read-only")
 		}
@@ -125,9 +125,9 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 	rules := s.getSortedRules()
 
 	if writableConfig {
-		syntheticRule := config.Rule{
-			Resource:   config.ResourceFS,
-			Permission: config.PermissionReadOnly,
+		syntheticRule := fsrules.Rule{
+			Resource:   fsrules.ResourceFS,
+			Permission: fsrules.PermissionReadOnly,
 			Path:       s.configPath,
 			RawRule:    "fs:ro:" + s.configPath,
 		}
@@ -156,7 +156,7 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 		// which contradicts the guarantee that fs:none paths are inaccessible.
 		// Dirs with child rules get 0111 (execute-only) to allow path traversal
 		// to child mounts. Dirs without children get 0000 (completely blocked).
-		if rule.Permission == config.PermissionNone && info.IsDir() {
+		if rule.Permission == fsrules.PermissionNone && info.IsDir() {
 			if hasChildRules(rules, path) {
 				args = append(args, "--chmod", "0111", path)
 			} else {
@@ -168,9 +168,9 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 	return args
 }
 
-func (s *Sandbox) getSortedRules() []config.Rule {
-	sorted := make([]config.Rule, len(s.cfg.Rules))
-	copy(sorted, s.cfg.Rules)
+func (s *Sandbox) getSortedRules() []fsrules.Rule {
+	sorted := make([]fsrules.Rule, len(s.cfg.FSRules))
+	copy(sorted, s.cfg.FSRules)
 	// Sort by shortest path first (parents before children).
 	// In bwrap, later mounts overlay earlier ones, so children with
 	// different permissions must come after their parents.
@@ -179,7 +179,7 @@ func (s *Sandbox) getSortedRules() []config.Rule {
 }
 
 // hasChildRules reports whether any rule's path is a strict descendant of parentPath.
-func hasChildRules(rules []config.Rule, parentPath string) bool {
+func hasChildRules(rules []fsrules.Rule, parentPath string) bool {
 	prefix := parentPath + "/"
 	for _, r := range rules {
 		if strings.HasPrefix(r.Path, prefix) {
@@ -190,17 +190,17 @@ func hasChildRules(rules []config.Rule, parentPath string) bool {
 }
 
 // appendMountArgs adds bwrap arguments for a single rule.
-func appendMountArgs(args []string, rule config.Rule, info os.FileInfo) []string {
+func appendMountArgs(args []string, rule fsrules.Rule, info os.FileInfo) []string {
 	path := rule.Path
 
 	switch rule.Permission {
-	case config.PermissionReadWrite:
+	case fsrules.PermissionReadWrite:
 		return append(args, "--bind", path, path)
 
-	case config.PermissionReadOnly:
+	case fsrules.PermissionReadOnly:
 		return append(args, "--ro-bind", path, path)
 
-	case config.PermissionNone:
+	case fsrules.PermissionNone:
 		// Block access by overlaying with inaccessible content.
 		// For directories: empty tmpfs hides original contents.
 		// For files: /dev/null returns Permission denied.
@@ -209,7 +209,7 @@ func appendMountArgs(args []string, rule config.Rule, info os.FileInfo) []string
 		}
 		return append(args, "--bind", "/dev/null", path)
 
-	case config.PermissionUnknown:
+	case fsrules.PermissionUnknown:
 		panic("internal error: rule has PermissionUnknown: " + rule.RawRule)
 	}
 

@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
-	"github.com/nonpop/execave/internal/rules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,33 +21,34 @@ type monitorTestEnv struct {
 	t       *testing.T
 	TmpDir  string
 	LogPath string
+	LogFile *os.File
 	mon     *monitor.Monitor
 }
 
-func newMonitorTestEnv(t *testing.T, cfg *config.Config) *monitorTestEnv {
+func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
 	t.Helper()
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logFile.Close() })
+
+	cfg := setupConfig(tmpDir)
+
+	logger := accesslog.New(logFile, cfg.ManagedPaths)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	mon := monitor.New(logger, resolver, nil)
 
 	return &monitorTestEnv{
 		t:       t,
 		TmpDir:  tmpDir,
 		LogPath: logPath,
+		LogFile: logFile,
 		mon:     mon,
 	}
-}
-
-func (e *monitorTestEnv) createFile(name, content string) string {
-	e.t.Helper()
-	path := filepath.Join(e.TmpDir, name)
-	err := os.WriteFile(path, []byte(content), 0o600)
-	require.NoError(e.t, err)
-	return path
 }
 
 func (e *monitorTestEnv) run(cmd []string) (int, error) {
@@ -55,6 +57,8 @@ func (e *monitorTestEnv) run(cmd []string) (int, error) {
 
 func (e *monitorTestEnv) readLog() string {
 	e.t.Helper()
+	// Flush and sync the log file before reading
+	require.NoError(e.t, e.LogFile.Sync())
 	content, err := os.ReadFile(e.LogPath) // #nosec G304 -- test file path from t.TempDir()
 	require.NoError(e.t, err)
 	logStr := string(content)
@@ -66,13 +70,26 @@ func (e *monitorTestEnv) logLines() []string {
 	return strings.Split(strings.TrimSpace(e.readLog()), "\n")
 }
 
-func roRule(path string) config.Rule {
-	return config.Rule{
-		Resource:   config.ResourceFS,
-		Permission: config.PermissionReadOnly,
+func roRule(path string) fsrules.Rule {
+	return fsrules.Rule{
+		Resource:   fsrules.ResourceFS,
+		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
 	}
+}
+
+// createTestMonitor creates a monitor with a logger for testing.
+// Returns the monitor and the log file (for flushing before reading).
+func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapArgs []string) (*monitor.Monitor, *os.File) {
+	t.Helper()
+	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logFile.Close() })
+
+	logger := accesslog.New(logFile, cfg.ManagedPaths)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	return monitor.New(logger, resolver, bwrapArgs), logFile
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -94,25 +111,27 @@ func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
 	t.Errorf("no line found containing all components: %v", components)
 }
 
-func rwRule(path string) config.Rule {
-	return config.Rule{
-		Resource:   config.ResourceFS,
-		Permission: config.PermissionReadWrite,
+func rwRule(path string) fsrules.Rule {
+	return fsrules.Rule{
+		Resource:   fsrules.ResourceFS,
+		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,
 	}
 }
 
 func TestMonitor_Integration(t *testing.T) {
-	cfg := new(config.Config)
-	env := newMonitorTestEnv(t, cfg)
-	testFile := env.createFile("test.txt", "test content")
+	var testFile string
+	env := newMonitorTestEnv(t, func(tmpDir string) *config.Config {
+		testFile = filepath.Join(tmpDir, "test.txt")
+		err := os.WriteFile(testFile, []byte("test content"), 0o600)
+		require.NoError(t, err)
 
-	// Add rule after env creation to use testFile path
-	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules:        []config.Rule{roRule(testFile)},
-		ManagedPaths: nil,
-	}), nil)
+		return &config.Config{
+			FSRules:      []fsrules.Rule{roRule(testFile)},
+			ManagedPaths: nil,
+		}
+	})
 
 	exitCode, err := env.run([]string{"cat", testFile})
 	require.NoError(t, err)
@@ -132,9 +151,14 @@ func TestMonitor_Integration(t *testing.T) {
 }
 
 func TestMonitor_DeniedAccess(t *testing.T) {
-	cfg := new(config.Config)
-	env := newMonitorTestEnv(t, cfg)
-	testFile := env.createFile("test.txt", "test content")
+	var testFile string
+	env := newMonitorTestEnv(t, func(tmpDir string) *config.Config {
+		testFile = filepath.Join(tmpDir, "test.txt")
+		err := os.WriteFile(testFile, []byte("test content"), 0o600)
+		require.NoError(t, err)
+
+		return new(config.Config)
+	})
 
 	_, _ = env.run([]string{"cat", testFile})
 
@@ -144,9 +168,6 @@ func TestMonitor_DeniedAccess(t *testing.T) {
 }
 
 func TestMonitor_WriteOperation(t *testing.T) {
-	cfg := new(config.Config)
-	env := newMonitorTestEnv(t, cfg)
-
 	// Create a test directory outside /tmp (which is a managed path).
 	// Use cwd-relative path to avoid being filtered by isManagedPath.
 	//nolint:usetesting // intentionally not using t.TempDir() - we need a custom location
@@ -159,10 +180,12 @@ func TestMonitor_WriteOperation(t *testing.T) {
 
 	testFile := filepath.Join(absTestDir, "output.txt")
 
-	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules:        []config.Rule{rwRule(absTestDir)},
-		ManagedPaths: nil,
-	}), nil)
+	env := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return &config.Config{
+			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			ManagedPaths: nil,
+		}
+	})
 
 	exitCode, err := env.run([]string{"sh", "-c", "echo 'test' > " + testFile})
 	require.NoError(t, err)
@@ -174,14 +197,17 @@ func TestMonitor_WriteOperation(t *testing.T) {
 }
 
 func TestMonitor_Deduplication(t *testing.T) {
-	cfg := new(config.Config)
-	env := newMonitorTestEnv(t, cfg)
-	testFile := env.createFile("test.txt", "line1\nline2\nline3\n")
+	var testFile string
+	env := newMonitorTestEnv(t, func(tmpDir string) *config.Config {
+		testFile = filepath.Join(tmpDir, "test.txt")
+		err := os.WriteFile(testFile, []byte("line1\nline2\nline3\n"), 0o600)
+		require.NoError(t, err)
 
-	env.mon = monitor.New(env.LogPath, rules.New(&config.Config{
-		Rules:        []config.Rule{roRule(testFile)},
-		ManagedPaths: nil,
-	}), nil)
+		return &config.Config{
+			FSRules:      []fsrules.Rule{roRule(testFile)},
+			ManagedPaths: nil,
+		}
+	})
 
 	exitCode, err := env.run([]string{"sh", "-c", "cat " + testFile + " && cat " + testFile})
 	require.NoError(t, err)
@@ -252,8 +278,7 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := new(config.Config)
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	// Synthetic strace output: openat with AT_FDCWD but no path resolution (older strace -y behavior).
 	// The relative path "foo/bar.txt" cannot be resolved to an absolute path.
@@ -261,12 +286,11 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT (No such file or directory)` + "\n",
 	)
 
-	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
+	err := mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
 	require.NoError(t, err)
@@ -281,12 +305,12 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "access.log")
-	resolver := rules.New(&config.Config{
-		Rules:        []config.Rule{roRule("/usr")},
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule("/usr")},
 		ManagedPaths: nil,
-	})
+	}
 	// Non-nil bwrapArgs enables setup phase detection
-	mon := monitor.New(logPath, resolver, []string{"--ro-bind", "/usr", "/usr"})
+	mon, logFile := createTestMonitor(t, logPath, cfg, []string{"--ro-bind", "/usr", "/usr"})
 
 	// Synthetic strace output mimicking bwrap + user command sequence
 	straceData := strings.NewReader(strings.Join([]string{
@@ -302,12 +326,11 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 		`12345 openat(AT_FDCWD</usr>, "lib/libc.so.6", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
+	err := mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
 	require.NoError(t, err)
@@ -332,8 +355,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 	tmpDir := t.TempDir()
 	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := new(config.Config)
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	// Without bwrap, all lines should be processed (no setup phase)
 	straceData := strings.NewReader(strings.Join([]string{
@@ -341,12 +363,11 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT`,
 	}, "\n") + "\n")
 
-	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
+	err := mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
 	require.NoError(t, err)
@@ -359,7 +380,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := monitor.New("/tmp/test.log", nil, nil)
+	mon := monitor.New(nil, nil, nil)
 
 	args := mon.BuildStraceArgs("/tmp/strace.out", []string{"echo", "hello"})
 
@@ -373,50 +394,10 @@ func TestBuildStraceArgs(t *testing.T) {
 	assert.Contains(t, args, "hello")
 }
 
-func TestIsManagedPath(t *testing.T) {
-	tests := []struct {
-		name     string
-		path     string
-		expected bool
-	}{
-		// Managed paths (infrastructure + bwrap internal)
-		{"proc root", "/proc", true},
-		{"proc file", "/proc/self/status", true},
-		{"dev root", "/dev", true},
-		{"dev file", "/dev/null", true},
-		{"tmp root", "/tmp", true},
-		{"tmp file", "/tmp/test.txt", true},
-		{"newroot", "/newroot", true},
-		{"newroot subdir", "/newroot/dev", true},
-		{"oldroot", "/oldroot", true},
-		{"oldroot subdir", "/oldroot/proc/self/fd/5", true},
-
-		// Non-managed paths (user can configure rules)
-		{"usr", "/usr", false},
-		{"home", "/home", false},
-		{"etc", "/etc", false},
-		{"root", "/", false},
-		{"usr bin", "/usr/bin/bash", false},
-		{"home user", "/home/user/file.txt", false},
-		{"uid_map in project", "/home/user/uid_map", false},
-		{"ns dir in project", "/home/user/project/ns/config", false},
-		{"self dir in project", "/home/user/self/fd", false},
-		{"newroot dir in project", "/home/user/newroot", false},
-		{"oldroot dir in project", "/home/user/oldroot", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := monitor.IsManagedPath(tt.path)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 // testSymlinkAccessHelper sets up a symlink test scenario and validates the access log.
 func testSymlinkAccessHelper(
 	t *testing.T,
-	configRules []config.Rule,
+	configRules []fsrules.Rule,
 	straceFlags string,
 	expectedHopOp, expectedTargetOp string,
 ) {
@@ -434,22 +415,19 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{Rules: configRules, ManagedPaths: nil}
+	cfg := &config.Config{FSRules: configRules, ManagedPaths: nil}
 	logPath := filepath.Join(t.TempDir(), "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", ` + straceFlags + `) = 3`,
 	}, "\n") + "\n")
 
-	//nolint:gosec // Test code with controlled file path
-	logFile, err := os.Create(logPath)
+	err = mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	//nolint:gosec // Test code with controlled file path
 	data, err := os.ReadFile(logPath)
@@ -464,7 +442,7 @@ func testSymlinkAccessHelper(
 func TestMonitor_SymlinkWithinMount(t *testing.T) {
 	// Use /home prefix to avoid /tmp managed path filtering
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []config.Rule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
+	testSymlinkAccessHelper(t, []fsrules.Rule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
 }
 
 func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
@@ -490,28 +468,25 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		Rules:        []config.Rule{roRule(mountDir)},
+		FSRules:      []fsrules.Rule{roRule(mountDir)},
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = -1 EACCES`,
 	}, "\n") + "\n")
 
-	//nolint:gosec // Test code with controlled file path
-	logFile, err := os.Create(logPath)
+	err = mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	//nolint:gosec // Test code with controlled file path
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
+	data, err2 := os.ReadFile(logPath)
+	require.NoError(t, err2)
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 
@@ -522,7 +497,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 
 func TestMonitor_SymlinkWriteOperation(t *testing.T) {
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []config.Rule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
+	testSymlinkAccessHelper(t, []fsrules.Rule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
 }
 
 func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
@@ -548,28 +523,25 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		Rules:        []config.Rule{roRule(roDir), rwRule(rwDir)},
+		FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_WRONLY) = 3`,
 	}, "\n") + "\n")
 
-	//nolint:gosec // Test code with controlled file path
-	logFile, err := os.Create(logPath)
+	err = mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	//nolint:gosec // Test code with controlled file path
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
+	data, err2 := os.ReadFile(logPath)
+	require.NoError(t, err2)
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 
@@ -598,28 +570,25 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		Rules:        []config.Rule{rwRule(mountDir)},
+		FSRules:      []fsrules.Rule{rwRule(mountDir)},
 		ManagedPaths: []string{managedDir},
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	straceData := strings.NewReader(
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = 3` + "\n",
 	)
 
-	//nolint:gosec // Test code with controlled file path
-	logFile, err := os.Create(logPath)
+	err = mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	//nolint:gosec // Test code with controlled file path
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
+	data, err2 := os.ReadFile(logPath)
+	require.NoError(t, err2)
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 
@@ -645,29 +614,26 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		Rules:        []config.Rule{roRule(testBase)},
+		FSRules:      []fsrules.Rule{roRule(testBase)},
 		ManagedPaths: nil,
 	}
 	logPath := filepath.Join(t.TempDir(), "access.log")
-	resolver := rules.New(cfg)
-	mon := monitor.New(logPath, resolver, nil)
+	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + link1 + `", O_RDONLY) = 3`,
 		`12345 openat(AT_FDCWD, "` + link2 + `", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	//nolint:gosec // Test code with controlled file path
-	logFile, err := os.Create(logPath)
+	err = mon.ProcessStraceOutput(straceData)
 	require.NoError(t, err)
 
-	err = mon.ProcessStraceOutput(straceData, logFile)
-	require.NoError(t, err)
-	require.NoError(t, logFile.Close())
+	// Flush log file before reading
+	require.NoError(t, logFile.Sync())
 
 	//nolint:gosec // Test code with controlled file path
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
+	data, err2 := os.ReadFile(logPath)
+	require.NoError(t, err2)
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 

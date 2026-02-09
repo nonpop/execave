@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -10,9 +11,10 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
-	"github.com/nonpop/execave/internal/rules"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/spf13/cobra"
 )
@@ -72,6 +74,15 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 }
 
 func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath string) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitorPath)
+	if err != nil {
+		return err
+	}
+	os.Exit(exitCode)
+	return nil
+}
+
+func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath string) (int, error) {
 	var command []string
 	argsLenAtDash := cmd.ArgsLenAtDash()
 	if argsLenAtDash == -1 {
@@ -82,16 +93,16 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath strin
 
 	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
 	if err != nil {
-		return fmt.Errorf("load config from %s: %w", configPath, err)
+		return 0, fmt.Errorf("load config from %s: %w", configPath, err)
 	}
 
-	resolver := rules.New(cfg)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	monitorEnabled := cmd.Flags().Changed("monitor")
 
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
-		return fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
+		return 0, fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
 	}
 
 	// Prevent SIGINT from terminating the Go process so it can process strace
@@ -101,25 +112,44 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath strin
 	signal.Notify(sigCh, syscall.SIGINT)
 
 	ctx := context.Background()
-	var exitCode int
 	if monitorEnabled {
-		// strace wraps bwrap
-		sb := sandbox.New(cfg, absConfigPath)
-		bwrapArgs := sb.BuildBwrapArgs(command)
-		mon := monitor.New(monitorPath, resolver, bwrapArgs)
-
-		exitCode, err = mon.Run(ctx, command)
-		if err != nil {
-			return fmt.Errorf("run monitor+sandbox: %w", err)
-		}
-	} else {
-		sb := sandbox.New(cfg, absConfigPath)
-		exitCode, err = sb.Run(ctx, command)
-		if err != nil {
-			return fmt.Errorf("run sandbox: %w", err)
-		}
+		return runMonitored(ctx, cfg, absConfigPath, monitorPath, resolver, command)
 	}
 
-	os.Exit(exitCode)
-	return nil
+	sb := sandbox.New(cfg, absConfigPath)
+	exitCode, err := sb.Run(ctx, command)
+	if err != nil {
+		return 0, fmt.Errorf("run sandbox: %w", err)
+	}
+	return exitCode, nil
+}
+
+// runMonitored runs the command inside a sandbox with strace-based filesystem
+// access monitoring. It writes the access log to monitorPath.
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath, monitorPath string, resolver *fsrules.Resolver, command []string) (int, error) {
+	logFile, err := os.Create(monitorPath) //nolint:gosec // monitorPath is user-provided CLI flag
+	if err != nil {
+		return 0, fmt.Errorf("create access log %s: %w", monitorPath, err)
+	}
+	defer func() {
+		_ = logFile.Close() // Best effort close
+	}()
+
+	writer := bufio.NewWriter(logFile)
+	defer func() {
+		if err := writer.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: flush access log: %v\n", err)
+		}
+	}()
+	logger := accesslog.New(writer, sandbox.ManagedDirs)
+
+	sb := sandbox.New(cfg, absConfigPath)
+	bwrapArgs := sb.BuildBwrapArgs(command)
+	mon := monitor.New(logger, resolver, bwrapArgs)
+
+	exitCode, err := mon.Run(ctx, command)
+	if err != nil {
+		return 0, fmt.Errorf("run monitor+sandbox: %w", err)
+	}
+	return exitCode, nil
 }

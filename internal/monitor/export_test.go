@@ -2,28 +2,25 @@ package monitor
 
 import (
 	"io"
-	"os"
+
+	"github.com/nonpop/execave/internal/accesslog"
 )
 
-// Export unexported functions for testing.
+// Exports for testing.
 
 func (m *Monitor) BuildStraceArgs(tmpPath string, command []string) []string {
 	return m.buildStraceArgs(tmpPath, command)
 }
 
-// ProcessStraceOutput exports processStraceOutput for testing with synthetic strace data.
-func (m *Monitor) ProcessStraceOutput(output io.Reader, logFile *os.File) error {
-	return m.processStraceOutput(output, logFile)
+func (m *Monitor) ProcessStraceOutput(output io.Reader) error {
+	return m.processStraceOutput(output)
 }
 
 var MapSyscallToOperation = mapSyscallToOperation
 
-var IsManagedPath = isManagedPath
-
-// Export constants for testing.
 const (
-	ExportedRuleNoMatch                   = RuleNoMatch
-	ExportedRuleUnresolvedRelativePath    = RuleUnresolvedRelativePath
-	ExportedRuleSymlinkTargetUnresolvable = RuleSymlinkTargetUnresolvable
-	ExportedRuleSymlinkDepthExceeded      = RuleSymlinkDepthExceeded
+	ExportedRuleNoMatch                   = accesslog.RuleNoMatch
+	ExportedRuleUnresolvedRelativePath    = accesslog.RuleUnresolvedRelativePath
+	ExportedRuleSymlinkTargetUnresolvable = accesslog.RuleSymlinkTargetUnresolvable
+	ExportedRuleSymlinkDepthExceeded      = accesslog.RuleSymlinkDepthExceeded
 )

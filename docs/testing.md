@@ -39,10 +39,11 @@ E2E tests live in `test/e2e/` and test the full binary.
 Test names must match scenario names from the openspec specs. Format:
 
 ```
-TestE2E_<Spec>_<ScenarioNameInPascalCase>
+TestE2E_<Spec>_<Requirement>_<Scenario>
 ```
 
-For example, "Write denied on read-only path" in sandbox/spec.md → `TestE2E_Sandbox_WriteDeniedOnReadOnlyPath`.
+For example:
+- Spec: "AccessLog", Requirement: "Log format", Scenario: "Allowed read logged" → `TestE2E_AccessLog_LogFormat_AllowedReadLogged`.
 
 ### Helpers
 

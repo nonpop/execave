@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_Monitor_MonitorDisabledByDefault tests that monitoring is disabled by default.
-func TestE2E_Monitor_MonitorDisabledByDefault(t *testing.T) {
+// TestE2E_Monitor_MonitorConfiguration_MonitorDisabledByDefault tests that monitoring is disabled by default.
+func TestE2E_Monitor_MonitorConfiguration_MonitorDisabledByDefault(t *testing.T) {
 	failIfNoBwrap(t)
 
 	workDir := testTempDir(t)
@@ -25,9 +25,9 @@ func TestE2E_Monitor_MonitorDisabledByDefault(t *testing.T) {
 	assertLogNotExists(t, logPath)
 }
 
-// TestE2E_Monitor_MonitorEnabled tests that --monitor enables monitoring and writes
+// TestE2E_Monitor_MonitorConfiguration_MonitorEnabled tests that --monitor enables monitoring and writes
 // the access log to the default path (./execave-access.log).
-func TestE2E_Monitor_MonitorEnabled(t *testing.T) {
+func TestE2E_Monitor_MonitorConfiguration_MonitorEnabled(t *testing.T) {
 	failIfNoStrace(t)
 
 	workDir := testTempDir(t)
@@ -42,8 +42,8 @@ func TestE2E_Monitor_MonitorEnabled(t *testing.T) {
 	assertLogExists(t, logPath)
 }
 
-// TestE2E_Monitor_CustomLogPath tests that --monitor=<path> creates a log at the specified path.
-func TestE2E_Monitor_CustomLogPath(t *testing.T) {
+// TestE2E_Monitor_MonitorConfiguration_CustomLogPath tests that --monitor=<path> creates a log at the specified path.
+func TestE2E_Monitor_MonitorConfiguration_CustomLogPath(t *testing.T) {
 	failIfNoStrace(t)
 
 	workDir := testTempDir(t)
@@ -57,72 +57,8 @@ func TestE2E_Monitor_CustomLogPath(t *testing.T) {
 	assertLogExists(t, customLogPath)
 }
 
-// TestE2E_Monitor_AllowedReadLogged tests that allowed reads are logged with OK.
-func TestE2E_Monitor_AllowedReadLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-	createFile(t, testFile, "content")
-
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
-
-	result := env.runMonitored(t, rules, "cat", testFile)
-	assertExitCode(t, result, 0)
-
-	assertLogLineContainsAll(t, env.LogPath, "READ", testFile, "OK", "fs:ro:"+env.TmpDir)
-}
-
-// TestE2E_Monitor_DeniedWriteLogged tests that denied writes are logged with DENY.
-func TestE2E_Monitor_DeniedWriteLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
-
-	// Write will fail because sandbox enforces read-only
-	result := env.runMonitored(t, rules, "sh", "-c", "echo test > "+testFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	assertLogLineContainsAll(t, env.LogPath, "WRITE", testFile, "DENY", "fs:ro:"+env.TmpDir)
-}
-
-// TestE2E_Monitor_NoAccessRuleLogged tests that access to fs:none paths is logged with DENY.
-func TestE2E_Monitor_NoAccessRuleLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	secretFile := filepath.Join(env.TmpDir, "secret.txt")
-	createFile(t, secretFile, "secret")
-
-	rules := append(systemPaths(), "fs:none:"+secretFile)
-
-	// Read will fail because sandbox blocks fs:none paths
-	result := env.runMonitored(t, rules, "cat", secretFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	assertLogLineContainsAll(t, env.LogPath, "READ", secretFile, "DENY", "fs:none:"+secretFile)
-}
-
-// TestE2E_Monitor_NoMatchingRuleLogged tests that access without matching rule is logged.
-func TestE2E_Monitor_NoMatchingRuleLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-	createFile(t, testFile, "content")
-
-	// System paths allowed but not our test file's directory
-	result := env.runMonitored(t, systemPaths(), "cat", testFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	assertLogLineContainsAll(t, env.LogPath, "READ", testFile, "DENY", "no-matching-rule")
-}
-
-// TestE2E_Monitor_UnresolvedRelativePathLogged is a placeholder for the
-// "Unresolved relative path logged" spec scenario. I couldn't find a way to trigger it. Covered by unit test with synthetic data.
-func TestE2E_Monitor_UnresolvedRelativePathLogged(*testing.T) {}
-
-// TestE2E_Monitor_QueryingFileMetadataLoggedAsRead tests that querying file metadata is logged as READ.
-func TestE2E_Monitor_QueryingFileMetadataLoggedAsRead(t *testing.T) {
+// TestE2E_Monitor_OperationLogging_QueryingFileMetadataLoggedAsRead tests that querying file metadata is logged as READ.
+func TestE2E_Monitor_OperationLogging_QueryingFileMetadataLoggedAsRead(t *testing.T) {
 	env := newMonitorTest(t)
 
 	testFile := filepath.Join(env.TmpDir, "test.txt")
@@ -137,8 +73,8 @@ func TestE2E_Monitor_QueryingFileMetadataLoggedAsRead(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", testFile, "OK", "fs:ro:"+env.TmpDir)
 }
 
-// TestE2E_Monitor_CreatingDirectoryLoggedAsWrite tests that creating a directory is logged as WRITE.
-func TestE2E_Monitor_CreatingDirectoryLoggedAsWrite(t *testing.T) {
+// TestE2E_Monitor_OperationLogging_CreatingDirectoryLoggedAsWrite tests that creating a directory is logged as WRITE.
+func TestE2E_Monitor_OperationLogging_CreatingDirectoryLoggedAsWrite(t *testing.T) {
 	env := newMonitorTest(t)
 
 	newDir := filepath.Join(env.TmpDir, "newdir")
@@ -151,162 +87,9 @@ func TestE2E_Monitor_CreatingDirectoryLoggedAsWrite(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "WRITE", newDir, "OK", "fs:rw:"+env.TmpDir)
 }
 
-// TestE2E_Monitor_RepeatedReadsDeduplicated tests that repeated reads are deduplicated.
-func TestE2E_Monitor_RepeatedReadsDeduplicated(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-	createFile(t, testFile, "content")
-
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
-
-	// Read the same file 3 times
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "cat "+testFile+" && cat "+testFile+" && cat "+testFile)
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	// Specifically check that the test file appears only once with READ
-	lines := 0
-	for line := range strings.SplitSeq(logContent, "\n") {
-		if strings.Contains(line, "READ") && strings.Contains(line, testFile) {
-			lines++
-		}
-	}
-	// Should be deduplicated to 1 entry
-	assert.Equal(t, 1, lines)
-}
-
-// TestE2E_Monitor_ReadAndWriteBothLogged tests that read and write to same file are both logged.
-func TestE2E_Monitor_ReadAndWriteBothLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-	createFile(t, testFile, "initial")
-
-	rules := append(systemPaths(), "fs:rw:"+env.TmpDir)
-
-	// Read then write to same file
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "cat "+testFile+" && echo 'more' >> "+testFile)
-	assertExitCode(t, result, 0)
-
-	// Should have both READ and WRITE entries
-	assertLogLineContainsAll(t, env.LogPath, "READ", testFile)
-	assertLogLineContainsAll(t, env.LogPath, "WRITE", testFile)
-}
-
-// TestE2E_Monitor_RepeatedWritesDeduplicated tests that repeated writes are deduplicated.
-func TestE2E_Monitor_RepeatedWritesDeduplicated(t *testing.T) {
-	env := newMonitorTest(t)
-
-	testFile := filepath.Join(env.TmpDir, "test.txt")
-
-	rules := append(systemPaths(), "fs:rw:"+env.TmpDir)
-
-	// Write to same file 3 times
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "echo a > "+testFile+" && echo b >> "+testFile+" && echo c >> "+testFile)
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	// Should only have 1 WRITE entry for this file (deduplicated)
-	lines := 0
-	for line := range strings.SplitSeq(logContent, "\n") {
-		if strings.Contains(line, "WRITE") && strings.Contains(line, testFile) {
-			lines++
-		}
-	}
-	// Should be deduplicated to 1 entry
-	assert.Equal(t, 1, lines)
-}
-
-// TestE2E_Monitor_InfrastructurePathsNotLogged tests that infrastructure paths are not logged.
-func TestE2E_Monitor_InfrastructurePathsNotLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	// Run a command that accesses infrastructure paths
-	// bash will access /proc, /dev/tty, etc.
-	result := env.runMonitored(t, systemPaths(), "bash", "-c", "exit 0")
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	// Infrastructure paths should NOT be in the log
-	assert.NotContains(t, logContent, "/proc")
-	assert.NotContains(t, logContent, "/dev")
-	assert.NotContains(t, logContent, "newroot")
-	assert.NotContains(t, logContent, "uid_map")
-
-	// System paths should still be logged
-	assert.Contains(t, logContent, "/usr/")
-}
-
-// TestE2E_Monitor_InfrastructureWritesNotLogged tests that writes to infrastructure paths are not logged.
-func TestE2E_Monitor_InfrastructureWritesNotLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	// Run a command that writes to /dev/tty (or /dev/null as fallback)
-	result := env.runMonitored(t, systemPaths(), "sh", "-c", "echo test > /dev/null")
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	// Writes to /dev should NOT be in the log
-	assert.NotContains(t, logContent, "/dev/")
-}
-
-// TestE2E_Monitor_FilesystemPathsStillLogged tests that only user-controlled filesystem paths are logged.
-func TestE2E_Monitor_FilesystemPathsStillLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	result := env.runMonitored(t, systemPaths(), "bash", "-c", "exit 0")
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	assert.Contains(t, logContent, "/usr/")
-}
-
-// TestE2E_Monitor_SandboxSetupPathsNotLogged tests that sandbox setup paths are not logged.
-func TestE2E_Monitor_SandboxSetupPathsNotLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	// Run a simple command - sandbox setup will perform internal operations
-	result := env.runMonitored(t, systemPaths(), "true")
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	// Sandbox setup paths should NOT be in the log (no leading slash to catch
-	// both absolute "/newroot" and relative "newroot" forms from bwrap)
-	assert.NotContains(t, logContent, "newroot")
-	assert.NotContains(t, logContent, "oldroot")
-	assert.NotContains(t, logContent, "uid_map")
-	assert.NotContains(t, logContent, "gid_map")
-	assert.NotContains(t, logContent, "setgroups")
-	assert.NotContains(t, logContent, "self/fd")
-	assert.NotContains(t, logContent, "self/mountinfo")
-}
-
-// TestE2E_Monitor_NamespaceOperationsNotLogged tests that namespace operations are not logged.
-func TestE2E_Monitor_NamespaceOperationsNotLogged(t *testing.T) {
-	env := newMonitorTest(t)
-
-	// Run a simple command - sandbox setup will perform internal operations
-	result := env.runMonitored(t, systemPaths(), "true")
-	assertExitCode(t, result, 0)
-
-	logContent := env.readLog(t)
-
-	assert.NotContains(t, logContent, "/ns/")
-}
-
-// TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT tests that the access log
+// TestE2E_Monitor_SignalHandling_AccessLogWrittenAfterChildTerminatedBySIGINT tests that the access log
 // is written even when the child process is terminated by SIGINT (ctrl-c).
-func TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT(t *testing.T) {
+func TestE2E_Monitor_SignalHandling_AccessLogWrittenAfterChildTerminatedBySIGINT(t *testing.T) {
 	env := newMonitorTest(t)
 
 	// Start execave with --monitor and a long-running command
@@ -326,9 +109,9 @@ func TestE2E_Monitor_AccessLogWrittenAfterChildTerminatedBySIGINT(t *testing.T) 
 
 // Symlink resolution tests
 
-// TestE2E_Monitor_RuleBoundarySymlinkLoggedWithoutResolution tests that symlinks matching
+// TestE2E_Monitor_SymlinkResolution_RuleBoundarySymlinkLoggedWithoutResolution tests that symlinks matching
 // rule paths exactly are logged without resolution.
-func TestE2E_Monitor_RuleBoundarySymlinkLoggedWithoutResolution(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_RuleBoundarySymlinkLoggedWithoutResolution(t *testing.T) {
 	env := newMonitorTest(t)
 
 	linkFile := filepath.Join(env.TmpDir, "link-file")
@@ -350,9 +133,9 @@ func TestE2E_Monitor_RuleBoundarySymlinkLoggedWithoutResolution(t *testing.T) {
 	assert.NotContains(t, logContent, targetFile)
 }
 
-// TestE2E_Monitor_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution
+// TestE2E_Monitor_SymlinkResolution_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution
 // tests that intermediate directory symlinks matching rule paths are not resolved.
-func TestE2E_Monitor_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution(t *testing.T) {
 	env := newMonitorTest(t)
 
 	realDir := filepath.Join(env.TmpDir, "real-dir")
@@ -376,9 +159,9 @@ func TestE2E_Monitor_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutReso
 	assert.NotContains(t, logContent, targetFile)
 }
 
-// TestE2E_Monitor_SymlinkWithinMountResolvedAndLogged tests that symlinks within
+// TestE2E_Monitor_SymlinkResolution_SymlinkWithinMountResolvedAndLogged tests that symlinks within
 // a mounted directory are resolved and both hop and target are logged.
-func TestE2E_Monitor_SymlinkWithinMountResolvedAndLogged(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_SymlinkWithinMountResolvedAndLogged(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -399,9 +182,9 @@ func TestE2E_Monitor_SymlinkWithinMountResolvedAndLogged(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", targetPath, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_Monitor_RelativeSymlinkWithinMountResolvedAndLogged tests that relative
+// TestE2E_Monitor_SymlinkResolution_RelativeSymlinkWithinMountResolvedAndLogged tests that relative
 // symlinks within a mount are resolved and both hop and target are logged.
-func TestE2E_Monitor_RelativeSymlinkWithinMountResolvedAndLogged(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_RelativeSymlinkWithinMountResolvedAndLogged(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -423,9 +206,9 @@ func TestE2E_Monitor_RelativeSymlinkWithinMountResolvedAndLogged(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", targetPath, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_Monitor_RelativeSymlinkChainResolvedAndLogged tests that a chain of
+// TestE2E_Monitor_SymlinkResolution_RelativeSymlinkChainResolvedAndLogged tests that a chain of
 // relative symlinks is fully resolved with all hops logged in order.
-func TestE2E_Monitor_RelativeSymlinkChainResolvedAndLogged(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_RelativeSymlinkChainResolvedAndLogged(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -450,9 +233,9 @@ func TestE2E_Monitor_RelativeSymlinkChainResolvedAndLogged(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", finalPath, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_Monitor_SymlinkWithinMountPointingOutsideRulesDenied tests that symlinks
+// TestE2E_Monitor_SymlinkResolution_SymlinkWithinMountPointingOutsideRulesDenied tests that symlinks
 // within a mount pointing to paths outside any rule are denied.
-func TestE2E_Monitor_SymlinkWithinMountPointingOutsideRulesDenied(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_SymlinkWithinMountPointingOutsideRulesDenied(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -474,9 +257,9 @@ func TestE2E_Monitor_SymlinkWithinMountPointingOutsideRulesDenied(t *testing.T) 
 	assertLogLineContainsAll(t, env.LogPath, "READ", secretFile, "DENY", "no-matching-rule")
 }
 
-// TestE2E_Monitor_MultiHopSymlinkChainWithinMount tests that multi-hop symlink chains
+// TestE2E_Monitor_SymlinkResolution_MultiHopSymlinkChainWithinMount tests that multi-hop symlink chains
 // within a mount are fully logged.
-func TestE2E_Monitor_MultiHopSymlinkChainWithinMount(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_MultiHopSymlinkChainWithinMount(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -500,9 +283,9 @@ func TestE2E_Monitor_MultiHopSymlinkChainWithinMount(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", final, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_Monitor_MultiHopChainBreaksAtDeniedIntermediateHop tests that symlink chains
+// TestE2E_Monitor_SymlinkResolution_MultiHopChainBreaksAtDeniedIntermediateHop tests that symlink chains
 // stop at a denied intermediate hop.
-func TestE2E_Monitor_MultiHopChainBreaksAtDeniedIntermediateHop(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_MultiHopChainBreaksAtDeniedIntermediateHop(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -530,9 +313,9 @@ func TestE2E_Monitor_MultiHopChainBreaksAtDeniedIntermediateHop(t *testing.T) {
 	assert.NotContains(t, logContent, final)
 }
 
-// TestE2E_Monitor_SymlinkInIntermediatePathComponentResolved tests that symlinks
+// TestE2E_Monitor_SymlinkResolution_SymlinkInIntermediatePathComponentResolved tests that symlinks
 // in intermediate path components are resolved.
-func TestE2E_Monitor_SymlinkInIntermediatePathComponentResolved(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_SymlinkInIntermediatePathComponentResolved(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -555,9 +338,9 @@ func TestE2E_Monitor_SymlinkInIntermediatePathComponentResolved(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", targetFile, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_Monitor_WriteOperationThroughSymlinkWithinMount tests that write operations
+// TestE2E_Monitor_SymlinkResolution_WriteOperationThroughSymlinkWithinMount tests that write operations
 // through symlinks log the hop as READ and the target as WRITE.
-func TestE2E_Monitor_WriteOperationThroughSymlinkWithinMount(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_WriteOperationThroughSymlinkWithinMount(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -582,9 +365,9 @@ func TestE2E_Monitor_WriteOperationThroughSymlinkWithinMount(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "WRITE", realPath, "OK", "fs:rw:"+mountDir)
 }
 
-// TestE2E_Monitor_WriteThroughSymlinkToReadOnlyTargetDenied tests that writing through
+// TestE2E_Monitor_SymlinkResolution_WriteThroughSymlinkToReadOnlyTargetDenied tests that writing through
 // a symlink to a read-only target is denied.
-func TestE2E_Monitor_WriteThroughSymlinkToReadOnlyTargetDenied(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_WriteThroughSymlinkToReadOnlyTargetDenied(t *testing.T) {
 	env := newMonitorTest(t)
 
 	rwDir := filepath.Join(env.TmpDir, "writable")
@@ -606,9 +389,9 @@ func TestE2E_Monitor_WriteThroughSymlinkToReadOnlyTargetDenied(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "WRITE", targetPath, "DENY", "fs:ro:"+roDir)
 }
 
-// TestE2E_Monitor_WriteThroughReadOnlySymlinkToWritableTargetAllowed tests that writing
+// TestE2E_Monitor_SymlinkResolution_WriteThroughReadOnlySymlinkToWritableTargetAllowed tests that writing
 // through a symlink in a read-only directory to a writable target succeeds.
-func TestE2E_Monitor_WriteThroughReadOnlySymlinkToWritableTargetAllowed(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_WriteThroughReadOnlySymlinkToWritableTargetAllowed(t *testing.T) {
 	env := newMonitorTest(t)
 
 	roDir := filepath.Join(env.TmpDir, "readonly")
@@ -634,9 +417,9 @@ func TestE2E_Monitor_WriteThroughReadOnlySymlinkToWritableTargetAllowed(t *testi
 	assertLogLineContainsAll(t, env.LogPath, "WRITE", targetPath, "OK", "fs:rw:"+rwDir)
 }
 
-// TestE2E_Monitor_SymlinkDepthLimitExceeded tests that symlink loops are detected
+// TestE2E_Monitor_SymlinkResolution_SymlinkDepthLimitExceeded tests that symlink loops are detected
 // and denied.
-func TestE2E_Monitor_SymlinkDepthLimitExceeded(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_SymlinkDepthLimitExceeded(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -661,9 +444,9 @@ func TestE2E_Monitor_SymlinkDepthLimitExceeded(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", loopB, "DENY", "symlink-depth-limit-exceeded")
 }
 
-// TestE2E_Monitor_ResolvedSymlinkPathsDeduplicated tests that multiple symlinks to the
+// TestE2E_Monitor_SymlinkResolution_ResolvedSymlinkPathsDeduplicated tests that multiple symlinks to the
 // same target only log the target once.
-func TestE2E_Monitor_ResolvedSymlinkPathsDeduplicated(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_ResolvedSymlinkPathsDeduplicated(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -694,10 +477,10 @@ func TestE2E_Monitor_ResolvedSymlinkPathsDeduplicated(t *testing.T) {
 	assert.Equal(t, 1, targetCount)
 }
 
-// TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown tests that symlinks pointing
+// TestE2E_Monitor_SymlinkResolution_SymlinkThroughManagedPathLoggedAsUnknown tests that symlinks pointing
 // into managed paths (e.g., /tmp tmpfs) are logged as UNKNOWN since the host-side resolver
 // cannot see the sandbox's tmpfs contents.
-func TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
+func TestE2E_Monitor_SymlinkResolution_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -716,9 +499,11 @@ func TestE2E_Monitor_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
 	assertLogLineContainsAll(t, env.LogPath, "READ", linkPath, "UNKNOWN", "symlink-target-unresolvable")
 }
 
-// TestE2E_Monitor_NonExistentPathFilteredFromLog tests that non-existent paths are filtered
+// Non-existent path filtering tests
+
+// TestE2E_Monitor_NonExistentPathFiltering_NonExistentPathFilteredFromLog tests that non-existent paths are filtered
 // from the access log to reduce noise.
-func TestE2E_Monitor_NonExistentPathFilteredFromLog(t *testing.T) {
+func TestE2E_Monitor_NonExistentPathFiltering_NonExistentPathFilteredFromLog(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -739,9 +524,9 @@ func TestE2E_Monitor_NonExistentPathFilteredFromLog(t *testing.T) {
 	assert.NotContains(t, logContent, nonExistent)
 }
 
-// TestE2E_Monitor_NonExistentPathNotResolved tests that non-existent paths are not
+// TestE2E_Monitor_NonExistentPathFiltering_NonExistentPathNotResolved tests that non-existent paths are not
 // resolved as symlinks.
-func TestE2E_Monitor_NonExistentPathNotResolved(t *testing.T) {
+func TestE2E_Monitor_NonExistentPathFiltering_NonExistentPathNotResolved(t *testing.T) {
 	env := newMonitorTest(t)
 
 	mountDir := filepath.Join(env.TmpDir, "mount")
@@ -762,9 +547,9 @@ func TestE2E_Monitor_NonExistentPathNotResolved(t *testing.T) {
 	assert.NotContains(t, logContent, nonExistent)
 }
 
-// TestE2E_Monitor_StatErrorStillLogged tests that non-ENOENT stat errors (permission
+// TestE2E_Monitor_NonExistentPathFiltering_StatErrorStillLogged tests that non-ENOENT stat errors (permission
 // denied, I/O errors) result in logging (fail-safe behavior).
-func TestE2E_Monitor_StatErrorStillLogged(t *testing.T) {
+func TestE2E_Monitor_NonExistentPathFiltering_StatErrorStillLogged(t *testing.T) {
 	env := newMonitorTest(t)
 
 	// Create a directory with restricted permissions to trigger permission denied
@@ -775,7 +560,7 @@ func TestE2E_Monitor_StatErrorStillLogged(t *testing.T) {
 	restrictedFile := filepath.Join(restrictedDir, "secret.txt")
 	createFile(t, restrictedFile, "secret")
 
-	// Remove all permissions on the directory to prevent stat access from monitor
+	// Remove all permissions on the directory to prevent stat access from resolver
 	err = os.Chmod(restrictedDir, 0o000)
 	require.NoError(t, err)
 	defer func() {
@@ -786,10 +571,10 @@ func TestE2E_Monitor_StatErrorStillLogged(t *testing.T) {
 	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
 
 	// The sandboxed process can access the file (bwrap mounted it before permission change),
-	// but the monitor's os.Stat will fail with permission denied
+	// but the resolver's os.Lstat will fail with permission denied
 	_ = env.runMonitored(t, rules, "cat", restrictedFile)
 	// May succeed or fail depending on bwrap mount behavior - we don't care about exit code
 
-	// Despite stat error, the path should be logged (fail-safe)
+	// Despite stat error, the path should be logged (fail-safe: EACCES is not ENOENT)
 	assertLogLineContainsAll(t, env.LogPath, "READ", restrictedFile, "DENY")
 }

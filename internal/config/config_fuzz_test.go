@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,12 +42,12 @@ func FuzzLoad(f *testing.F) {
 
 		// Invariants that must hold for any successfully loaded config:
 		seenPaths := make(map[string]bool)
-		for _, rule := range cfg.Rules {
+		for _, rule := range cfg.FSRules {
 			// Resource must be valid (not Unknown)
-			assert.NotEqual(t, config.ResourceUnknown, rule.Resource)
+			assert.NotEqual(t, fsrules.ResourceUnknown, rule.Resource)
 
 			// Permission must be valid (not Unknown)
-			assert.NotEqual(t, config.PermissionUnknown, rule.Permission)
+			assert.NotEqual(t, fsrules.PermissionUnknown, rule.Permission)
 
 			// Path must not be empty
 			assert.NotEmpty(t, rule.Path)
@@ -61,87 +62,5 @@ func FuzzLoad(f *testing.F) {
 			assert.False(t, seenPaths[rule.Path])
 			seenPaths[rule.Path] = true
 		}
-	})
-}
-
-func FuzzParseRule(f *testing.F) {
-	// Seed corpus with valid rules
-	f.Add("fs:ro:/usr/bin", "/config")
-	f.Add("fs:rw:/home/user", "/config")
-	f.Add("fs:none:/secret", "/config")
-	f.Add("fs:ro:./relative", "/config")
-	f.Add("fs:rw:../parent", "/config")
-
-	// Seed with invalid rules
-	f.Add("fs:ro", "/config")
-	f.Add("fs:/path", "/config")
-	f.Add("invalid", "/config")
-	f.Add(":", "/config")
-	f.Add("", "/config")
-	f.Add("fs:invalid:/path", "/config")
-	f.Add("net:allow:443", "/config")
-
-	f.Fuzz(func(t *testing.T, ruleStr, configDir string) {
-		// Use absolute configDir to test path resolution properly
-		if !filepath.IsAbs(configDir) {
-			configDir = "/fuzz" + configDir
-		}
-
-		rule, err := config.ParseRule(ruleStr, configDir)
-		if err != nil {
-			return // Invalid input is fine
-		}
-
-		// Invariants for successfully parsed rules:
-
-		// Resource must be valid
-		assert.NotEqual(t, config.ResourceUnknown, rule.Resource)
-
-		// Permission must be valid
-		assert.NotEqual(t, config.PermissionUnknown, rule.Permission)
-
-		// Path must not be empty
-		assert.NotEmpty(t, rule.Path)
-
-		// Path must be absolute (since configDir is absolute)
-		assert.True(t, filepath.IsAbs(rule.Path))
-
-		// Path must be clean
-		assert.Equal(t, filepath.Clean(rule.Path), rule.Path)
-
-		// RawRule must be preserved
-		assert.Equal(t, ruleStr, rule.RawRule)
-	})
-}
-
-func FuzzNormalizePath(f *testing.F) {
-	// Seed corpus
-	f.Add("/usr/bin", "/tmp")
-	f.Add("./relative", "/home/user")
-	f.Add("../parent", "/home/user/project")
-	f.Add("/path/with/../dots", "/tmp")
-	f.Add("/path//double//slash", "/tmp")
-	f.Add("/path/./current", "/tmp")
-	f.Add("", "/tmp")
-	f.Add("/", "/tmp")
-
-	f.Fuzz(func(t *testing.T, path, configDir string) {
-		// Use absolute configDir
-		if !filepath.IsAbs(configDir) {
-			configDir = "/fuzz" + configDir
-		}
-
-		result := config.NormalizePath(path, configDir)
-
-		// Invariants for path normalization:
-
-		// Result must be absolute (since configDir is absolute)
-		assert.True(t, filepath.IsAbs(result))
-
-		// Result must be clean (idempotent under filepath.Clean)
-		assert.Equal(t, filepath.Clean(result), result)
-
-		// Normalizing the result again must be idempotent
-		assert.Equal(t, result, config.NormalizePath(result, configDir))
 	})
 }
