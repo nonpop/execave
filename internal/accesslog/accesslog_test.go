@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -32,6 +33,59 @@ func TestLogger_LogEntry(t *testing.T) {
 	assert.Contains(t, logStr, "/etc/passwd")
 	assert.Contains(t, logStr, "OK")
 	assert.Contains(t, logStr, "fs:ro:/etc")
+}
+
+func TestLogger_ConcurrentAccess(t *testing.T) {
+	var buf bytes.Buffer
+	logger := accesslog.New(&buf, nil)
+
+	const numGoroutines = 10
+	const entriesPerGoroutine = 20
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	errCh := make(chan error, numGoroutines*entriesPerGoroutine)
+
+	// Each goroutine logs distinct entries
+	for i := range numGoroutines {
+		go func(id int) {
+			defer wg.Done()
+			for j := range entriesPerGoroutine {
+				entry := accesslog.Entry{
+					Operation: accesslog.OperationRead,
+					Target:    fmt.Sprintf("/tmp/file-%d-%d.txt", id, j),
+					Result:    accesslog.ResultOK,
+					Rule:      "fs:ro:/tmp",
+				}
+				if err := logger.Log(entry); err != nil {
+					errCh <- err
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// Check for any errors from goroutines
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	// Assert all distinct entries are present (no entries lost)
+	logStr := buf.String()
+	lines := strings.Split(strings.TrimSpace(logStr), "\n")
+	expectedEntries := numGoroutines * entriesPerGoroutine
+	assert.Len(t, lines, expectedEntries)
+
+	// Verify each distinct entry appears exactly once
+	for i := range numGoroutines {
+		for j := range entriesPerGoroutine {
+			expectedPath := fmt.Sprintf("/tmp/file-%d-%d.txt", i, j)
+			assert.Contains(t, logStr, expectedPath)
+		}
+	}
 }
 
 func TestLogger_Deduplication(t *testing.T) {

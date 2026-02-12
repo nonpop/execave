@@ -2,7 +2,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -138,8 +137,9 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 		return 0, fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
 	}
 
-	// Prevent SIGINT from terminating the Go process so it can process strace
-	// output and write the access log after the child exits.
+	// Prevent SIGINT from terminating the Go process so the processing goroutine
+	// can drain remaining pipe data and write final access log entries after the
+	// child exits.
 	// See fix-sigint-access-log/design.md for why we use signal.Notify instead of signal.Ignore.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
@@ -261,20 +261,15 @@ func runMonitored(ctx context.Context, sb *sandbox.Sandbox, logger *accesslog.Lo
 	return exitCode, nil
 }
 
-func createAccessLogWriter(monitorPath string) (*bufio.Writer, func(), error) {
+func createAccessLogWriter(monitorPath string) (*os.File, func(), error) {
 	logFile, err := os.Create(monitorPath) //nolint:gosec // monitorPath is user-provided CLI flag
 	if err != nil {
 		return nil, nil, fmt.Errorf("create access log %s: %w", monitorPath, err)
 	}
 
-	writer := bufio.NewWriter(logFile)
-
 	cleanup := func() {
-		if err := writer.Flush(); err != nil {
-			fmt.Fprintf(os.Stderr, "execave: flush access log: %v\n", err)
-		}
 		_ = logFile.Close()
 	}
 
-	return writer, cleanup, nil
+	return logFile, cleanup, nil
 }

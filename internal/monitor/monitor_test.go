@@ -386,14 +386,14 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 func TestBuildStraceArgs(t *testing.T) {
 	mon := monitor.New(nil, nil, nil, false)
 
-	args := mon.BuildStraceArgs("/tmp/strace.out", []string{"echo", "hello"})
+	args := mon.BuildStraceArgs([]string{"echo", "hello"}, 3)
 
 	// Should contain strace flags and original command
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "-y")
 	assert.Contains(t, args, "trace=file")
 	assert.Contains(t, args, "-qq")
-	assert.Contains(t, args, "/tmp/strace.out")
+	assert.Contains(t, args, "/proc/self/fd/3")
 	assert.Contains(t, args, "echo")
 	assert.Contains(t, args, "hello")
 }

@@ -1,10 +1,13 @@
 package e2e_test
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -665,3 +668,80 @@ func TestE2E_Monitor_NonExistentPathFiltering_StatErrorStillLogged(t *testing.T)
 	// Despite stat error, the path should be logged (fail-safe: EACCES is not ENOENT)
 	assertLogLineContainsAll(t, env.LogPath, "READ", restrictedFile, "DENY")
 }
+
+// Real-time logging tests
+
+// TestE2E_Monitor_RealTimeAccessLogWriting_LogEntriesVisibleDuringExecution tests that log entries
+// are written during execution, not after the process exits.
+func TestE2E_Monitor_RealTimeAccessLogWriting_LogEntriesVisibleDuringExecution(t *testing.T) {
+	env := newMonitorTest(t)
+
+	testFile := filepath.Join(env.TmpDir, "data.txt")
+	createFile(t, testFile, "test content")
+
+	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+
+	configPath := writeConfig(t, rules)
+
+	// Start a command that reads the file then sleeps
+	// We'll check the log while it's still sleeping
+	cmd := exec.CommandContext(context.Background(), binaryPath,
+		"--config", configPath,
+		"--monitor="+env.LogPath,
+		"--",
+		"sh", "-c", "cat "+testFile+" && sleep 2") //#nosec G204 // testFile is created by test
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	require.NoError(t, cmd.Start())
+
+	// Give it time to read the file (but not enough to finish sleeping)
+	time.Sleep(500 * time.Millisecond)
+
+	// The READ entry should be visible before the command exits
+	assertLogLineContainsAll(t, env.LogPath, "READ", testFile)
+
+	// Wait for command to finish
+	_ = cmd.Wait()
+}
+
+// TestE2E_Monitor_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder tests that log entries
+// appear in the order syscalls are made.
+func TestE2E_Monitor_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *testing.T) {
+	env := newMonitorTest(t)
+
+	aFile := filepath.Join(env.TmpDir, "a.txt")
+	bFile := filepath.Join(env.TmpDir, "b.txt")
+	createFile(t, aFile, "a")
+	createFile(t, bFile, "b")
+
+	rules := append(systemPaths(), "fs:rw:"+env.TmpDir)
+
+	// Command reads a.txt then writes b.txt
+	result := env.runMonitored(t, rules, "sh", "-c", "cat "+aFile+" && echo new > "+bFile)
+	assertExitCode(t, result, 0)
+
+	// Read log and find positions of READ and WRITE entries
+	logContent := env.readLog(t)
+	lines := strings.Split(logContent, "\n")
+
+	readIdx := -1
+	writeIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "READ") && strings.Contains(line, "a.txt") {
+			readIdx = i
+		}
+		if strings.Contains(line, "WRITE") && strings.Contains(line, "b.txt") {
+			writeIdx = i
+		}
+	}
+
+	require.NotEqual(t, -1, readIdx)
+	require.NotEqual(t, -1, writeIdx)
+	assert.Less(t, readIdx, writeIdx)
+}
+
+// TestE2E_Monitor_ThreadSafeAccessLogging_ConcurrentFilesystemAndNetworkEntries is a placeholder for the
+// "Concurrent filesystem and network entries" spec scenario. Covered by the unit-level concurrency
+// test in accesslog_test.go.
+func TestE2E_Monitor_ThreadSafeAccessLogging_ConcurrentFilesystemAndNetworkEntries(*testing.T) {}

@@ -8,8 +8,8 @@ import (
 
 // Exports for testing.
 
-func (m *Monitor) BuildStraceArgs(tmpPath string, command []string) []string {
-	return m.buildStraceArgs(tmpPath, command)
+func (m *Monitor) BuildStraceArgs(command []string, outputFD int) []string {
+	return m.buildStraceArgs(command, outputFD)
 }
 
 func (m *Monitor) ProcessStraceOutput(output io.Reader) error {

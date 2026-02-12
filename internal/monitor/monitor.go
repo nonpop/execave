@@ -56,32 +56,87 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 		return 1, fmt.Errorf("strace not found in PATH: %w", err)
 	}
 
-	tmpPath, cleanup, err := createStraceOutputFile()
+	// Create pipe for strace output: strace writes to straceW, we read from straceR
+	straceR, straceW, err := os.Pipe()
 	if err != nil {
-		return 1, err
-	}
-	defer cleanup()
-
-	straceArgs := m.buildStraceArgs(tmpPath, command)
-	exitCode, err := executeStrace(ctx, straceArgs)
-	if err != nil {
-		return exitCode, err
+		return 1, fmt.Errorf("create pipe for strace output: %w", err)
 	}
 
-	if err := m.processStraceResults(tmpPath); err != nil {
-		return exitCode, err
+	// Build strace command with pipe write end as ExtraFiles[0] (becomes fd 3 in child)
+	const stracePipeFD = 3
+	straceArgs := m.buildStraceArgs(command, stracePipeFD)
+	cmd := exec.CommandContext(ctx, "strace", straceArgs...) // #nosec G204 -- args built from validated config
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = []*os.File{straceW}
+
+	if err := cmd.Start(); err != nil {
+		_ = straceR.Close()
+		_ = straceW.Close()
+		return 1, fmt.Errorf("start strace: %w", err)
+	}
+
+	// Close write end in parent - strace child has its own copy.
+	// If this fails, the pipe never gets EOF and the reader goroutine deadlocks.
+	if err := straceW.Close(); err != nil {
+		panic("close strace pipe write end: " + err.Error())
+	}
+
+	// Process strace output in goroutine while child runs
+	processingErrCh := make(chan error, 1)
+	go func() {
+		processingErrCh <- m.processStraceOutput(straceR)
+		_ = straceR.Close()
+	}()
+
+	// Wait for strace (and traced command) to exit
+	err = cmd.Wait()
+	exitCode, exitErr := extractExitCode(err)
+	if exitErr != nil {
+		return exitCode, exitErr
+	}
+
+	// Wait for processing goroutine to finish (it drains remaining pipe data)
+	processingErr := <-processingErrCh
+	if processingErr != nil {
+		return exitCode, fmt.Errorf("process strace output: %w", processingErr)
 	}
 
 	return exitCode, nil
 }
 
-func (m *Monitor) buildStraceArgs(tmpPath string, command []string) []string {
+// extractExitCode determines the exit code from a command error.
+// Returns 0 if no error, or the exit code if the command failed.
+// Returns an error if the command could not be started at all.
+func extractExitCode(err error) (int, error) {
+	if err == nil {
+		return 0, nil
+	}
+
+	exitErr := new(exec.ExitError)
+	if !errors.As(err, &exitErr) {
+		return 1, fmt.Errorf("execute strace: %w", err)
+	}
+
+	// Command ran but exited with non-zero code or signal
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	if ok && ws.Signaled() {
+		// Process was terminated by signal - return 128 + signal number
+		// This matches shell convention (e.g., SIGINT = 2 → exit code 130)
+		return 128 + int(ws.Signal()), nil //nolint: mnd // well-known code
+	}
+
+	return exitErr.ExitCode(), nil
+}
+
+func (m *Monitor) buildStraceArgs(command []string, outputFD int) []string {
 	straceArgs := []string{
 		"-f",               // Follow forks
 		"-y",               // Print paths for file descriptors
 		"-e", "trace=file", // Only file operations
 		"-s", "0", // Don't capture string arguments
-		"-o", tmpPath, // Output to temp file
+		"-o", fmt.Sprintf("/proc/self/fd/%d", outputFD), // Output to pipe
 		"-qq", // Suppress strace info messages
 		"--",
 	}
@@ -97,20 +152,6 @@ func (m *Monitor) buildStraceArgs(tmpPath string, command []string) []string {
 	}
 
 	return straceArgs
-}
-
-func (m *Monitor) processStraceResults(tmpPath string) error {
-	straceFile, err := os.Open(tmpPath) // #nosec G304 -- tmpPath is temp file created by caller
-	if err != nil {
-		return fmt.Errorf("open strace output %s: %w", tmpPath, err)
-	}
-	defer func() { _ = straceFile.Close() }()
-
-	if err := m.processStraceOutput(straceFile); err != nil {
-		return fmt.Errorf("process strace output: %w", err)
-	}
-
-	return nil
 }
 
 // processStraceOutput parses strace output and writes access log entries.
@@ -319,51 +360,6 @@ func (m *Monitor) logPathAccess(
 	}
 
 	return nil
-}
-
-func createStraceOutputFile() (string, func(), error) {
-	tmpFile, err := os.CreateTemp("", "execave-strace-*.log")
-	if err != nil {
-		return "", nil, fmt.Errorf("create temp file for strace output: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	if err := tmpFile.Close(); err != nil {
-		return "", nil, fmt.Errorf("close temp file %s: %w", tmpPath, err)
-	}
-
-	cleanup := func() {
-		if err := os.Remove(tmpPath); err != nil {
-			fmt.Fprintf(os.Stderr, "execave: failed to remove temporary file %s: %v\n", tmpPath, err)
-		}
-	}
-
-	return tmpPath, cleanup, nil
-}
-
-func executeStrace(ctx context.Context, straceArgs []string) (int, error) {
-	cmd := exec.CommandContext(ctx, "strace", straceArgs...) // #nosec G204 -- args built from validated config
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	err := cmd.Run()
-	if err != nil {
-		exitErr := new(exec.ExitError)
-		if errors.As(err, &exitErr) {
-			// Command ran but exited with non-zero code or signal
-			ws, ok := exitErr.Sys().(syscall.WaitStatus)
-			if ok && ws.Signaled() {
-				// Process was terminated by signal - return 128 + signal number
-				// This matches shell convention (e.g., SIGINT = 2 → exit code 130)
-				return 128 + int(ws.Signal()), nil //nolint: mnd // well-known code
-			}
-			return exitErr.ExitCode(), nil
-		}
-		// Failed to execute strace itself
-		return 1, fmt.Errorf("execute strace: %w", err)
-	}
-
-	return 0, nil
 }
 
 func mapSyscallToOperation(syscall string, line string) OperationType {

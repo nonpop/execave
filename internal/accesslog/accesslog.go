@@ -11,6 +11,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // OperationType classifies access operations.
@@ -72,7 +73,9 @@ type accessKey struct {
 }
 
 // Logger writes access log entries with deduplication and filtering.
+// Logger is safe for concurrent use by multiple goroutines.
 type Logger struct {
+	mu      sync.Mutex
 	writer  io.Writer
 	seen    map[accessKey]bool
 	managed []string
@@ -82,6 +85,7 @@ type Logger struct {
 // managedPaths contains infrastructure paths (/dev, /proc, /tmp) that should not be logged.
 func New(writer io.Writer, managedPaths []string) *Logger {
 	return &Logger{
+		mu:      sync.Mutex{},
 		writer:  writer,
 		seen:    make(map[accessKey]bool),
 		managed: managedPaths,
@@ -92,6 +96,9 @@ func New(writer io.Writer, managedPaths []string) *Logger {
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
 func (l *Logger) Log(entry Entry) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.isManagedPath(entry.Target) {
 		return nil
 	}

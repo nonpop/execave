@@ -3,7 +3,15 @@
     "allow": [
       "Bash(openspec new change:*)",
       "Bash(openspec status:*)",
-      "Bash(openspec instructions proposal:*)"
+      "Bash(openspec instructions proposal:*)",
+      "Bash(ls:*)",
+      "Bash(openspec instructions design:*)",
+      "Bash(openspec instructions specs:*)",
+      "Bash(openspec instructions tasks:*)",
+      "Bash(openspec instructions apply:*)",
+      "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(golangci-lint run:*)"
     ]
   }
 }
