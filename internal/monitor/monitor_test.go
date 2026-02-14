@@ -1,4 +1,4 @@
-package monitor_test
+package monitor
 
 import (
 	"bufio"
@@ -12,7 +12,6 @@ import (
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/monitor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +21,7 @@ type monitorTestEnv struct {
 	TmpDir  string
 	LogPath string
 	LogFile *os.File
-	mon     *monitor.Monitor
+	mon     *Monitor
 }
 
 func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
@@ -40,7 +39,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	logger := accesslog.New(logFile, cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := monitor.New(logger, resolver, nil, false)
+	mon := New(logger, resolver, nil, false)
 
 	return &monitorTestEnv{
 		t:       t,
@@ -52,7 +51,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 }
 
 func (e *monitorTestEnv) run(cmd []string) (int, error) {
-	return e.mon.Run(context.Background(), cmd) //nolint:wrapcheck
+	return e.mon.Run(context.Background(), cmd)
 }
 
 func (e *monitorTestEnv) readLog() string {
@@ -81,7 +80,7 @@ func roRule(path string) fsrules.Rule {
 
 // createTestMonitor creates a monitor with a logger for testing.
 // Returns the monitor and the log file (for flushing before reading).
-func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapArgs []string) (*monitor.Monitor, *os.File) {
+func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapArgs []string) (*Monitor, *os.File) {
 	t.Helper()
 	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
 	require.NoError(t, err)
@@ -89,7 +88,7 @@ func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapAr
 
 	logger := accesslog.New(logFile, cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	return monitor.New(logger, resolver, bwrapArgs, false), logFile
+	return New(logger, resolver, bwrapArgs, false), logFile
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -165,7 +164,7 @@ func TestMonitor_DeniedAccess(t *testing.T) {
 
 	logStr := env.readLog()
 	assert.Contains(t, logStr, "DENY")
-	assert.Contains(t, logStr, monitor.ExportedRuleNoMatch)
+	assert.Contains(t, logStr, accesslog.RuleNoMatch)
 }
 
 func TestMonitor_WriteOperation(t *testing.T) {
@@ -242,32 +241,32 @@ func TestMapSyscallToOperation(t *testing.T) {
 		name     string
 		syscall  string
 		line     string
-		expected monitor.OperationType
+		expected OperationType
 	}{
-		{"open read", "open", `open("/file", O_RDONLY)`, monitor.OperationRead},
-		{"open write", "open", `open("/file", O_WRONLY)`, monitor.OperationWrite},
-		{"open rdwr", "open", `open("/file", O_RDWR)`, monitor.OperationWrite},
-		{"open create", "open", `open("/file", O_CREAT)`, monitor.OperationWrite},
+		{"open read", "open", `open("/file", O_RDONLY)`, OperationRead},
+		{"open write", "open", `open("/file", O_WRONLY)`, OperationWrite},
+		{"open rdwr", "open", `open("/file", O_RDWR)`, OperationWrite},
+		{"open create", "open", `open("/file", O_CREAT)`, OperationWrite},
 		// Filenames containing flag names should not cause misclassification
-		{"open read file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_RDONLY) = 3`, monitor.OperationRead},
-		{"open read file named O_WRONLY", "openat", `12345 openat(AT_FDCWD, "/tmp/O_WRONLY", O_RDONLY) = 3`, monitor.OperationRead},
-		{"open read file named O_RDWR", "openat", `12345 openat(AT_FDCWD, "/tmp/O_RDWR", O_RDONLY) = 3`, monitor.OperationRead},
-		{"open read path with O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/test_O_CREAT.txt", O_RDONLY) = 3`, monitor.OperationRead},
-		{"open write file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_CREAT|O_WRONLY, 0644) = 3`, monitor.OperationWrite},
-		{"stat", "stat", `stat("/file")`, monitor.OperationRead},
-		{"fstatat", "fstatat", `fstatat(AT_FDCWD, "/file", ...)`, monitor.OperationRead},
-		{"newfstatat", "newfstatat", `newfstatat(AT_FDCWD, "/file", ...)`, monitor.OperationRead},
-		{"read", "read", `read(3, ...)`, monitor.OperationRead},
-		{"write", "write", `write(3, ...)`, monitor.OperationWrite},
-		{"unlink", "unlink", `unlink("/file")`, monitor.OperationWrite},
-		{"mkdir", "mkdir", `mkdir("/dir")`, monitor.OperationWrite},
-		{"chmod", "chmod", `chmod("/file", 0755)`, monitor.OperationWrite},
-		{"execve", "execve", `execve("/bin/sh")`, monitor.OperationRead},
+		{"open read file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_RDONLY) = 3`, OperationRead},
+		{"open read file named O_WRONLY", "openat", `12345 openat(AT_FDCWD, "/tmp/O_WRONLY", O_RDONLY) = 3`, OperationRead},
+		{"open read file named O_RDWR", "openat", `12345 openat(AT_FDCWD, "/tmp/O_RDWR", O_RDONLY) = 3`, OperationRead},
+		{"open read path with O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/test_O_CREAT.txt", O_RDONLY) = 3`, OperationRead},
+		{"open write file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_CREAT|O_WRONLY, 0644) = 3`, OperationWrite},
+		{"stat", "stat", `stat("/file")`, OperationRead},
+		{"fstatat", "fstatat", `fstatat(AT_FDCWD, "/file", ...)`, OperationRead},
+		{"newfstatat", "newfstatat", `newfstatat(AT_FDCWD, "/file", ...)`, OperationRead},
+		{"read", "read", `read(3, ...)`, OperationRead},
+		{"write", "write", `write(3, ...)`, OperationWrite},
+		{"unlink", "unlink", `unlink("/file")`, OperationWrite},
+		{"mkdir", "mkdir", `mkdir("/dir")`, OperationWrite},
+		{"chmod", "chmod", `chmod("/file", 0755)`, OperationWrite},
+		{"execve", "execve", `execve("/bin/sh")`, OperationRead},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := monitor.MapSyscallToOperation(tt.syscall, tt.line)
+			result := mapSyscallToOperation(tt.syscall, tt.line)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -289,7 +288,7 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT (No such file or directory)` + "\n",
 	)
 
-	err := mon.ProcessStraceOutput(straceData)
+	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -300,7 +299,7 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	logStr := string(data)
 	t.Logf("Log content:\n%s", logStr)
 
-	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", monitor.ExportedRuleUnresolvedRelativePath)
+	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
 }
 
 // TestMonitor_SetupPhaseSkipped tests that bwrap setup lines are skipped
@@ -330,7 +329,7 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 		`12345 openat(AT_FDCWD</usr>, "lib/libc.so.6", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	err := mon.ProcessStraceOutput(straceData)
+	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -367,7 +366,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT`,
 	}, "\n") + "\n")
 
-	err := mon.ProcessStraceOutput(straceData)
+	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -384,9 +383,9 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := monitor.New(nil, nil, nil, false)
+	mon := New(nil, nil, nil, false)
 
-	args := mon.BuildStraceArgs([]string{"echo", "hello"}, 3)
+	args := mon.buildStraceArgs([]string{"echo", "hello"}, 3)
 
 	// Should contain strace flags and original command
 	assert.Contains(t, args, "-f")
@@ -427,7 +426,7 @@ func testSymlinkAccessHelper(
 		`12345 openat(AT_FDCWD, "` + linkPath + `", ` + straceFlags + `) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.ProcessStraceOutput(straceData)
+	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -483,7 +482,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = -1 EACCES`,
 	}, "\n") + "\n")
 
-	err = mon.ProcessStraceOutput(straceData)
+	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -539,7 +538,7 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_WRONLY) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.ProcessStraceOutput(straceData)
+	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -587,7 +586,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = 3` + "\n",
 	)
 
-	err = mon.ProcessStraceOutput(straceData)
+	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading
@@ -600,7 +599,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	t.Logf("Log content:\n%s", logStr)
 
 	// Original path should be logged as UNKNOWN since symlink target is in managed area
-	assertLogContainsLine(t, logStr, "READ", linkPath, "UNKNOWN", monitor.ExportedRuleSymlinkTargetUnresolvable)
+	assertLogContainsLine(t, logStr, "READ", linkPath, "UNKNOWN", accesslog.RuleSymlinkTargetUnresolvable)
 }
 
 func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
@@ -633,7 +632,7 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 		`12345 openat(AT_FDCWD, "` + link2 + `", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.ProcessStraceOutput(straceData)
+	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
 	// Flush log file before reading

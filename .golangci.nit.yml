@@ -10,6 +10,7 @@ linters:
     - prealloc # we're not that performance critical
     - noinlineerr # I like inline error handling
     - err113 # we use fmt.Errorf("context: %w")
+    - testpackage # we're using internal packages for unit tests
 
     # maybe enable in the future
     - depguard # consider enabling when architecture stabilizes

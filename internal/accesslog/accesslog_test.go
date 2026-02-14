@@ -1,4 +1,4 @@
-package accesslog_test
+package accesslog
 
 import (
 	"bytes"
@@ -9,19 +9,18 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLogger_LogEntry(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationRead,
+	entry := Entry{
+		Operation: OperationRead,
 		Target:    "/etc/passwd",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "fs:ro:/etc",
 	}
 
@@ -37,7 +36,7 @@ func TestLogger_LogEntry(t *testing.T) {
 
 func TestLogger_ConcurrentAccess(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
 	const numGoroutines = 10
 	const entriesPerGoroutine = 20
@@ -52,10 +51,10 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := range entriesPerGoroutine {
-				entry := accesslog.Entry{
-					Operation: accesslog.OperationRead,
+				entry := Entry{
+					Operation: OperationRead,
 					Target:    fmt.Sprintf("/tmp/file-%d-%d.txt", id, j),
-					Result:    accesslog.ResultOK,
+					Result:    ResultOK,
 					Rule:      "fs:ro:/tmp",
 				}
 				if err := logger.Log(entry); err != nil {
@@ -90,12 +89,12 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 
 func TestLogger_Deduplication(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationRead,
+	entry := Entry{
+		Operation: OperationRead,
 		Target:    "/etc/passwd",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "fs:ro:/etc",
 	}
 
@@ -118,19 +117,19 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 	require.NoError(t, err)
 
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	readEntry := accesslog.Entry{
-		Operation: accesslog.OperationRead,
+	readEntry := Entry{
+		Operation: OperationRead,
 		Target:    testFile,
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "fs:rw:" + tmpDir,
 	}
 
-	writeEntry := accesslog.Entry{
-		Operation: accesslog.OperationWrite,
+	writeEntry := Entry{
+		Operation: OperationWrite,
 		Target:    testFile,
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "fs:rw:" + tmpDir,
 	}
 
@@ -177,12 +176,12 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create new logger for each test to avoid deduplication issues
 			var buf bytes.Buffer
-			logger := accesslog.New(&buf, managedPaths)
+			logger := New(&buf, managedPaths)
 
-			entry := accesslog.Entry{
-				Operation: accesslog.OperationRead,
+			entry := Entry{
+				Operation: OperationRead,
 				Target:    tt.path,
-				Result:    accesslog.ResultOK,
+				Result:    ResultOK,
 				Rule:      "fs:ro:/",
 			}
 
@@ -201,17 +200,17 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 func TestLogger_NonExistentReadLogged(t *testing.T) {
 	tmpDir := t.TempDir()
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
 	// File that doesn't exist — logger logs it regardless.
 	// Non-existent path filtering is the resolver/monitor's responsibility.
 	nonExistentPath := filepath.Join(tmpDir, "does-not-exist.txt")
 
-	readEntry := accesslog.Entry{
-		Operation: accesslog.OperationRead,
+	readEntry := Entry{
+		Operation: OperationRead,
 		Target:    nonExistentPath,
-		Result:    accesslog.ResultDeny,
-		Rule:      accesslog.RuleNoMatch,
+		Result:    ResultDeny,
+		Rule:      RuleNoMatch,
 	}
 
 	err := logger.Log(readEntry)
@@ -227,12 +226,12 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 	require.NoError(t, err)
 
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationRead,
+	entry := Entry{
+		Operation: OperationRead,
 		Target:    existingFile,
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "fs:ro:" + tmpDir,
 	}
 
@@ -244,7 +243,7 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 
 func TestIsManagedPath(t *testing.T) {
 	managedPaths := []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
-	logger := accesslog.New(nil, managedPaths)
+	logger := New(nil, managedPaths)
 
 	tests := []struct {
 		name     string
@@ -279,7 +278,7 @@ func TestIsManagedPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := logger.IsManagedPath(tt.path)
+			result := logger.isManagedPath(tt.path)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -287,12 +286,12 @@ func TestIsManagedPath(t *testing.T) {
 
 func TestLogger_LogFormat(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationWrite,
+	entry := Entry{
+		Operation: OperationWrite,
 		Target:    "/home/user/project/file.txt",
-		Result:    accesslog.ResultDeny,
+		Result:    ResultDeny,
 		Rule:      "fs:ro:/home/user/project",
 	}
 
@@ -312,12 +311,12 @@ func TestLogger_LogFormat(t *testing.T) {
 
 func TestLogger_HTTPSEntry(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+	entry := Entry{
+		Operation: OperationHTTPS,
 		Target:    "api.example.com:443",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:https:api.example.com:443",
 	}
 
@@ -333,12 +332,12 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 
 func TestLogger_HTTPEntry(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTP,
+	entry := Entry{
+		Operation: OperationHTTP,
 		Target:    "localhost:3000",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:http:localhost:3000",
 	}
 
@@ -352,13 +351,13 @@ func TestLogger_HTTPEntry(t *testing.T) {
 
 func TestLogger_HTTPSDenied(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+	entry := Entry{
+		Operation: OperationHTTPS,
 		Target:    "malicious.example.com:443",
-		Result:    accesslog.ResultDeny,
-		Rule:      accesslog.RuleNoMatch,
+		Result:    ResultDeny,
+		Rule:      RuleNoMatch,
 	}
 
 	err := logger.Log(entry)
@@ -373,12 +372,12 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 
 func TestLogger_HTTPSDeduplication(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+	entry := Entry{
+		Operation: OperationHTTPS,
 		Target:    "api.example.com:443",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:https:api.example.com:443",
 	}
 
@@ -395,19 +394,19 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 
 func TestLogger_HTTPSAndHTTPSeparate(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, nil)
+	logger := New(&buf, nil)
 
-	httpsEntry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+	httpsEntry := Entry{
+		Operation: OperationHTTPS,
 		Target:    "example.com:443",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:https:example.com:443",
 	}
 
-	httpEntry := accesslog.Entry{
-		Operation: accesslog.OperationHTTP,
+	httpEntry := Entry{
+		Operation: OperationHTTP,
 		Target:    "example.com:443",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:http:example.com:443",
 	}
 
@@ -424,12 +423,12 @@ func TestLogger_HTTPSAndHTTPSeparate(t *testing.T) {
 
 func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
 	var buf bytes.Buffer
-	logger := accesslog.New(&buf, []string{"/dev", "/proc", "/tmp"})
+	logger := New(&buf, []string{"/dev", "/proc", "/tmp"})
 
-	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+	entry := Entry{
+		Operation: OperationHTTPS,
 		Target:    "api.example.com:443",
-		Result:    accesslog.ResultOK,
+		Result:    ResultOK,
 		Rule:      "net:https:api.example.com:443",
 	}
 
@@ -445,10 +444,10 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 		name string
 		rule string
 	}{
-		{"no match", accesslog.RuleNoMatch},
-		{"unresolved relative", accesslog.RuleUnresolvedRelativePath},
-		{"symlink unresolvable", accesslog.RuleSymlinkTargetUnresolvable},
-		{"depth exceeded", accesslog.RuleSymlinkDepthExceeded},
+		{"no match", RuleNoMatch},
+		{"unresolved relative", RuleUnresolvedRelativePath},
+		{"symlink unresolvable", RuleSymlinkTargetUnresolvable},
+		{"depth exceeded", RuleSymlinkDepthExceeded},
 	}
 
 	for i, tt := range tests {
@@ -459,12 +458,12 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 			require.NoError(t, err)
 
 			var buf bytes.Buffer
-			logger := accesslog.New(&buf, nil)
+			logger := New(&buf, nil)
 
-			entry := accesslog.Entry{
-				Operation: accesslog.OperationWrite, // Use WRITE so non-existent path filtering doesn't apply
+			entry := Entry{
+				Operation: OperationWrite, // Use WRITE so non-existent path filtering doesn't apply
 				Target:    testFile,
-				Result:    accesslog.ResultUnknown,
+				Result:    ResultUnknown,
 				Rule:      tt.rule,
 			}
 

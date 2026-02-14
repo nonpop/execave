@@ -1,78 +1,80 @@
-package fsrules_test
+package fsrules
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func makeTestConfig(rules []fsrules.Rule) *config.Config {
-	return &config.Config{
-		FSRules:      rules,
-		NetRules:     nil,
-		ManagedPaths: nil,
+type testConfig struct {
+	rules        []Rule
+	managedPaths []string
+}
+
+func makeTestConfig(rules []Rule) *testConfig {
+	return &testConfig{
+		rules:        rules,
+		managedPaths: nil,
 	}
 }
 
-func newResolver(cfg *config.Config) *fsrules.Resolver {
-	return fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+func newResolver(cfg *testConfig) *Resolver {
+	return NewResolver(cfg.rules, cfg.managedPaths)
 }
 
-func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
+func fsRule(permission Permission, path string) Rule {
 	var permStr string
 	switch permission {
-	case fsrules.PermissionReadOnly:
+	case PermissionReadOnly:
 		permStr = "ro"
-	case fsrules.PermissionReadWrite:
+	case PermissionReadWrite:
 		permStr = "rw"
-	case fsrules.PermissionNone:
+	case PermissionNone:
 		permStr = "none"
-	case fsrules.PermissionUnknown:
+	case PermissionUnknown:
 		permStr = "unknown"
 	default:
 		permStr = "unknown"
 	}
 
-	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
+	return Rule{
+		Resource:   ResourceFS,
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
 	}
 }
 
-func assertNoAccess(t *testing.T, resolver *fsrules.Resolver, path string) {
+func assertNoAccess(t *testing.T, resolver *Resolver, path string) {
 	t.Helper()
-	readResult := resolver.CheckAccess(path, fsrules.OperationRead)
+	readResult := resolver.CheckAccess(path, OperationRead)
 	assert.False(t, readResult.Allowed)
-	writeResult := resolver.CheckAccess(path, fsrules.OperationWrite)
+	writeResult := resolver.CheckAccess(path, OperationWrite)
 	assert.False(t, writeResult.Allowed)
 }
 
-func assertReadOnly(t *testing.T, resolver *fsrules.Resolver, path string) {
+func assertReadOnly(t *testing.T, resolver *Resolver, path string) {
 	t.Helper()
-	readResult := resolver.CheckAccess(path, fsrules.OperationRead)
+	readResult := resolver.CheckAccess(path, OperationRead)
 	assert.True(t, readResult.Allowed)
-	writeResult := resolver.CheckAccess(path, fsrules.OperationWrite)
+	writeResult := resolver.CheckAccess(path, OperationWrite)
 	assert.False(t, writeResult.Allowed)
 }
 
-func assertReadWrite(t *testing.T, resolver *fsrules.Resolver, path string) {
+func assertReadWrite(t *testing.T, resolver *Resolver, path string) {
 	t.Helper()
-	readResult := resolver.CheckAccess(path, fsrules.OperationRead)
+	readResult := resolver.CheckAccess(path, OperationRead)
 	assert.True(t, readResult.Allowed)
-	writeResult := resolver.CheckAccess(path, fsrules.OperationWrite)
+	writeResult := resolver.CheckAccess(path, OperationWrite)
 	assert.True(t, writeResult.Allowed)
 }
 
 func TestCheckAccess_NoMatchingRule(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, "/usr/bin"),
 	})
 
 	resolver := newResolver(cfg)
@@ -81,8 +83,8 @@ func TestCheckAccess_NoMatchingRule(t *testing.T) {
 }
 
 func TestCheckAccess_ReadOnly(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, "/etc"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, "/etc"),
 	})
 
 	resolver := newResolver(cfg)
@@ -91,8 +93,8 @@ func TestCheckAccess_ReadOnly(t *testing.T) {
 }
 
 func TestCheckAccess_ReadWrite(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, "/home/user/project"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, "/home/user/project"),
 	})
 
 	resolver := newResolver(cfg)
@@ -101,9 +103,9 @@ func TestCheckAccess_ReadWrite(t *testing.T) {
 }
 
 func TestCheckAccess_None(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, "/home/user/project"),
-		fsRule(fsrules.PermissionNone, "/home/user/project/.env"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, "/home/user/project"),
+		fsRule(PermissionNone, "/home/user/project/.env"),
 	})
 
 	resolver := newResolver(cfg)
@@ -112,9 +114,9 @@ func TestCheckAccess_None(t *testing.T) {
 }
 
 func TestCheckAccess_MostSpecificWins(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, "/home/user/project"),
-		fsRule(fsrules.PermissionReadOnly, "/home/user/project/.git"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, "/home/user/project"),
+		fsRule(PermissionReadOnly, "/home/user/project/.git"),
 	})
 
 	resolver := newResolver(cfg)
@@ -126,8 +128,8 @@ func TestCheckAccess_MostSpecificWins(t *testing.T) {
 }
 
 func TestCheckAccess_ExactPathMatch(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, "/usr/share/data"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, "/usr/share/data"),
 	})
 
 	resolver := newResolver(cfg)
@@ -143,10 +145,10 @@ func TestCheckAccess_ExactPathMatch(t *testing.T) {
 }
 
 func TestCheckAccess_LongestPrefixMatch(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, "/home/user"),
-		fsRule(fsrules.PermissionReadWrite, "/home/user/project"),
-		fsRule(fsrules.PermissionNone, "/home/user/project/secrets"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, "/home/user"),
+		fsRule(PermissionReadWrite, "/home/user/project"),
+		fsRule(PermissionNone, "/home/user/project/secrets"),
 	})
 
 	resolver := newResolver(cfg)
@@ -162,8 +164,8 @@ func TestCheckAccess_LongestPrefixMatch(t *testing.T) {
 }
 
 func TestCheckAccess_DirectoryBoundary(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, "/home/user"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, "/home/user"),
 	})
 
 	resolver := newResolver(cfg)
@@ -190,9 +192,9 @@ func TestCheckAccess_SymlinkResolution_AccessibleLink(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rules allow both the link location (parent directory) and the target
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, tmpDir), // Link location accessible
-		fsRule(fsrules.PermissionReadOnly, targetFile),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, tmpDir), // Link location accessible
+		fsRule(PermissionReadOnly, targetFile),
 	})
 
 	resolver := newResolver(cfg)
@@ -216,8 +218,8 @@ func TestCheckAccess_SymlinkResolution_InaccessibleLink(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows target but not link location (link wouldn't exist in sandbox)
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, targetFile),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, targetFile),
 	})
 
 	resolver := newResolver(cfg)
@@ -250,7 +252,7 @@ func TestMatchesPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := fsrules.MatchesPath(tt.rulePath, tt.targetPath)
+			result := matchesPath(tt.rulePath, tt.targetPath)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -259,8 +261,8 @@ func TestMatchesPath(t *testing.T) {
 func TestCheckAccess_UnknownPermission(t *testing.T) {
 	// Test the fail-closed default case for unknown permissions.
 	// This exercises the default case in checkPermission().
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionUnknown, "/test/path"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionUnknown, "/test/path"),
 	})
 
 	resolver := newResolver(cfg)
@@ -270,10 +272,10 @@ func TestCheckAccess_UnknownPermission(t *testing.T) {
 }
 
 func TestCheckAccess_PathComponentBoundaries(t *testing.T) {
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, "/data/projects"),
-		fsRule(fsrules.PermissionReadOnly, "/usr/local/bin"),
-		fsRule(fsrules.PermissionReadWrite, "/storage/data"),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, "/data/projects"),
+		fsRule(PermissionReadOnly, "/usr/local/bin"),
+		fsRule(PermissionReadWrite, "/storage/data"),
 	})
 
 	resolver := newResolver(cfg)
@@ -292,23 +294,23 @@ func TestCheckAccess_PathComponentBoundaries(t *testing.T) {
 
 func TestCheckAccess_RuleAttribution(t *testing.T) {
 	t.Run("no matching rule returns nil", func(t *testing.T) {
-		cfg := makeTestConfig([]fsrules.Rule{
-			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+		cfg := makeTestConfig([]Rule{
+			fsRule(PermissionReadOnly, "/usr/bin"),
 		})
 		resolver := newResolver(cfg)
 
-		result := resolver.CheckAccess("/opt/secret", fsrules.OperationRead)
+		result := resolver.CheckAccess("/opt/secret", OperationRead)
 		assert.False(t, result.Allowed)
 		assert.Nil(t, result.Rule)
 		assert.Nil(t, result.Symlink)
 	})
 
 	t.Run("matching rule is returned", func(t *testing.T) {
-		rule := fsRule(fsrules.PermissionReadOnly, "/etc")
-		cfg := makeTestConfig([]fsrules.Rule{rule})
+		rule := fsRule(PermissionReadOnly, "/etc")
+		cfg := makeTestConfig([]Rule{rule})
 		resolver := newResolver(cfg)
 
-		result := resolver.CheckAccess("/etc/passwd", fsrules.OperationRead)
+		result := resolver.CheckAccess("/etc/passwd", OperationRead)
 		assert.True(t, result.Allowed)
 		require.NotNil(t, result.Rule)
 		assert.Equal(t, rule.Path, result.Rule.Path)
@@ -316,33 +318,33 @@ func TestCheckAccess_RuleAttribution(t *testing.T) {
 	})
 
 	t.Run("most specific rule is returned", func(t *testing.T) {
-		generalRule := fsRule(fsrules.PermissionReadWrite, "/home/user/project")
-		specificRule := fsRule(fsrules.PermissionReadOnly, "/home/user/project/.git")
-		cfg := makeTestConfig([]fsrules.Rule{generalRule, specificRule})
+		generalRule := fsRule(PermissionReadWrite, "/home/user/project")
+		specificRule := fsRule(PermissionReadOnly, "/home/user/project/.git")
+		cfg := makeTestConfig([]Rule{generalRule, specificRule})
 		resolver := newResolver(cfg)
 
 		// Access under general rule
-		result := resolver.CheckAccess("/home/user/project/file.txt", fsrules.OperationWrite)
+		result := resolver.CheckAccess("/home/user/project/file.txt", OperationWrite)
 		assert.True(t, result.Allowed)
 		require.NotNil(t, result.Rule)
 		assert.Equal(t, generalRule.Path, result.Rule.Path)
 
 		// Access under specific rule
-		result = resolver.CheckAccess("/home/user/project/.git/config", fsrules.OperationRead)
+		result = resolver.CheckAccess("/home/user/project/.git/config", OperationRead)
 		assert.True(t, result.Allowed)
 		require.NotNil(t, result.Rule)
 		assert.Equal(t, specificRule.Path, result.Rule.Path)
 	})
 
 	t.Run("unknown permission rule is returned", func(t *testing.T) {
-		rule := fsRule(fsrules.PermissionUnknown, "/test/path")
-		cfg := makeTestConfig([]fsrules.Rule{rule})
+		rule := fsRule(PermissionUnknown, "/test/path")
+		cfg := makeTestConfig([]Rule{rule})
 		resolver := newResolver(cfg)
 
-		result := resolver.CheckAccess("/test/path/file.txt", fsrules.OperationRead)
+		result := resolver.CheckAccess("/test/path/file.txt", OperationRead)
 		assert.False(t, result.Allowed)
 		require.NotNil(t, result.Rule)
-		assert.Equal(t, fsrules.PermissionUnknown, result.Rule.Permission)
+		assert.Equal(t, PermissionUnknown, result.Rule.Permission)
 	})
 }
 
@@ -361,14 +363,14 @@ func TestCheckAccess_SymlinkWithinMount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows the mount directory
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access via symlink should resolve and log the hop
-	result := resolver.CheckAccess(linkFile, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkFile, OperationRead)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	assert.Len(t, result.Symlink.Hops, 1)
@@ -394,14 +396,14 @@ func TestCheckAccess_RelativeSymlinkWithinMount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows the mount directory
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access via relative symlink should resolve and log the hop
-	result := resolver.CheckAccess(linkFile, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkFile, OperationRead)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	assert.Len(t, result.Symlink.Hops, 1)
@@ -430,14 +432,14 @@ func TestCheckAccess_RelativeSymlinkChain(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows the mount directory
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access via relative symlink chain
-	result := resolver.CheckAccess(link, fsrules.OperationRead)
+	result := resolver.CheckAccess(link, OperationRead)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	require.Len(t, result.Symlink.Hops, 2)
@@ -473,14 +475,14 @@ func TestCheckAccess_RuleBoundarySymlink(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule path exactly matches symlink path (bwrap mounts target at this path)
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, linkFile),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, linkFile),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Symlink at rule boundary should NOT be resolved
-	result := resolver.CheckAccess(linkFile, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkFile, OperationRead)
 	assert.True(t, result.Allowed)
 	assert.Nil(t, result.Symlink)
 	require.NotNil(t, result.Rule)
@@ -505,15 +507,15 @@ func TestCheckAccess_RuleBoundarySymlinkIntermediateComponent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule path matches the symlink directory (bwrap mounts target at this path)
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, linkDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, linkDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access to descendant via rule-boundary symlink should not resolve the symlink
 	linkPath := filepath.Join(linkDir, "file.txt")
-	result := resolver.CheckAccess(linkPath, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkPath, OperationRead)
 	assert.True(t, result.Allowed)
 	assert.Nil(t, result.Symlink)
 	require.NotNil(t, result.Rule)
@@ -538,14 +540,14 @@ func TestCheckAccess_SymlinkChainMultiHop(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows the mount directory
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access via multi-hop chain
-	result := resolver.CheckAccess(hop1, fsrules.OperationRead)
+	result := resolver.CheckAccess(hop1, OperationRead)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	require.Len(t, result.Symlink.Hops, 2)
@@ -592,14 +594,14 @@ func TestCheckAccess_SymlinkChainDeniedHop(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule only allows mount directory, not outside
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, mountDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, mountDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access should be denied at the intermediate hop
-	result := resolver.CheckAccess(hop1, fsrules.OperationRead)
+	result := resolver.CheckAccess(hop1, OperationRead)
 	assert.False(t, result.Allowed)
 	assert.Nil(t, result.Rule)
 	require.NotNil(t, result.Symlink)
@@ -638,14 +640,14 @@ func TestCheckAccess_SymlinkEscapesMount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule only allows mount directory
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, mountDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, mountDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Symlink hop should be OK, but target should be denied
-	result := resolver.CheckAccess(escapeLink, fsrules.OperationRead)
+	result := resolver.CheckAccess(escapeLink, OperationRead)
 	assert.False(t, result.Allowed)
 	assert.Nil(t, result.Rule)
 	require.NotNil(t, result.Symlink)
@@ -665,8 +667,8 @@ func TestCheckAccess_SymlinkDepthLimit(t *testing.T) {
 	err = os.Symlink(loopA, loopB)
 	require.NoError(t, err)
 
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
@@ -674,7 +676,7 @@ func TestCheckAccess_SymlinkDepthLimit(t *testing.T) {
 	// Should detect loop and deny at the 40th hop (MAXSYMLINKS)
 	// The kernel checks if (count >= MAXSYMLINKS) where MAXSYMLINKS=40,
 	// so it allows up to 39 hops
-	result := resolver.CheckAccess(loopA, fsrules.OperationRead)
+	result := resolver.CheckAccess(loopA, OperationRead)
 	assert.False(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	// Should have 40 hops (0-39 allowed, 40th denied)
@@ -702,15 +704,15 @@ func TestCheckAccess_SymlinkIntermediateComponent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Rule allows the parent directory (so both link and target are within mount)
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Access file through symlink directory in path
 	linkPath := filepath.Join(linkDir, "file.txt")
-	result := resolver.CheckAccess(linkPath, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkPath, OperationRead)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	// Should have hop for the symlink directory
@@ -724,9 +726,9 @@ func TestCheckAccess_SymlinkIntermediateComponent(t *testing.T) {
 func testSymlinkWriteThroughHelper(
 	t *testing.T,
 	linkDir, targetDir string,
-	linkPerm, targetPerm fsrules.Permission,
+	linkPerm, targetPerm Permission,
 	expectedAllowed bool,
-	expectedRulePerm fsrules.Permission,
+	expectedRulePerm Permission,
 ) {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -746,14 +748,14 @@ func testSymlinkWriteThroughHelper(
 	err = os.Symlink(target, link)
 	require.NoError(t, err)
 
-	cfg := makeTestConfig([]fsrules.Rule{
+	cfg := makeTestConfig([]Rule{
 		fsRule(linkPerm, linkDirPath),
 		fsRule(targetPerm, targetDirPath),
 	})
 
 	resolver := newResolver(cfg)
 
-	result := resolver.CheckAccess(link, fsrules.OperationWrite)
+	result := resolver.CheckAccess(link, OperationWrite)
 	assert.Equal(t, expectedAllowed, result.Allowed)
 	require.NotNil(t, result.Symlink)
 	require.Len(t, result.Symlink.Hops, 1)
@@ -766,8 +768,8 @@ func TestCheckAccess_SymlinkWriteThroughToReadOnly(t *testing.T) {
 	// Write through symlink - hop is readable, target write is denied
 	testSymlinkWriteThroughHelper(
 		t, "writable", "readonly",
-		fsrules.PermissionReadWrite, fsrules.PermissionReadOnly,
-		false, fsrules.PermissionReadOnly,
+		PermissionReadWrite, PermissionReadOnly,
+		false, PermissionReadOnly,
 	)
 }
 
@@ -775,8 +777,8 @@ func TestCheckAccess_SymlinkWriteThroughReadOnlyLinkToWritableTarget(t *testing.
 	// Write through ro symlink to rw target - hop is readable, target write is allowed
 	testSymlinkWriteThroughHelper(
 		t, "readonly", "writable",
-		fsrules.PermissionReadOnly, fsrules.PermissionReadWrite,
-		true, fsrules.PermissionReadWrite,
+		PermissionReadOnly, PermissionReadWrite,
+		true, PermissionReadWrite,
 	)
 }
 
@@ -799,14 +801,14 @@ func TestCheckAccess_SymlinkThroughManagedPath(t *testing.T) {
 	err = os.Symlink(managedTarget, linkPath)
 	require.NoError(t, err)
 
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, mountDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, mountDir),
 	})
-	cfg.ManagedPaths = []string{managedDir}
+	cfg.managedPaths = []string{managedDir}
 
 	resolver := newResolver(cfg)
 
-	result := resolver.CheckAccess(linkPath, fsrules.OperationRead)
+	result := resolver.CheckAccess(linkPath, OperationRead)
 
 	// Can't determine true target — result is uncertain
 	assert.True(t, result.Uncertain)
@@ -847,14 +849,14 @@ func TestCheckAccess_SymlinkChainThroughManagedPath(t *testing.T) {
 	err = os.Symlink(hop2, hop1)
 	require.NoError(t, err)
 
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadWrite, mountDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadWrite, mountDir),
 	})
-	cfg.ManagedPaths = []string{managedDir}
+	cfg.managedPaths = []string{managedDir}
 
 	resolver := newResolver(cfg)
 
-	result := resolver.CheckAccess(hop1, fsrules.OperationRead)
+	result := resolver.CheckAccess(hop1, OperationRead)
 
 	// Chain enters managed area after hop2, so result is uncertain
 	assert.True(t, result.Uncertain)
@@ -874,14 +876,14 @@ func TestCheckAccess_NonExistentPathNotResolved(t *testing.T) {
 	tmpDir := t.TempDir()
 	nonExistent := filepath.Join(tmpDir, "does-not-exist.txt")
 
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
 	// Non-existent path should not be resolved as symlink
-	result := resolver.CheckAccess(nonExistent, fsrules.OperationRead)
+	result := resolver.CheckAccess(nonExistent, OperationRead)
 	assert.True(t, result.Allowed)
 	assert.True(t, result.PathNotFound)
 	assert.Nil(t, result.Symlink)
@@ -895,13 +897,13 @@ func TestCheckAccess_ExistingPathNotMarkedNotFound(t *testing.T) {
 	err := os.WriteFile(existingFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
-	cfg := makeTestConfig([]fsrules.Rule{
-		fsRule(fsrules.PermissionReadOnly, tmpDir),
+	cfg := makeTestConfig([]Rule{
+		fsRule(PermissionReadOnly, tmpDir),
 	})
 
 	resolver := newResolver(cfg)
 
-	result := resolver.CheckAccess(existingFile, fsrules.OperationRead)
+	result := resolver.CheckAccess(existingFile, OperationRead)
 	assert.True(t, result.Allowed)
 	assert.False(t, result.PathNotFound)
 }

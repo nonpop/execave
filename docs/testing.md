@@ -3,7 +3,7 @@
 ## Core Principles
 
 1. **Strict TDD** — Write a failing test first, then implement.
-2. **Black-box testing** — Use `package_test` suffix. Test public API, not implementation.
+2. **Test packaging** — Integration and E2E tests use `package_test` suffix (black-box, public API only). Unit tests live in the same package as the tested unit (white-box, direct access to internals).
 3. **testify** — Use `require` for setup, `assert` for assertions.
 4. **No assertion messages** — Omit the message parameter from assertions. If an assertion needs explanation, use a comment above it instead.
 
@@ -11,39 +11,46 @@
 
 Use `assert.ErrorContains` over `assert.Error` to verify the *right* error occurred, not just *any* error. Choose distinctive substrings (e.g., `"config file not found"` not `"failed"`).
 
-## Exposing Internals
-
-When you must test unexported functions, expose them through `export_test.go`:
-
-```go
-// export_test.go (inside the package, only compiled during testing)
-package config
-
-var ParseRule = parseRule
-```
-
-Then test from the `_test` package as usual.
-
 ## Fuzz Testing
 
 Use Go's native fuzz testing for input parsing and security-sensitive code. Seed corpus with both valid and invalid examples.
+
+## Integration Tests
+
+Integration tests verify spec scenarios against a package's public API. They live alongside unit tests in the package directory.
+
+- **File**: `internal/<package>/integration_test.go` (uses `package <pkg>_test`)
+- **Every spec scenario must have a corresponding integration test.**
+
+Test name format — convert kebab-case names to PascalCase:
+
+```
+TestIntegration_<RequirementName>_<ScenarioName>
+```
+
+For example:
+- Requirement: "Most specific rule wins", Scenario: "Specific ro overrides general rw" → `TestIntegration_MostSpecificRuleWins_SpecificRoOverridesGeneralRw`.
+
+Unit tests (e.g., `TestParseRule_Valid` in `fsrules_test.go`) coexist in their own `*_test.go` files and use `package <pkg>` (white-box).
 
 ## End-to-End Tests
 
 E2E tests live in `test/e2e/` and test the full binary.
 
-### Openspec scenario tests
+### Openspec use case tests
 
-**Every openspec scenario must have a corresponding E2E test.**
+**Every playbook use case must have a corresponding E2E test.**
 
-Test names must match scenario names from the openspec specs. Format:
+- **File**: `test/e2e/<playbook_name>_test.go` (underscores, not hyphens)
+
+Test name format — convert kebab-case names to PascalCase:
 
 ```
-TestE2E_<Spec>_<Requirement>_<Scenario>
+TestE2E_<PlaybookName>_<UseCaseName>
 ```
 
 For example:
-- Spec: "AccessLog", Requirement: "Log format", Scenario: "Allowed read logged" → `TestE2E_AccessLog_LogFormat_AllowedReadLogged`.
+- Playbook: "sandboxing-filesystem", Use Case: "Run command with read-only system access" → `TestE2E_SandboxingFilesystem_RunCommandWithReadOnlySystemAccess` in `test/e2e/sandboxing_filesystem_test.go`.
 
 ### Helpers
 

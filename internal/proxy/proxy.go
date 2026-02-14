@@ -102,7 +102,7 @@ func (p *Proxy) Stop() error {
 }
 
 // Addr returns the listener address. Only valid after Start.
-func (p *Proxy) addr() net.Addr {
+func (p *Proxy) Addr() net.Addr {
 	return p.listener.Addr()
 }
 

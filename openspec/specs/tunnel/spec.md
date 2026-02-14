@@ -2,72 +2,54 @@
 
 ## Purpose
 
-The tunnel capability provides a TCP-to-UDS bridge that runs inside the sandboxed environment. It listens on a local TCP port, sets HTTP proxy environment variables, runs the user command as a subprocess, and relays proxy-aware network traffic to the host-side proxy via the UDS.
+The tunnel capability provides a TCP-to-UDS bridge. It listens on a local TCP port, sets HTTP proxy environment variables, runs the user command as a subprocess, and relays proxy-aware network traffic to the host-side proxy via the UDS.
 
 ## Requirements
 
 ### Requirement: TCP-to-UDS bridge
 
-The tunnel SHALL listen on `127.0.0.1:0` (ephemeral port) inside the sandbox and bridge each TCP connection to the proxy's UDS. For each accepted TCP connection, the tunnel SHALL dial the UDS and relay data bidirectionally until either side closes.
+The tunnel SHALL listen on `127.0.0.1:0` (ephemeral port) and bridge each accepted TCP connection to the proxy's UDS, relaying data bidirectionally until either side closes.
 
 #### Scenario: TCP connection bridged to UDS
-- **WHEN** tunnel is running inside the sandbox
-- **AND** a sandboxed process connects to the tunnel's TCP listener
-- **THEN** tunnel dials the UDS
-- **AND** relays data bidirectionally between the TCP connection and the UDS
+- **GIVEN** an HTTP server is listening on the UDS
+- **WHEN** `tunnel.Run` executes a command that sends an HTTP request via `$HTTP_PROXY`
+- **THEN** the command receives the response from the UDS server
 
 #### Scenario: UDS unavailable
-- **WHEN** tunnel attempts to dial the UDS
-- **AND** the UDS is not available (proxy stopped or crashed)
-- **THEN** tunnel closes the TCP connection with an error
+- **GIVEN** the UDS path does not exist
+- **WHEN** `tunnel.Run` executes a command that attempts an HTTP request via `$HTTP_PROXY`
+- **THEN** the request fails
 
 ### Requirement: Proxy environment variables
 
-The tunnel SHALL set `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` environment variables to `http://127.0.0.1:<port>` (where `<port>` is the ephemeral port) before running the user command. The tunnel SHALL unset `NO_PROXY` and `no_proxy` to prevent proxy bypass.
+The tunnel SHALL set `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` to `http://127.0.0.1:<port>` (where `<port>` is the ephemeral port) before running the user command. The tunnel SHALL unset `NO_PROXY` and `no_proxy` to prevent proxy bypass.
 
 #### Scenario: Proxy env vars set
-- **WHEN** tunnel starts and listens on port 12345
-- **THEN** user command runs with `HTTP_PROXY=http://127.0.0.1:12345`
-- **AND** `HTTPS_PROXY=http://127.0.0.1:12345`
-- **AND** `http_proxy=http://127.0.0.1:12345`
-- **AND** `https_proxy=http://127.0.0.1:12345`
+- **WHEN** `tunnel.Run` executes a command
+- **THEN** `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` are all non-empty in the command's environment
 
 #### Scenario: No-proxy vars unset
-- **WHEN** tunnel starts
-- **AND** the inherited environment contains `NO_PROXY=*`
-- **THEN** `NO_PROXY` and `no_proxy` are unset before running the user command
+- **GIVEN** the inherited environment contains `NO_PROXY=*` and `no_proxy=*`
+- **WHEN** `tunnel.Run` executes a command
+- **THEN** `NO_PROXY` and `no_proxy` are unset in the command's environment
 
 ### Requirement: User command execution
 
-The tunnel SHALL run the user command as a subprocess after setting up the TCP listener and environment variables. The tunnel SHALL propagate the user command's exit code as its own exit code.
+The tunnel SHALL run the user command as a subprocess after setting up the TCP listener and environment variables. The tunnel SHALL propagate the user command's exit code via its return value.
 
 #### Scenario: User command exit code propagated
-- **WHEN** tunnel runs user command `sh -c 'exit 42'`
-- **THEN** tunnel exits with code 42
+- **WHEN** `tunnel.Run` executes `sh -c 'exit 42'`
+- **THEN** `tunnel.Run` returns exit code 42
 
 #### Scenario: User command runs with proxy env
-- **WHEN** tunnel runs user command `env`
-- **THEN** command output includes `HTTP_PROXY=http://127.0.0.1:<port>`
+- **WHEN** `tunnel.Run` executes a command that inspects `$HTTP_PROXY`
+- **THEN** `HTTP_PROXY` matches the pattern `http://127.0.0.1:<port>`
 
 ### Requirement: Tunnel failure is fail-closed
 
-If the tunnel fails to start (cannot bind to loopback, cannot access UDS), the user command SHALL NOT run. The tunnel SHALL exit with a non-zero exit code.
-
-#### Scenario: Tunnel bind failure
-- **WHEN** tunnel cannot bind to `127.0.0.1:0`
-- **THEN** tunnel exits with non-zero exit code
-- **AND** user command does not run
+When the UDS is inaccessible, connections through the tunnel SHALL fail rather than bypass the proxy.
 
 #### Scenario: Tunnel UDS inaccessible
-- **WHEN** the UDS path does not exist
-- **AND** a sandboxed process attempts to connect through the tunnel
-- **THEN** the connection fails
-
-### Requirement: Connection draining on exit
-
-When the user command exits, the tunnel SHALL wait for in-flight relay goroutines to complete before exiting, ensuring data in transit is not lost.
-
-#### Scenario: In-flight data drained
-- **WHEN** user command exits
-- **AND** there are active relay connections
-- **THEN** tunnel waits for relays to complete before exiting
+- **GIVEN** the UDS path does not exist
+- **WHEN** `tunnel.Run` executes a command that attempts an HTTP request via `$HTTP_PROXY`
+- **THEN** the request fails

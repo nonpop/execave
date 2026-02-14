@@ -44,8 +44,10 @@ golangci-lint run --fix                   # Lint
 - Follow conventions in `docs/testing.md`
 - Use testify: `require` for setup, `assert` for assertions
 - Strict TDD: failing test first, then implement
-- Black-box tests (`package_test`), internals via `export_test.go`
-- E2E tests: every openspec scenario must have corresponding test
+- Integration/E2E tests: black-box (`package_test`), public API only
+- Unit tests: white-box (same package), direct access to internals
+- Integration tests: every spec scenario must have corresponding test in `<package>/integration_test.go`
+- E2E tests: every playbook use case must have corresponding test in `test/e2e/<playbook_name>_test.go`
 
 ## Git
 

@@ -1,10 +1,9 @@
-package netrules_test
+package netrules
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/nonpop/execave/internal/netrules"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,53 +36,53 @@ func FuzzParse(f *testing.F) {
 	f.Add("https:[::1:443")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		rule, err := netrules.Parse(input)
+		rule, err := Parse(input)
 		if err != nil {
 			return
 		}
 
 		// Protocol must be a known allow/deny value.
-		assert.Contains(t, []netrules.Protocol{
-			netrules.ProtocolHTTPS,
-			netrules.ProtocolHTTP,
-			netrules.ProtocolNone,
-		}, netrules.RuleProtocol(rule))
+		assert.Contains(t, []protocol{
+			ProtocolHTTPS,
+			ProtocolHTTP,
+			protocolNone,
+		}, rule.protocol)
 
 		// Port: wildcard and number are mutually exclusive.
-		if netrules.RulePortIsWildcard(rule) {
-			assert.Equal(t, uint16(0), netrules.RulePortNumber(rule))
+		if rule.port.isWildcard {
+			assert.Equal(t, uint16(0), rule.port.number)
 		} else {
-			assert.NotZero(t, netrules.RulePortNumber(rule))
+			assert.NotZero(t, rule.port.number)
 		}
 
-		assert.NotEmpty(t, netrules.RuleRawTarget(rule))
-		assert.NotEmpty(t, netrules.RuleRawPort(rule))
+		assert.NotEmpty(t, rule.rawTarget)
+		assert.NotEmpty(t, rule.rawPort)
 
 		// Target-kind-specific invariants.
-		switch netrules.RuleTargetKind(rule) {
-		case netrules.TargetDomain:
-			assert.NotEmpty(t, netrules.RuleTargetDomain(rule))
+		switch rule.target.kind {
+		case targetDomain:
+			assert.NotEmpty(t, rule.target.domain)
 			// Domain must be lowercased.
-			assert.Equal(t, strings.ToLower(netrules.RuleTargetDomain(rule)), netrules.RuleTargetDomain(rule))
-			if netrules.RuleTargetWildcard(rule) {
-				assert.True(t, strings.HasPrefix(netrules.RuleTargetDomain(rule), "*."))
+			assert.Equal(t, strings.ToLower(rule.target.domain), rule.target.domain)
+			if rule.target.wildcard {
+				assert.True(t, strings.HasPrefix(rule.target.domain, "*."))
 			} else {
-				assert.NotContains(t, netrules.RuleTargetDomain(rule), "*")
+				assert.NotContains(t, rule.target.domain, "*")
 			}
-			assert.Nil(t, netrules.RuleTargetIPNet(rule))
+			assert.Nil(t, rule.target.ipNet)
 
-		case netrules.TargetIP:
-			assert.NotNil(t, netrules.RuleTargetIPNet(rule))
-			ones, bits := netrules.RuleTargetIPNet(rule).Mask.Size()
+		case targetIP:
+			assert.NotNil(t, rule.target.ipNet)
+			ones, bits := rule.target.ipNet.Mask.Size()
 			// PrefixLen must match IPNet mask.
-			assert.Equal(t, ones, netrules.RuleTargetPrefixLen(rule))
+			assert.Equal(t, ones, rule.target.prefixLen)
 			if bits == 32 {
-				assert.LessOrEqual(t, netrules.RuleTargetPrefixLen(rule), 32)
+				assert.LessOrEqual(t, rule.target.prefixLen, 32)
 			} else {
-				assert.LessOrEqual(t, netrules.RuleTargetPrefixLen(rule), 128)
+				assert.LessOrEqual(t, rule.target.prefixLen, 128)
 			}
-			assert.Empty(t, netrules.RuleTargetDomain(rule))
-			assert.False(t, netrules.RuleTargetWildcard(rule))
+			assert.Empty(t, rule.target.domain)
+			assert.False(t, rule.target.wildcard)
 		}
 	})
 }
@@ -107,20 +106,20 @@ func FuzzResolve(f *testing.F) {
 		"http:localhost:3000",
 	}
 
-	rules := make([]netrules.Rule, len(ruleSpecs))
-	validRuleStrings := make(map[string]netrules.Protocol)
+	rules := make([]Rule, len(ruleSpecs))
+	validRuleStrings := make(map[string]protocol)
 	for i, spec := range ruleSpecs {
 		rules[i] = mustParse(f, spec)
-		validRuleStrings[rules[i].RawRule] = netrules.RuleProtocol(rules[i])
+		validRuleStrings[rules[i].RawRule] = rules[i].protocol
 	}
-	resolver := netrules.NewResolver(rules)
+	resolver := NewResolver(rules)
 
 	f.Fuzz(func(t *testing.T, host string, port uint16, isHTTPS bool) {
-		protocol := netrules.ProtocolHTTP
+		proto := ProtocolHTTP
 		if isHTTPS {
-			protocol = netrules.ProtocolHTTPS
+			proto = ProtocolHTTPS
 		}
-		result := resolver.Resolve(protocol, host, port)
+		result := resolver.Resolve(proto, host, port)
 
 		// Allowed results must cite an actual non-none rule.
 		if result.Allowed {
@@ -128,7 +127,7 @@ func FuzzResolve(f *testing.F) {
 			ruleProto, ok := validRuleStrings[result.Rule]
 			assert.True(t, ok)
 			if ok {
-				assert.NotEqual(t, netrules.ProtocolNone, ruleProto)
+				assert.NotEqual(t, protocolNone, ruleProto)
 			}
 		}
 
@@ -138,20 +137,20 @@ func FuzzResolve(f *testing.F) {
 				ruleProto, ok := validRuleStrings[result.Rule]
 				assert.True(t, ok)
 				if ok {
-					assert.Equal(t, netrules.ProtocolNone, ruleProto)
+					assert.Equal(t, protocolNone, ruleProto)
 				}
 			}
 		}
 
 		// Determinism: same input must give the same result.
-		result2 := resolver.Resolve(protocol, host, port)
+		result2 := resolver.Resolve(proto, host, port)
 		assert.Equal(t, result, result2)
 	})
 }
 
-func mustParse(f *testing.F, ruleBody string) netrules.Rule {
+func mustParse(f *testing.F, ruleBody string) Rule {
 	f.Helper()
-	rule, err := netrules.Parse(ruleBody)
+	rule, err := Parse(ruleBody)
 	if err != nil {
 		f.Fatalf("parse rule %q: %v", ruleBody, err)
 	}

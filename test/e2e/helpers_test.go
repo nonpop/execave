@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,13 +151,6 @@ func assertLogExists(t *testing.T, logPath string) {
 	t.Helper()
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		t.Errorf("expected log file to exist at %s", logPath)
-	}
-}
-
-func assertLogNotExists(t *testing.T, logPath string) {
-	t.Helper()
-	if _, err := os.Stat(logPath); err == nil {
-		t.Errorf("expected log file NOT to exist at %s", logPath)
 	}
 }
 
@@ -330,43 +322,4 @@ func testHTTPSServer(t *testing.T, body string) (string, string) {
 	h, p, err := net.SplitHostPort(srv.Listener.Addr().String())
 	require.NoError(t, err)
 	return h, p
-}
-
-// assertInvalidNetRuleRejected verifies that a config with an invalid net rule
-// causes execave to exit with code 1 and print an error containing errSubstr.
-func assertInvalidNetRuleRejected(t *testing.T, rule, errSubstr string) {
-	t.Helper()
-
-	configPath := writeConfig(t, append(systemPaths(), rule))
-
-	result := runExecave(t, "", "--config", configPath, "--", "true")
-
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, errSubstr)
-}
-
-// assertDuplicateNetRuleRejected verifies that a config with duplicate net rules
-// causes execave to exit with code 1 and print an error about duplicates.
-func assertDuplicateNetRuleRejected(t *testing.T, rules []string) {
-	t.Helper()
-
-	configPath := writeConfig(t, rules)
-
-	result := runExecave(t, "", "--config", configPath, "--", "true")
-
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "duplicate net rule")
-}
-
-// assertMixedPortPatternsRejected verifies that a config with mixed port patterns
-// causes execave to exit with code 1 and print an error about mixed patterns.
-func assertMixedPortPatternsRejected(t *testing.T, rules []string) {
-	t.Helper()
-
-	configPath := writeConfig(t, rules)
-
-	result := runExecave(t, "", "--config", configPath, "--", "true")
-
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "mixed port patterns")
 }

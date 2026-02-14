@@ -79,6 +79,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | UDP/ICMP covert channel | No network stack; only TCP relay via proxy | None |
 | Bypass proxy via direct connection | No NIC; processes ignoring HTTP_PROXY cannot connect | None |
 | Connect to unauthorized host | Proxy enforces allowlist with default-deny | Misconfigured rules |
+| Proxy crash/failure | UDS: process death removes listener, new connections fail (fail-closed by design) | None |
 | Tunnel binary tampering | Irrelevant: tunnel runs inside sandbox, only exit is UDS to host proxy which enforces filtering; read-only bind mount as defense in depth | None |
 
 ## Security-Critical Code

@@ -1,10 +1,9 @@
-package fsrules_test
+package fsrules
 
 import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,7 +28,7 @@ func FuzzParseRule(f *testing.F) {
 			configDir = "/fuzz" + configDir
 		}
 
-		rule, err := fsrules.ParseRule(ruleStr, configDir)
+		rule, err := Parse(ruleStr, configDir)
 		if err != nil {
 			return // Invalid input is fine
 		}
@@ -37,10 +36,10 @@ func FuzzParseRule(f *testing.F) {
 		// Invariants for successfully parsed rules:
 
 		// Resource must be valid
-		assert.NotEqual(t, fsrules.ResourceUnknown, rule.Resource)
+		assert.NotEqual(t, ResourceUnknown, rule.Resource)
 
 		// Permission must be valid
-		assert.NotEqual(t, fsrules.PermissionUnknown, rule.Permission)
+		assert.NotEqual(t, PermissionUnknown, rule.Permission)
 
 		// Path must not be empty
 		assert.NotEmpty(t, rule.Path)
@@ -73,7 +72,7 @@ func FuzzNormalizePath(f *testing.F) {
 			configDir = "/fuzz" + configDir
 		}
 
-		result := fsrules.NormalizePath(path, configDir)
+		result := normalizePath(path, configDir)
 
 		// Invariants for path normalization:
 
@@ -84,6 +83,6 @@ func FuzzNormalizePath(f *testing.F) {
 		assert.Equal(t, filepath.Clean(result), result)
 
 		// Normalizing the result again must be idempotent
-		assert.Equal(t, result, fsrules.NormalizePath(result, configDir))
+		assert.Equal(t, result, normalizePath(result, configDir))
 	})
 }
