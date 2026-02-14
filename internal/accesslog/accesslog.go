@@ -1,14 +1,12 @@
-// Package accesslog provides access log writing with formatting, deduplication, and filtering.
+// Package accesslog provides in-memory access log storage with deduplication and filtering.
 //
-// The Logger writes access log entries for filesystem and network operations, handling:
-// - Entry formatting (<OP> <TARGET> <RESULT> <RULE>)
+// The Logger stores access log entries for filesystem and network operations, handling:
 // - Deduplication (each unique operation+target+result logged once)
 // - Infrastructure path filtering (/dev, /proc, /tmp) for filesystem entries
+// - Entry retrieval and change notification for consumers
 package accesslog
 
 import (
-	"fmt"
-	"io"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -72,29 +70,32 @@ type accessKey struct {
 	result    ResultType
 }
 
-// Logger writes access log entries with deduplication and filtering.
+// Logger stores access log entries in memory with deduplication and filtering.
 // Logger is safe for concurrent use by multiple goroutines.
 type Logger struct {
-	mu      sync.Mutex
-	writer  io.Writer
-	seen    map[accessKey]bool
-	managed []string
+	mu          sync.Mutex
+	entries     []Entry
+	seen        map[accessKey]bool
+	managed     []string
+	subscribers map[chan struct{}]bool
 }
 
-// New creates a new Logger that writes to the given writer.
+// New creates a new Logger.
 // managedPaths contains infrastructure paths (/dev, /proc, /tmp) that should not be logged.
-func New(writer io.Writer, managedPaths []string) *Logger {
+func New(managedPaths []string) *Logger {
 	return &Logger{
-		mu:      sync.Mutex{},
-		writer:  writer,
-		seen:    make(map[accessKey]bool),
-		managed: managedPaths,
+		mu:          sync.Mutex{},
+		entries:     make([]Entry, 0),
+		seen:        make(map[accessKey]bool),
+		managed:     managedPaths,
+		subscribers: make(map[chan struct{}]bool),
 	}
 }
 
-// Log writes an access log entry if it passes all filters:
+// Log stores an access log entry if it passes all filters:
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
+// After storing the entry, notifies all subscribers via non-blocking send.
 func (l *Logger) Log(entry Entry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -113,7 +114,51 @@ func (l *Logger) Log(entry Entry) error {
 	}
 	l.seen[key] = true
 
-	return l.writeLogEntry(entry)
+	l.entries = append(l.entries, entry)
+	l.notifySubscribers()
+	return nil
+}
+
+// Entries returns a copy of all logged entries.
+func (l *Logger) Entries() []Entry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	entries := make([]Entry, len(l.entries))
+	copy(entries, l.entries)
+	return entries
+}
+
+// Subscribe registers a channel to receive notifications when new entries are logged.
+// The channel receives a non-blocking signal on each new entry.
+// Callers should use Entries() to retrieve the current entry snapshot.
+// The returned channel should only be used for receiving.
+func (l *Logger) Subscribe() chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ch := make(chan struct{}, 1)
+	l.subscribers[ch] = true
+	return ch
+}
+
+// Unsubscribe removes a previously registered subscriber channel.
+func (l *Logger) Unsubscribe(ch chan struct{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	delete(l.subscribers, ch)
+}
+
+// notifySubscribers sends a non-blocking notification to all subscribers.
+// Must be called with l.mu held.
+func (l *Logger) notifySubscribers() {
+	for ch := range l.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (l *Logger) isManagedPath(path string) bool {
@@ -125,11 +170,4 @@ func (l *Logger) isManagedPath(path string) bool {
 		}
 	}
 	return false
-}
-
-// writeLogEntry formats and writes a log entry: <OP> <PATH> <RESULT> <RULE>.
-func (l *Logger) writeLogEntry(entry Entry) error {
-	logLine := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-	_, err := fmt.Fprintln(l.writer, logLine)
-	return err //nolint:wrapcheck // callers provide context
 }

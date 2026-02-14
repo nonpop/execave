@@ -56,12 +56,11 @@ func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t
 	assert.NotEqual(t, 0, result.ExitCode)
 
 	// First hop OK, intermediate hop denied
-	assertLogLineContainsAll(t, env.LogPath, "READ", hop1, "OK", "fs:ro:"+mountDir)
-	assertLogLineContainsAll(t, env.LogPath, "READ", hop2, "DENY", "no-matching-rule")
+	assertWebUIHasEntry(t, result.WebUI, "READ", hop1, "OK", "fs:ro:"+mountDir)
+	assertWebUIHasEntry(t, result.WebUI, "READ", hop2, "DENY", "no-matching-rule")
 
 	// Secret file never reached
-	logContent := env.readLog(t)
-	assert.NotContains(t, logContent, secretFile)
+	assert.NotContains(t, result.WebUI, secretFile)
 }
 
 // TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented tests that the config file
@@ -143,5 +142,5 @@ func TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
 	assert.NotEqual(t, 0, result.ExitCode)
 	assert.Contains(t, result.Stderr, "loop-a: Too many levels of symbolic links")
 
-	assertLogLineContainsAll(t, env.LogPath, "DENY", "symlink-depth-limit-exceeded")
+	assertWebUIHasEntry(t, result.WebUI, "DENY", "symlink-depth-limit-exceeded")
 }

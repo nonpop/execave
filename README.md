@@ -56,24 +56,25 @@ See `execave.json.example` for a comprehensive config that supports most standar
 
 ### Building your config with --monitor
 
-You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem access while enforcing sandbox rules:
+You're not expected to know every path a command needs upfront. Use `--monitor=PORT` to trace filesystem and network access in real-time via a web UI:
 
 ```bash
-execave --monitor -- your-command
-cat execave-access.log
+execave --monitor=9876 -- your-command
 ```
 
-```
-READ   /usr/lib/libc.so.6       OK     fs:ro:/usr
-WRITE  /home/user/output.txt    DENY   fs:ro:/home/user
-READ   /etc/passwd              DENY   no-matching-rule
-HTTPS  api.example.com:443      OK     net:https:api.example.com:443
-HTTP   evil.example.com:80      DENY   no-matching-rule
-```
+Open browser at http://127.0.0.1:9876. It displays access log entries as they happen:
 
-Each line: operation, target, result (OK/DENY), matching rule. Network entries (`HTTPS`/`HTTP`) appear when net rules are configured.
+| Operation | Target | Result | Rule |
+|-----------|--------|--------|------|
+| READ | /usr/lib/libc.so.6 | OK | fs:ro:/usr |
+| WRITE | /home/user/output.txt | DENY | fs:ro:/home/user |
+| READ | /etc/passwd | DENY | no-matching-rule |
+| HTTPS | api.example.com:443 | OK | net:https:api.example.com:443 |
+| HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
-**Workflow:** Start with `execave.json.example`, run with `--monitor`, check for DENY entries, grant only what's necessary, repeat.
+**Real-time updates:** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
+
+**Workflow:** Start with `execave.json.example`, run with `--monitor=<port>`, check for DENY entries in the web UI, grant only what's necessary, repeat.
 
 ## Requirements
 

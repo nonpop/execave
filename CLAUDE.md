@@ -16,7 +16,7 @@ golangci-lint run --fix                   # Lint
 ## Structure
 
 - `cmd/execave/` - CLI entrypoint
-- `internal/{config,sandbox,monitor,rules}/` - Core logic
+- `internal/{config,fsrules,netrules,accesslog,sandbox,monitor,proxy,tunnel,webui}/` - Core logic
 
 ## Documentation
 
@@ -28,7 +28,6 @@ golangci-lint run --fix                   # Lint
 ## Security
 
 - This is security-critical code. Write simple, auditable code and follow security best practices.
-- If something "should never happen" but it happens anyway, panic.
 - Preconditions in godoc ("X must be Y") must be verified with panic checks at function entry.
 
 **When modifying security-critical code** (permission checks, rule resolution, sandbox boundary, config parsing, bwrap invocation): explain why the change is safe and consider bypass scenarios. Read docs/security-model.md.
@@ -38,6 +37,7 @@ golangci-lint run --fix                   # Lint
 - Follow conventions in `docs/error-handling.md`
 - Error messages must read like a stack trace: operation → context → wrapped error
 - No sentinel errors - use rich string errors with inline context
+- **Impossible conditions must panic** (errors, unexpected values, violated invariants — anything that cannot happen in a correct program). Never swallow them with bare `return`, `continue`, `_ =`, or default branches.
 
 ## Testing
 

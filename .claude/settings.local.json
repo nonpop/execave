@@ -17,7 +17,12 @@
       "Bash(wc:*)",
       "Bash(git diff:*)",
       "Bash(head:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(echo:*)",
+      "Bash(git status:*)",
+      "Bash(go get:*)",
+      "Bash(xargs:*)",
+      "Bash(openspec list:*)"
     ]
   }
 }

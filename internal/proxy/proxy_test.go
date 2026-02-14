@@ -1,7 +1,6 @@
 package proxy_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -162,8 +161,7 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	host, port := hostPort(t, tlsServer.Listener.Addr().String())
 	ruleBody := fmt.Sprintf("https:%s:%s", host, port)
 
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, ruleBody)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -177,14 +175,14 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "HTTPS")
-	assert.Contains(t, logStr, "OK")
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestProxy_AccessLogDenied(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, "https:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -202,10 +200,11 @@ func TestProxy_AccessLogDenied(t *testing.T) {
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "HTTPS")
-	assert.Contains(t, logStr, "DENY")
-	assert.Contains(t, logStr, "no-matching-rule")
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
+	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
 }
 
 // --- helpers ---

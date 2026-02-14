@@ -20,7 +20,7 @@ Use Go's native fuzz testing for input parsing and security-sensitive code. Seed
 Integration tests verify spec scenarios against a package's public API. They live alongside unit tests in the package directory.
 
 - **File**: `internal/<package>/integration_test.go` (uses `package <pkg>_test`)
-- **Every spec scenario must have a corresponding integration test.**
+- **1-1 mapping required**: Every spec scenario in `openspec/specs/<package>/spec.md` (or `openspec/changes/<change>/specs/<package>/spec.md`) must have exactly one corresponding integration test in `internal/<package>/integration_test.go`. The integration test file must contain only tests for spec scenarios — no additional tests.
 
 Test name format — convert kebab-case names to PascalCase:
 
@@ -31,7 +31,7 @@ TestIntegration_<RequirementName>_<ScenarioName>
 For example:
 - Requirement: "Most specific rule wins", Scenario: "Specific ro overrides general rw" → `TestIntegration_MostSpecificRuleWins_SpecificRoOverridesGeneralRw`.
 
-Unit tests (e.g., `TestParseRule_Valid` in `fsrules_test.go`) coexist in their own `*_test.go` files and use `package <pkg>` (white-box).
+Unit tests (e.g., `TestParseRule_Valid` in `fsrules_test.go`) coexist in their own `*_test.go` files and use `package <pkg>` (white-box). Additional tests beyond spec scenarios belong in unit test files, not integration_test.go.
 
 ## End-to-End Tests
 
@@ -39,7 +39,7 @@ E2E tests live in `test/e2e/` and test the full binary.
 
 ### Openspec use case tests
 
-**Every playbook use case must have a corresponding E2E test.**
+- **1-1 mapping required**: Every use case in `openspec/playbooks/<playbook>/playbook.md` (or `openspec/changes/<change>/playbooks/<playbook>/playbook.md`) must have exactly one corresponding E2E test in `test/e2e/<playbook_name>_test.go`. The E2E test file must contain only tests for playbook use cases from that playbook — no additional tests.
 
 - **File**: `test/e2e/<playbook_name>_test.go` (underscores, not hyphens)
 

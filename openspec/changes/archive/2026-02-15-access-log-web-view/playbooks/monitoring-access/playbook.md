@@ -1,10 +1,4 @@
-# Monitoring Access — Observing what sandboxed commands access
-
-## Purpose
-
-The user enables monitoring to see what resources a sandboxed command accesses. The access log records filesystem reads/writes and network requests with their outcomes, helping the user understand and audit the command's behavior.
-
-## Use Cases
+## ADDED Use Cases
 
 ### Use Case: View access log in web UI
 
@@ -67,6 +61,8 @@ The user refreshes the web UI page and sees all entries accumulated so far, with
 - **THEN** the page displays all entries accumulated so far
 - **AND** new entries continue appearing without duplicates or gaps
 
+## MODIFIED Use Cases
+
 ### Use Case: Monitor network access (HTTPS and HTTP)
 
 The user enables monitoring with net rules to see which network endpoints the sandboxed command contacts and whether requests are allowed or denied.
@@ -123,39 +119,16 @@ The user accesses a file through a symlink inside a mounted directory. The monit
 - **THEN** the web UI displays a `READ` entry for `/home/user/project/link.txt` (the symlink hop)
 - **AND** a `READ` entry for `/home/user/project/real.txt` (the resolved target)
 
-### Use Case: Verify filesystem enforcement decisions are accurately logged
+## REMOVED Use Cases
 
-The user wants to confirm that allowed operations show OK and denied operations show DENY in the monitor, matching actual sandbox behavior.
+### Use Case: Monitor filesystem access with default log path
+**Reason**: File-based monitor logging is replaced by the web UI. The concept of a "default log path" no longer applies — the `--monitor` flag value is now a port number.
+**Migration**: Use `--monitor=PORT` to start the web UI. See "View access log in web UI" use case.
 
-- **GIVEN** rules allowing one file and denying another (`fs:ro:/home/user/allowed.txt` and `fs:none:/home/user/denied.txt`)
-- **WHEN** the user attempts to access both files with `execave --monitor -- sh -c "cat allowed.txt || true; cat denied.txt || true"`
-- **THEN** the allowed file shows `READ /home/user/allowed.txt OK fs:ro:/home/user/allowed.txt`
-- **AND** the denied file shows `READ /home/user/denied.txt DENY fs:none:/home/user/denied.txt`
+### Use Case: Monitor filesystem access with custom log path
+**Reason**: File-based monitor logging is replaced by the web UI. The `--monitor` flag value is now a port number, not a file path.
+**Migration**: Use `--monitor=PORT` to start the web UI on the specified port. View the access log at `http://127.0.0.1:PORT`.
 
-### Use Case: Verify network enforcement decisions are accurately logged
-
-The user wants to confirm that allowed network requests show OK and denied requests show DENY in the monitor, matching actual proxy behavior.
-
-- **GIVEN** rules allowing one endpoint and denying another (`net:http:api.example.com:8080` and `net:none:evil.example.com:8080`)
-- **WHEN** the user attempts to reach both endpoints with `execave --monitor -- sh -c "curl http://api.example.com:8080/ || true; curl http://evil.example.com:8080/ || true"`
-- **THEN** the allowed request shows `HTTP api.example.com:8080 OK net:http:api.example.com:8080`
-- **AND** the denied request shows `HTTP evil.example.com:8080 DENY net:none:evil.example.com:8080`
-
-### Use Case: Monitor reflects filesystem rule precedence correctly
-
-The user has nested rules (parent and more-specific child). The monitor should show which rule actually applied when multiple rules could match.
-
-- **GIVEN** rules `fs:rw:/home/user/project` and `fs:ro:/home/user/project/.git` (child overrides parent)
-- **WHEN** the user accesses files in both directories with `execave --monitor -- sh -c "echo test >> project/main.go && cat project/.git/config && echo fail >> project/.git/config || true"`
-- **THEN** write operations in `/home/user/project/main.go` show `WRITE ... OK fs:rw:/home/user/project`
-- **AND** read operations in `/home/user/project/.git/config` show `READ ... OK fs:ro:/home/user/project/.git`
-- **AND** write operations in `/home/user/project/.git/config` show `WRITE ... DENY fs:ro:/home/user/project/.git` (not the parent rule)
-
-### Use Case: Monitor reflects network rule precedence correctly
-
-The user has overlapping network rules at different specificities. The monitor should show which rule actually applied when multiple rules could match.
-
-- **GIVEN** rules `net:http:10.0.0.0/8:*` (broad CIDR allow) and `net:none:10.0.0.1/32:3000` (specific IP deny)
-- **WHEN** the user makes requests to both a non-blocked and the blocked endpoint with `execave --monitor -- sh -c "curl http://10.0.0.2:3000/ || true; curl http://10.0.0.1:3000/ || true"`
-- **THEN** the allowed request shows `HTTP 10.0.0.2:3000 OK net:http:10.0.0.0/8:*`
-- **AND** the denied request shows `HTTP 10.0.0.1:3000 DENY net:none:10.0.0.1/32:3000` (the more specific rule, not the broad CIDR)
+### Use Case: Real-time log monitoring (tail -f during execution)
+**Reason**: The `tail -f` workflow is replaced by the web UI's SSE-based real-time streaming.
+**Migration**: Open `http://127.0.0.1:PORT` in a browser. Entries appear in real time without a separate terminal.

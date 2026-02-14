@@ -26,11 +26,13 @@ linters:
     varnamelen:
       ignore-decls:
         - i int
+        - n int
         - sb *sandbox.Sandbox
         - wg sync.WaitGroup
         - wg *sync.WaitGroup
         - w http.ResponseWriter
         - r *http.Request
+        - sb strings.Builder
 
     exhaustive:
       default-signifies-exhaustive: true

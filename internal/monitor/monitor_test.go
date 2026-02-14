@@ -1,8 +1,8 @@
 package monitor
 
 import (
-	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,11 +17,10 @@ import (
 )
 
 type monitorTestEnv struct {
-	t       *testing.T
-	TmpDir  string
-	LogPath string
-	LogFile *os.File
-	mon     *Monitor
+	t      *testing.T
+	TmpDir string
+	logger *accesslog.Logger
+	mon    *Monitor
 }
 
 func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
@@ -30,23 +29,17 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 	require.NoError(t, err)
 
 	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "access.log")
-	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = logFile.Close() })
-
 	cfg := setupConfig(tmpDir)
 
-	logger := accesslog.New(logFile, cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 	mon := New(logger, resolver, nil, false)
 
 	return &monitorTestEnv{
-		t:       t,
-		TmpDir:  tmpDir,
-		LogPath: logPath,
-		LogFile: logFile,
-		mon:     mon,
+		t:      t,
+		TmpDir: tmpDir,
+		logger: logger,
+		mon:    mon,
 	}
 }
 
@@ -54,13 +47,23 @@ func (e *monitorTestEnv) run(cmd []string) (int, error) {
 	return e.mon.Run(context.Background(), cmd)
 }
 
+func (e *monitorTestEnv) entries() []accesslog.Entry {
+	e.t.Helper()
+	return e.logger.Entries()
+}
+
+// readLog returns the formatted log entries as a string for compatibility with existing tests.
 func (e *monitorTestEnv) readLog() string {
 	e.t.Helper()
-	// Flush and sync the log file before reading
-	require.NoError(e.t, e.LogFile.Sync())
-	content, err := os.ReadFile(e.LogPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(e.t, err)
-	logStr := string(content)
+	entries := e.logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		// Format: <OP> <PATH> <RESULT> <RULE>
+		// Use the same format as the old writeLogEntry method
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	e.t.Logf("Log content:\n%s", logStr)
 	return logStr
 }
@@ -79,16 +82,12 @@ func roRule(path string) fsrules.Rule {
 }
 
 // createTestMonitor creates a monitor with a logger for testing.
-// Returns the monitor and the log file (for flushing before reading).
-func createTestMonitor(t *testing.T, logPath string, cfg *config.Config, bwrapArgs []string) (*Monitor, *os.File) {
+// Returns the monitor and the logger.
+func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
 	t.Helper()
-	logFile, err := os.Create(logPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = logFile.Close() })
-
-	logger := accesslog.New(logFile, cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	return New(logger, resolver, bwrapArgs, false), logFile
+	return New(logger, resolver, bwrapArgs, false), logger
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -215,17 +214,10 @@ func TestMonitor_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	logFile, err := os.Open(env.LogPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	defer func() { _ = logFile.Close() }()
-
-	scanner := bufio.NewScanner(logFile)
+	entries := env.entries()
 	pathCounts := make(map[string]int)
-	for scanner.Scan() {
-		parts := strings.Fields(scanner.Text())
-		if len(parts) >= 2 {
-			pathCounts[parts[1]]++
-		}
+	for _, entry := range entries {
+		pathCounts[entry.Target]++
 	}
 
 	t.Logf("Path counts: %v", pathCounts)
@@ -277,10 +269,8 @@ func TestMapSyscallToOperation(t *testing.T) {
 // Uses synthetic strace data because triggering unresolved relative paths in real
 // strace requires older strace versions (< 5.2) that don't resolve AT_FDCWD with -y.
 func TestMonitor_UnresolvedRelativePath(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := new(config.Config)
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	// Synthetic strace output: openat with AT_FDCWD but no path resolution (older strace -y behavior).
 	// The relative path "foo/bar.txt" cannot be resolved to an absolute path.
@@ -291,12 +281,14 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	logStr := string(data)
+	// Format entries as log string for assertion
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
@@ -305,15 +297,13 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 // TestMonitor_SetupPhaseSkipped tests that bwrap setup lines are skipped
 // until the user command's execve is detected.
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{roRule("/usr")},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
 	// Non-nil bwrapArgs enables setup phase detection
-	mon, logFile := createTestMonitor(t, logPath, cfg, []string{"--ro-bind", "/usr", "/usr"})
+	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
 
 	// Synthetic strace output mimicking bwrap + user command sequence
 	straceData := strings.NewReader(strings.Join([]string{
@@ -332,12 +322,14 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// Setup operations should be skipped
@@ -355,10 +347,8 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 // TestMonitor_NoSetupPhaseWithoutBwrap tests that setup phase detection is
 // disabled when bwrapArgs is nil (direct strace without bwrap).
 func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "access.log")
 	cfg := new(config.Config)
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	// Without bwrap, all lines should be processed (no setup phase)
 	straceData := strings.NewReader(strings.Join([]string{
@@ -369,12 +359,14 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 	err := mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	data, err := os.ReadFile(logPath) // #nosec G304 -- test file path from t.TempDir()
-	require.NoError(t, err)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// All lines should be processed
@@ -419,8 +411,7 @@ func testSymlinkAccessHelper(
 	require.NoError(t, err)
 
 	cfg := &config.Config{FSRules: configRules, NetRules: nil, ManagedPaths: nil}
-	logPath := filepath.Join(t.TempDir(), "access.log")
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", ` + straceFlags + `) = 3`,
@@ -429,13 +420,14 @@ func testSymlinkAccessHelper(
 	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	//nolint:gosec // Test code with controlled file path
-	data, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	assertLogContainsLine(t, logStr, expectedHopOp, linkPath, "OK")
@@ -475,8 +467,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
-	logPath := filepath.Join(t.TempDir(), "access.log")
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = -1 EACCES`,
@@ -485,13 +476,14 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	//nolint:gosec // Test code with controlled file path
-	data, err2 := os.ReadFile(logPath)
-	require.NoError(t, err2)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// Hop should be OK, target should be denied
@@ -531,8 +523,7 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
-	logPath := filepath.Join(t.TempDir(), "access.log")
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_WRONLY) = 3`,
@@ -541,13 +532,14 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	//nolint:gosec // Test code with controlled file path
-	data, err2 := os.ReadFile(logPath)
-	require.NoError(t, err2)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// Hop is READ (symlink in ro dir), target is WRITE (in rw dir)
@@ -579,8 +571,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 		NetRules:     nil,
 		ManagedPaths: []string{managedDir},
 	}
-	logPath := filepath.Join(t.TempDir(), "access.log")
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = 3` + "\n",
@@ -589,13 +580,14 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	//nolint:gosec // Test code with controlled file path
-	data, err2 := os.ReadFile(logPath)
-	require.NoError(t, err2)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// Original path should be logged as UNKNOWN since symlink target is in managed area
@@ -624,8 +616,7 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
-	logPath := filepath.Join(t.TempDir(), "access.log")
-	mon, logFile := createTestMonitor(t, logPath, cfg, nil)
+	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + link1 + `", O_RDONLY) = 3`,
@@ -635,17 +626,17 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	err = mon.processStraceOutput(straceData)
 	require.NoError(t, err)
 
-	// Flush log file before reading
-	require.NoError(t, logFile.Sync())
-
-	//nolint:gosec // Test code with controlled file path
-	data, err2 := os.ReadFile(logPath)
-	require.NoError(t, err2)
-	logStr := string(data)
+	// Format entries as log string for assertions
+	entries := logger.Entries()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
 	t.Logf("Log content:\n%s", logStr)
 
 	// Target should appear only once
-	lines := strings.Split(strings.TrimSpace(logStr), "\n")
 	targetCount := 0
 	for _, line := range lines {
 		if strings.Contains(line, targetPath) {

@@ -1,7 +1,6 @@
 package proxy_test
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -94,8 +93,7 @@ func TestIntegration_PlainHTTPForwarding_DeniedHTTPRequestRejected(t *testing.T)
 }
 
 func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allowed(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, "http:localhost:80")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -110,14 +108,14 @@ func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allow
 
 	// The forward may fail (nothing on port 80), but the access log
 	// shows the rule check passed with the defaulted port.
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "localhost:80")
-	assert.Contains(t, logStr, "OK")
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, "localhost:80", entries[0].Target)
+	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denied(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, "http:other.example.com:80")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -131,9 +129,10 @@ func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denie
 	_ = resp.Body.Close()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "evil.example.com:80")
-	assert.Contains(t, logStr, "DENY")
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, "evil.example.com:80", entries[0].Target)
+	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 }
 
 // --- Requirement: Malformed request handling ---
@@ -171,8 +170,7 @@ func TestIntegration_MalformedRequestHandling_CONNECTWithMissingHost(t *testing.
 // --- Requirement: Allowlist enforcement ---
 
 func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t,
 		"https:*.example.com:443",
 		"none:evil.example.com:443",
@@ -193,9 +191,10 @@ func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *te
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "api.example.com:443")
-	assert.Contains(t, logStr, "OK")
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, "api.example.com:443", entries[0].Target)
+	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestIntegration_AllowlistEnforcement_RequestDeniedByMostSpecificRule(t *testing.T) {
@@ -227,8 +226,7 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 	host, port := hostPort(t, server.Listener.Addr().String())
 	ruleBody := fmt.Sprintf("https:%s:%s", host, port)
 
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, ruleBody)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -241,15 +239,15 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "HTTPS")
-	assert.Contains(t, logStr, net.JoinHostPort(host, port))
-	assert.Contains(t, logStr, "OK")
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, net.JoinHostPort(host, port), entries[0].Target)
+	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
-	var logBuf bytes.Buffer
-	logger := accesslog.New(&logBuf, nil)
+	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, "https:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -266,11 +264,12 @@ func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "HTTPS")
-	assert.Contains(t, logStr, "evil.example.com:443")
-	assert.Contains(t, logStr, "DENY")
-	assert.Contains(t, logStr, "no-matching-rule")
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, "evil.example.com:443", entries[0].Target)
+	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
+	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
 }
 
 // --- Requirement: Proxy lifecycle ---

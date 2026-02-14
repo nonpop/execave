@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -18,12 +19,12 @@ import (
 	"github.com/nonpop/execave/internal/proxy"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/tunnel"
+	"github.com/nonpop/execave/internal/webui"
 	"github.com/spf13/cobra"
 )
 
 const (
 	defaultConfigPath = "./execave.json"
-	defaultLogPath    = "./execave-access.log"
 )
 
 func main() {
@@ -35,7 +36,7 @@ func main() {
 
 func newRootCommand() *cobra.Command {
 	var configPath string
-	var monitorPath string
+	var monitorPort string
 
 	cmd := &cobra.Command{
 		Use:   "execave [flags] [--] <command>",
@@ -44,7 +45,7 @@ func newRootCommand() *cobra.Command {
 
 Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		Example: `  execave python
-  execave --monitor -- bash -c 'ls /etc'`,
+  execave --monitor=9876 -- bash -c 'ls /etc'`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			// Check if -- was used
 			argsLenAtDash := cmd.ArgsLenAtDash()
@@ -64,13 +65,12 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitorPath)
+			return runCommand(c, args, configPath, monitorPort)
 		},
 	}
 
 	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
-	cmd.Flags().StringVar(&monitorPath, "monitor", "", "Enable access monitoring (optionally specify log path)")
-	cmd.Flags().Lookup("monitor").NoOptDefVal = defaultLogPath
+	cmd.Flags().StringVar(&monitorPort, "monitor", "", "Enable access monitoring with web UI on specified port (e.g., --monitor=9876)")
 
 	cmd.AddCommand(newNetworkTunnelCommand())
 
@@ -111,8 +111,8 @@ func newNetworkTunnelCommand() *cobra.Command {
 	}
 }
 
-func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath string) error {
-	exitCode, err := runSandboxed(cmd, args, configPath, monitorPath)
+func runCommand(cmd *cobra.Command, args []string, configPath, monitorPort string) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitorPort)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPath strin
 	return nil
 }
 
-func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath string) (int, error) {
+func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort string) (int, error) {
 	command := extractCommand(cmd, args)
 
 	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
@@ -131,6 +131,16 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	monitorEnabled := cmd.Flags().Changed("monitor")
+
+	// Validate monitor port if monitoring is enabled
+	if monitorEnabled {
+		if monitorPort == "" {
+			return 0, errors.New("--monitor requires a port number (e.g., --monitor=9876)")
+		}
+		if err := validatePort(monitorPort); err != nil {
+			return 0, fmt.Errorf("invalid port for --monitor: %w", err)
+		}
+	}
 
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -146,13 +156,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 
 	ctx := context.Background()
 
-	logger, logCleanup, err := setupAccessLog(monitorEnabled, monitorPath)
-	if err != nil {
-		return 0, err
-	}
-	if logCleanup != nil {
-		defer logCleanup()
-	}
+	logger := setupAccessLog(monitorEnabled)
 
 	netPath, proxyCleanup, err := setupNetworking(cfg, logger, monitorEnabled)
 	if err != nil {
@@ -165,7 +169,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPath str
 	sb := sandbox.New(cfg, absConfigPath, netPath)
 
 	if monitorEnabled {
-		return runMonitored(ctx, sb, logger, resolver, command)
+		return runMonitored(ctx, sb, logger, resolver, command, monitorPort, sigCh)
 	}
 
 	exitCode, err := sb.Run(ctx, command)
@@ -185,16 +189,24 @@ func extractCommand(cmd *cobra.Command, args []string) []string {
 }
 
 // setupAccessLog initializes the access logger if monitoring is enabled.
-func setupAccessLog(monitorEnabled bool, monitorPath string) (*accesslog.Logger, func(), error) {
+func setupAccessLog(monitorEnabled bool) *accesslog.Logger {
 	if !monitorEnabled {
-		return nil, nil, nil
+		return nil
 	}
-	logWriter, logCleanup, err := createAccessLogWriter(monitorPath)
+	logger := accesslog.New(sandbox.ManagedDirs)
+	return logger
+}
+
+// validatePort validates that the given string is a valid port number (1-65535).
+func validatePort(port string) error {
+	portNum, err := strconv.Atoi(port)
 	if err != nil {
-		return nil, nil, err
+		return fmt.Errorf("port must be a number: %w", err)
 	}
-	logger := accesslog.New(logWriter, sandbox.ManagedDirs)
-	return logger, logCleanup, nil
+	if portNum < 0 || portNum > 65535 {
+		return fmt.Errorf("port must be between 0 and 65535, got %d", portNum)
+	}
+	return nil
 }
 
 // setupNetworking initializes the proxy and network path if net rules are present
@@ -249,27 +261,35 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 }
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring.
-func runMonitored(ctx context.Context, sb *sandbox.Sandbox, logger *accesslog.Logger, resolver *fsrules.Resolver, command []string) (int, error) {
+// access monitoring and web UI.
+func runMonitored(ctx context.Context, sb *sandbox.Sandbox, logger *accesslog.Logger, resolver *fsrules.Resolver, command []string, port string, sigCh chan os.Signal) (int, error) {
+	// Create run status tracker
+	status := newStatusTracker(command)
+
+	// Start web UI server
+	server := webui.New(logger, status, port)
+	if err := server.Start(ctx); err != nil {
+		return 0, fmt.Errorf("start web UI server: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "execave: monitor running at %s\n", server.URL())
+
+	status.SetRunning()
+
+	// Run sandbox with monitoring
 	bwrapArgs := sb.BuildBwrapArgs(command)
 	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath())
+	exitCode, runErr := mon.Run(ctx, command)
 
-	exitCode, err := mon.Run(ctx, command)
-	if err != nil {
-		return 0, fmt.Errorf("run monitor+sandbox: %w", err)
+	status.SetExited(exitCode, runErr)
+
+	fmt.Fprintf(os.Stderr, "execave: process exited with code %d. Monitor still running at %s\n", exitCode, server.URL())
+	fmt.Fprintf(os.Stderr, "execave: Press Ctrl-C to stop monitor and exit\n")
+
+	// Wait for SIGINT then exit immediately
+	<-sigCh
+
+	if runErr != nil {
+		return 0, fmt.Errorf("run monitor+sandbox: %w", runErr)
 	}
 	return exitCode, nil
-}
-
-func createAccessLogWriter(monitorPath string) (*os.File, func(), error) {
-	logFile, err := os.Create(monitorPath) //nolint:gosec // monitorPath is user-provided CLI flag
-	if err != nil {
-		return nil, nil, fmt.Errorf("create access log %s: %w", monitorPath, err)
-	}
-
-	cleanup := func() {
-		_ = logFile.Close()
-	}
-
-	return logFile, cleanup, nil
 }

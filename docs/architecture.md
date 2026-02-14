@@ -13,6 +13,7 @@ flowchart TB
         Sandbox[Sandbox: internal/sandbox]
         Monitor[Monitor: internal/monitor]
         Proxy[Proxy: internal/proxy]
+        WebUI[Web UI: internal/webui]
     end
 
     subgraph Untrusted["UNTRUSTED (sandboxed)"]
@@ -20,21 +21,30 @@ flowchart TB
         Process[Sandboxed Process]
     end
 
+    subgraph Browser["Browser"]
+        Page[HTML Page]
+        SSE[SSE Client]
+    end
+
     CLI --> Config
     CLI --> Sandbox
     CLI --> Monitor
     CLI --> Proxy
+    CLI --> WebUI
     Config --> FSRules
     Config --> NetRules
     Monitor --> FSRules
     Monitor --> AccessLog
     Proxy --> NetRules
     Proxy --> AccessLog
+    WebUI --> AccessLog
     Sandbox --> FSRules
     Sandbox -->|bwrap| Tunnel
     Tunnel --> Process
     Tunnel -->|UDS| Proxy
     Monitor -->|strace + bwrap| Tunnel
+    WebUI -->|HTTP| Page
+    WebUI -->|SSE| SSE
 ```
 
 ## Components
@@ -84,13 +94,28 @@ Self-contained net rule engine handling parsing, validation, and resolution.
 
 ### Access Log (`internal/accesslog/`)
 
-Reusable access log writer with formatting, deduplication, and filtering.
+In-memory access log storage with deduplication, filtering, and pub/sub notifications.
 
-- Entry format: `<OP> <TARGET> <RESULT> <RULE>`
-- Operations: `READ`, `WRITE` (filesystem), `HTTPS`, `HTTP` (network)
+- Entry storage: maintains `[]Entry` slice with thread-safe access
 - Deduplication: each unique (operation, target, result) logged once
 - Infrastructure filtering: `/dev`, `/proc`, `/tmp`, `/newroot`, `/oldroot`
-- Used by monitor (filesystem) and proxy (network)
+- Pub/sub mechanism: subscribers notified on new entries (non-blocking sends)
+- Entry format: `Operation`, `Target`, `Result`, `Rule` fields
+- Used by monitor (filesystem), proxy (network), and web UI (display)
+
+### Web UI (`internal/webui/`)
+
+Localhost web server for real-time access log viewing. Active when `--monitor=PORT` is specified.
+
+- HTTP server bound to `127.0.0.1:PORT`
+- Dependencies: `*accesslog.Logger` (entries), `StatusProvider` interface (run status)
+- Routes:
+  - `GET /` - Server-rendered HTML page with current entries and SSE client
+  - `GET /events?from=N` - Server-Sent Events stream for real-time updates
+- `StatusProvider` interface: read-only access to `RunStatus` (command, running/exited, etc.) with pub/sub. Concrete `statusTracker` lives in `cmd/execave` — CLI orchestrator calls `SetRunning()`/`SetExited()`; Server subscribes for changes via the interface.
+- SSE cursor-based streaming: replays entries from index N, then streams new entries
+- Session-aware reconnection: SSE event IDs encode `sessionID:index`; cross-session reconnects replay from 0 and the client clears stale entries
+- Server lifecycle: starts before sandbox, survives sandbox exit, stops on SIGINT
 
 ### Sandbox (`internal/sandbox/`)
 
@@ -141,7 +166,7 @@ TCP-to-UDS bridge running inside the sandbox (untrusted side).
 
 ### Monitor (`internal/monitor/`)
 
-Optional (`--monitor`). Traces filesystem access via strace and logs with rule attribution.
+Optional (`--monitor=PORT`). Traces filesystem access via strace and logs with rule attribution. Displayed in real-time web UI.
 
 - Wraps bwrap: `strace -- bwrap [args] -- cmd`
 - Parses strace output, maps syscalls to operations (READ/WRITE)
@@ -150,16 +175,19 @@ Optional (`--monitor`). Traces filesystem access via strace and logs with rule a
 - Filters non-existent path reads (via resolver's `PathNotFound` field)
 - Constructs `accesslog.Entry` for each access and delegates to `accesslog.Logger`
 - Symlinks targeting managed paths logged as UNKNOWN (host can't resolve sandbox-internal filesystems)
+- Entries stored in memory (not file) and streamed to web UI via SSE
 
 ## Data Flow
 
-**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates access logger (if `--monitor`) → starts proxy (if net rules or `--monitor`) → executes `bwrap` (or `strace + bwrap` with `--monitor`)
+**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates access logger and status tracker (if `--monitor=PORT`) → starts web UI server with status tracker as `StatusProvider` (if `--monitor=PORT`) → starts proxy (if net rules or monitoring) → executes `bwrap` (or `strace + bwrap` with monitoring)
 
 **Runtime (without net rules, no monitoring):** Kernel enforces namespace isolation (mount, PID, IPC, network). No network access. No proxy.
 
-**Runtime (without net rules, monitoring enabled):** Same namespace isolation. Proxy-tunnel starts with an empty rule set (deny-all) so that HTTP-proxy-aware programs' access attempts are logged. Direct connections still fail (no NIC). Monitor traces syscalls, resolves via `fsrules`, logs via `accesslog`.
+**Runtime (without net rules, monitoring enabled):** Same namespace isolation. Proxy-tunnel starts with an empty rule set (deny-all) so that HTTP-proxy-aware programs' access attempts are logged. Direct connections still fail (no NIC). Monitor traces syscalls, resolves via `fsrules`, logs via `accesslog`. Web UI serves initial page with all entries and streams updates via SSE. Browser connects to `http://127.0.0.1:PORT` to view real-time log.
 
-**Runtime (with net rules):** Same namespace isolation. Inside the sandbox, the tunnel listens on loopback and bridges TCP to the proxy UDS. Proxy checks each request against net rules and forwards or denies. Both monitor (filesystem) and proxy (network) log to the same `accesslog`.
+**Runtime (with net rules):** Same namespace isolation. Inside the sandbox, the tunnel listens on loopback and bridges TCP to the proxy UDS. Proxy checks each request against net rules and forwards or denies. Both monitor (filesystem) and proxy (network) log to the same `accesslog`. If monitoring enabled, web UI displays both filesystem and network entries in real-time.
+
+**Shutdown (monitoring enabled):** After sandbox exits, web UI server remains accessible for log review. SIGINT exits immediately; the OS closes all connections.
 
 ## Dependencies
 
