@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/runner"
 )
 
 //go:embed templates/*.html
@@ -39,45 +41,33 @@ const (
 
 // Server serves a localhost web UI for viewing access log entries and run status.
 type Server struct {
-	logger     *accesslog.Logger
-	status     StatusProvider
+	runner     *runner.Runner
+	cfg        *config.Config
+	command    []string
 	port       string
 	addr       string // actual bound address, set by Start
 	sessionID  string
 	httpServer *http.Server
+	runCtx     context.Context //nolint:containedctx // stored from Start for use in HTTP handlers
 }
 
-// RunStatus represents the current state of the sandboxed process.
-type RunStatus struct {
-	Running  bool
-	ExitCode int
-	Error    string
-	Command  string
-}
-
-// StatusProvider provides read-only access to sandbox process status.
-// Consumers call Status to get the current snapshot, Subscribe/Unsubscribe
-// to receive change notifications.
-type StatusProvider interface {
-	Status() RunStatus
-	Subscribe() chan struct{}
-	Unsubscribe(ch chan struct{})
-}
-
-// New creates a new Server that displays entries from the given logger and status provider.
+// New creates a new Server that displays entries from the given runner.
 // The server binds to 127.0.0.1:port when Start() is called.
-func New(logger *accesslog.Logger, status StatusProvider, port string) *Server {
+// cfg and command are stored for run control endpoints (start/restart).
+func New(rnr *runner.Runner, cfg *config.Config, command []string, port string) *Server {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		panic(fmt.Sprintf("generate session ID: %v", err))
 	}
 	return &Server{
-		logger:     logger,
-		status:     status,
+		runner:     rnr,
+		cfg:        cfg,
+		command:    command,
 		port:       port,
 		addr:       "",
 		sessionID:  hex.EncodeToString(buf[:]),
 		httpServer: nil,
+		runCtx:     nil,
 	}
 }
 
@@ -85,6 +75,8 @@ func New(logger *accesslog.Logger, status StatusProvider, port string) *Server {
 // Returns an error if the port is already in use or invalid.
 // Start is non-blocking; the server runs in a background goroutine.
 func (s *Server) Start(ctx context.Context) error {
+	// Store context for runner operations
+	s.runCtx = ctx
 	lc := net.ListenConfig{}
 	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:"+s.port)
 	if err != nil {
@@ -95,6 +87,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/events", s.handleEvents)
+	mux.HandleFunc("/api/start", s.handleStart)
+	mux.HandleFunc("/api/stop", s.handleStop)
 
 	s.httpServer = &http.Server{
 		Handler:           mux,
@@ -142,13 +136,17 @@ func parseLastEventID(raw string) (string, int, bool) {
 
 // handleIndex serves the main HTML page with all current entries.
 func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
-	entries := s.logger.Entries()
-	status := s.status.Status()
+	logger := s.runner.Logger()
+	var entries []accesslog.Entry
+	if logger != nil {
+		entries = logger.Entries()
+	}
+	status := s.runner.Status()
 
 	data := struct {
 		Entries    []accesslog.Entry
 		EntryCount int
-		Status     RunStatus
+		Status     runner.RunStatus
 		SessionID  string
 		Command    string
 	}{
@@ -188,6 +186,45 @@ func (s *Server) resolveStartIndex(r *http.Request) int {
 	return 0
 }
 
+// sseStream holds mutable state for an SSE streaming session.
+type sseStream struct {
+	server  *Server
+	logger  *accesslog.Logger
+	entryCh chan struct{}
+	entries []accesslog.Entry
+}
+
+// handleNewEntries sends any new entries since the last batch.
+func (st *sseStream) handleNewEntries(w http.ResponseWriter) {
+	if st.logger == nil {
+		return
+	}
+	currentEntries := st.logger.Entries()
+	lastSentIndex := len(st.entries) - 1
+	for i := lastSentIndex + 1; i < len(currentEntries); i++ {
+		st.server.sendEntryEvent(w, currentEntries[i], i)
+	}
+	st.entries = currentEntries
+}
+
+// handleStatusChange processes a status change event, switching loggers on new runs.
+func (st *sseStream) handleStatusChange(w http.ResponseWriter, status runner.RunStatus) {
+	st.server.sendStatusEvent(w, status)
+	if !status.Running {
+		return
+	}
+	// New run started — switch to the new logger
+	if st.logger != nil && st.entryCh != nil {
+		st.logger.Unsubscribe(st.entryCh)
+	}
+	st.logger = st.server.runner.Logger()
+	if st.logger != nil {
+		st.entryCh = st.logger.Subscribe()
+	}
+	st.server.sendSessionEvent(w, 0)
+	st.entries = nil
+}
+
 // handleEvents serves Server-Sent Events for real-time entry updates.
 // Supports ?from=N query parameter to replay from index N.
 // Supports Last-Event-ID header for automatic reconnection.
@@ -204,24 +241,29 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Subscribe to new entries and status changes. Do it before sending initial data to avoid
-	// missing updates that arrive between initial data and subscription
-	entryCh := s.logger.Subscribe()
-	defer s.logger.Unsubscribe(entryCh)
+	// Subscribe to status changes
+	statusCh := s.runner.Subscribe()
+	defer s.runner.Unsubscribe(statusCh)
 
-	statusCh := s.status.Subscribe()
-	defer s.status.Unsubscribe(statusCh)
+	// Set up stream state
+	stream := &sseStream{server: s, logger: s.runner.Logger(), entryCh: nil, entries: nil}
+	if stream.logger != nil {
+		stream.entryCh = stream.logger.Subscribe()
+		defer stream.logger.Unsubscribe(stream.entryCh)
+	}
 
 	// Send session event, initial status, and initial entries from startIndex
 	s.sendSessionEvent(w, startIndex)
-	s.sendStatusEvent(w, s.status.Status())
-	entries := s.logger.Entries()
-	for i := startIndex; i < len(entries); i++ {
-		s.sendEntryEvent(w, entries[i], i)
+	s.sendStatusEvent(w, s.runner.Status())
+	if stream.logger != nil {
+		stream.entries = stream.logger.Entries()
+		for i := startIndex; i < len(stream.entries); i++ {
+			s.sendEntryEvent(w, stream.entries[i], i)
+		}
 	}
 	flusher.Flush()
 
-	// Stream new entries as they arrive
+	// Stream new entries and status changes as they arrive
 	ctx := r.Context()
 	keepaliveTicker := time.NewTicker(sseKeepaliveInterval)
 	defer keepaliveTicker.Stop()
@@ -230,17 +272,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-entryCh:
-			// New entries available, send them
-			currentEntries := s.logger.Entries()
-			lastSentIndex := len(entries) - 1
-			for i := lastSentIndex + 1; i < len(currentEntries); i++ {
-				s.sendEntryEvent(w, currentEntries[i], i)
-			}
-			entries = currentEntries
+		case <-stream.entryCh:
+			stream.handleNewEntries(w)
 			flusher.Flush()
 		case <-statusCh:
-			s.sendStatusEvent(w, s.status.Status())
+			stream.handleStatusChange(w, s.runner.Status())
 			flusher.Flush()
 		case <-keepaliveTicker.C:
 			// write fails on client disconnect; ctx.Done handles that
@@ -282,7 +318,7 @@ func (s *Server) sendSessionEvent(w http.ResponseWriter, startIndex int) {
 
 // sendStatusEvent sends the run status as an SSE event.
 // Write errors are ignored: they only occur on client disconnect, which ctx.Done handles.
-func (s *Server) sendStatusEvent(w http.ResponseWriter, status RunStatus) {
+func (s *Server) sendStatusEvent(w http.ResponseWriter, status runner.RunStatus) {
 	statusDto := struct {
 		Running  bool   `json:"running"`
 		ExitCode int    `json:"exitCode"`
@@ -296,4 +332,38 @@ func (s *Server) sendStatusEvent(w http.ResponseWriter, status RunStatus) {
 	}
 	_, _ = fmt.Fprintf(w, "event: status\n")
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+// handleStart handles POST /api/start requests.
+// Starts (or restarts) the monitored sandbox run with the CLI-provided command.
+func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Start the run (stops any active run first)
+	// Use the server's context, not the request context (which gets canceled immediately)
+	if err := s.runner.Start(s.runCtx, s.cfg, s.command); err != nil { //nolint:contextcheck // intentionally use server ctx, not request ctx
+		http.Error(w, fmt.Sprintf("Failed to start run: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
+}
+
+// handleStop handles POST /api/stop requests.
+// Stops the currently running sandbox process.
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Stop the run (no-op if not running)
+	s.runner.Stop()
+
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
 }

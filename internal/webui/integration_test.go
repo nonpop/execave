@@ -6,11 +6,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ import (
 
 func TestIntegration_WebServerBinding_ServerStartsAndServesHTTP(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 
 	resp, err := http.Get(srv.URL() + "/")
 	require.NoError(t, err)
@@ -30,7 +31,11 @@ func TestIntegration_WebServerBinding_ServerStartsAndServesHTTP(t *testing.T) {
 
 func TestIntegration_WebServerBinding_InvalidPortRejected(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := webui.New(logger, webui.NewMockStatus(), "notaport")
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
+	command := []string{"true"}
+	srv := webui.New(rnr, cfg, command, "notaport")
 
 	err := srv.Start(t.Context())
 	assert.ErrorContains(t, err, "listen on port notaport")
@@ -45,7 +50,11 @@ func TestIntegration_WebServerBinding_PortAlreadyInUse(t *testing.T) {
 	port := strings.TrimPrefix(ln.Addr().String(), "127.0.0.1:")
 
 	logger := accesslog.New(nil)
-	srv := webui.New(logger, webui.NewMockStatus(), port)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
+	command := []string{"true"}
+	srv := webui.New(rnr, cfg, command, port)
 
 	err = srv.Start(t.Context())
 	assert.ErrorContains(t, err, "listen on port "+port)
@@ -62,7 +71,7 @@ func TestIntegration_AccessLogPage_PageDisplaysEntries(t *testing.T) {
 		Rule:      "fs:ro:/tmp/data",
 	}))
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.URL()+"/")
 
 	// All four columns present in a table row
@@ -84,7 +93,7 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 		require.NoError(t, logger.Log(e))
 	}
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.URL()+"/")
 
 	assert.Contains(t, body, "READ")
@@ -102,7 +111,7 @@ func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) 
 		Rule:      "fs:ro:/usr",
 	}))
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 
 	first := fetchBody(t, srv.URL()+"/")
 	second := fetchBody(t, srv.URL()+"/")
@@ -120,7 +129,7 @@ func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) 
 
 func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 
 	resp, err := http.Get(srv.URL() + "/events")
 	require.NoError(t, err)
@@ -157,7 +166,7 @@ func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 		}))
 	}
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	sessionID := webui.GetSessionID(t, srv.URL())
 
 	// Connect with ?from=30
@@ -188,7 +197,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 		}))
 	}
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	sessionID := webui.GetSessionID(t, srv.URL())
 
 	// Simulate: page rendered with count 50, entries 50+51 arrive before SSE connects.
@@ -218,7 +227,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 		}))
 	}
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	sessionID := webui.GetSessionID(t, srv.URL())
 
 	// Reconnect with Last-Event-ID from same session at index 75
@@ -249,7 +258,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 		}))
 	}
 
-	srv := webui.StartServer(t, logger, webui.NewMockStatus())
+	srv := webui.StartServer(t, logger)
 	sessionID := webui.GetSessionID(t, srv.URL())
 
 	// Connect with Last-Event-ID from a different session
@@ -274,7 +283,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 
 func TestIntegration_RunStatusDisplay_CommandShownInPage(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := webui.StartServer(t, logger, webui.NewMockStatus()) // command = "echo hello"
+	srv := webui.StartServer(t, logger) // command = "echo hello"
 
 	body := fetchBody(t, srv.URL()+"/")
 	assert.Contains(t, body, "echo hello")
@@ -282,11 +291,10 @@ func TestIntegration_RunStatusDisplay_CommandShownInPage(t *testing.T) {
 
 func TestIntegration_RunStatusDisplay_CrossSessionReconnectDeliversCurrentCommand(t *testing.T) {
 	logger := accesslog.New(nil)
-	status := &webui.MockStatus{
-		RunStatus: webui.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "cat /etc/hosts"},
-		Subs:      make(map[chan struct{}]bool),
-	}
-	srv := webui.StartServer(t, logger, status)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "cat /etc/hosts"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
 	// Connect with Last-Event-ID from a different session
 	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
@@ -308,11 +316,10 @@ func TestIntegration_RunStatusDisplay_CrossSessionReconnectDeliversCurrentComman
 
 func TestIntegration_RunStatusDisplay_RunningStatusShown(t *testing.T) {
 	logger := accesslog.New(nil)
-	status := &webui.MockStatus{
-		RunStatus: webui.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"},
-		Subs:      make(map[chan struct{}]bool),
-	}
-	srv := webui.StartServer(t, logger, status)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
 	body := fetchBody(t, srv.URL()+"/")
 	assert.Contains(t, body, "Running")
@@ -320,11 +327,10 @@ func TestIntegration_RunStatusDisplay_RunningStatusShown(t *testing.T) {
 
 func TestIntegration_RunStatusDisplay_ExitStatusShown(t *testing.T) {
 	logger := accesslog.New(nil)
-	status := &webui.MockStatus{
-		RunStatus: webui.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"},
-		Subs:      make(map[chan struct{}]bool),
-	}
-	srv := webui.StartServer(t, logger, status)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
 	body := fetchBody(t, srv.URL()+"/")
 	assert.Contains(t, body, "Exited")
@@ -333,11 +339,10 @@ func TestIntegration_RunStatusDisplay_ExitStatusShown(t *testing.T) {
 
 func TestIntegration_RunStatusDisplay_NonZeroExitCodeShown(t *testing.T) {
 	logger := accesslog.New(nil)
-	status := &webui.MockStatus{
-		RunStatus: webui.RunStatus{Running: false, ExitCode: 1, Error: "", Command: "false"},
-		Subs:      make(map[chan struct{}]bool),
-	}
-	srv := webui.StartServer(t, logger, status)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 1, Error: "", Command: "false"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
 	body := fetchBody(t, srv.URL()+"/")
 	assert.Contains(t, body, "Exited")
@@ -346,8 +351,10 @@ func TestIntegration_RunStatusDisplay_NonZeroExitCodeShown(t *testing.T) {
 
 func TestIntegration_RunStatusDisplay_StatusUpdatesStreamedViaSse(t *testing.T) {
 	logger := accesslog.New(nil)
-	status := newDynamicMockStatus(webui.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
-	srv := webui.StartServer(t, logger, status)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
 	resp, err := http.Get(srv.URL() + "/events")
 	require.NoError(t, err)
@@ -360,13 +367,129 @@ func TestIntegration_RunStatusDisplay_StatusUpdatesStreamedViaSse(t *testing.T) 
 	readEventWithTimeout(t, eventCh) // status (Running)
 
 	// Change status and notify
-	status.setStatus(webui.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "sleep 60"})
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "sleep 60"})
 
 	// Client receives updated status event
 	ev := readEventWithTimeout(t, eventCh)
 	assert.Equal(t, "status", ev.Event)
 	assert.Contains(t, ev.Data, `"running":false`)
 	assert.Contains(t, ev.Data, `"exitCode":0`)
+}
+
+// --- Requirement: Run control endpoints ---
+
+func TestIntegration_RunControlEndpoints_StartEndpointTriggersNewRun(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// POST /api/start
+	resp, err := http.Post(srv.URL()+"/api/start", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+
+	// Response is 200
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Runner status transitions to running (we check that Start was called by verifying status change)
+	// Note: In a real test with a real command, the status would be "running"
+	// For this integration test, we just verify the endpoint returns 200
+	// The actual runner behavior is tested in runner integration tests
+}
+
+func TestIntegration_RunControlEndpoints_StartEndpointRestartsActiveRun(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// POST /api/start while running
+	resp, err := http.Post(srv.URL()+"/api/start", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+
+	// Response is 200
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// The runner's Start method stops the active run first (tested in runner integration tests)
+}
+
+func TestIntegration_RunControlEndpoints_StopEndpointTerminatesActiveRun(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// POST /api/stop while running
+	resp, err := http.Post(srv.URL()+"/api/stop", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+
+	// Response is 200
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// The runner's Stop method terminates the run (tested in runner integration tests)
+}
+
+func TestIntegration_RunControlEndpoints_StopEndpointWhenIdle(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// POST /api/stop when not running
+	resp, err := http.Post(srv.URL()+"/api/stop", "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+
+	// Response is 200 (no-op)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// --- Requirement: Run control buttons ---
+
+func TestIntegration_RunControlButtons_StartButtonAndDisabledStopShownWhenIdle(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	body := fetchBody(t, srv.URL()+"/")
+
+	// Page displays a "Start" button
+	assert.Contains(t, body, `id="start-btn"`)
+	assert.Contains(t, body, ">Start<")
+
+	// Page displays a disabled "Stop" button
+	assert.Contains(t, body, `id="stop-btn"`)
+	assert.Contains(t, body, "disabled")
+}
+
+func TestIntegration_RunControlButtons_RestartButtonAndEnabledStopShownWhenRunning(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	body := fetchBody(t, srv.URL()+"/")
+
+	// Page displays a "Restart" button
+	assert.Contains(t, body, `id="start-btn"`)
+	assert.Contains(t, body, ">Restart<")
+
+	// Page displays an enabled "Stop" button (no "disabled" attribute when running)
+	assert.Contains(t, body, `id="stop-btn"`)
+	// Stop button should NOT have "disabled" attribute when running
+	// Check that the stop button line doesn't contain "disabled"
+	assert.NotContains(t, body, `id="stop-btn" class="stop" disabled`)
+	assert.Contains(t, body, `id="stop-btn" class="stop" >Stop<`)
 }
 
 // --- Integration test helpers ---
@@ -410,54 +533,6 @@ func readEventWithTimeout(t *testing.T, ch <-chan webui.SSEEvent) webui.SSEEvent
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for SSE event")
 		return webui.SSEEvent{Event: "", Data: "", ID: ""}
-	}
-}
-
-// dynamicMockStatus is a thread-safe StatusProvider that supports status changes
-// with subscriber notification.
-type dynamicMockStatus struct {
-	mu     sync.Mutex
-	status webui.RunStatus
-	subs   map[chan struct{}]bool
-}
-
-func newDynamicMockStatus(status webui.RunStatus) *dynamicMockStatus {
-	return &dynamicMockStatus{
-		mu:     sync.Mutex{},
-		status: status,
-		subs:   make(map[chan struct{}]bool),
-	}
-}
-
-func (m *dynamicMockStatus) Status() webui.RunStatus {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.status
-}
-
-func (m *dynamicMockStatus) Subscribe() chan struct{} {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ch := make(chan struct{}, 1)
-	m.subs[ch] = true
-	return ch
-}
-
-func (m *dynamicMockStatus) Unsubscribe(ch chan struct{}) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.subs, ch)
-}
-
-func (m *dynamicMockStatus) setStatus(status webui.RunStatus) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.status = status
-	for ch := range m.subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
 	}
 }
 

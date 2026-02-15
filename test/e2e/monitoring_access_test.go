@@ -158,7 +158,7 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 
 	// Stderr contains the post-exit message
 	assert.Contains(t, stderrStr, "Press Ctrl-C")
-	assert.Contains(t, stderrStr, "process exited")
+	assert.Contains(t, stderrStr, "process stopped")
 }
 
 // TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI tests that sending

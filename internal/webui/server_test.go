@@ -7,30 +7,24 @@ import (
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// MockStatus implements StatusProvider for testing.
-type MockStatus struct {
-	RunStatus RunStatus
-	Subs      map[chan struct{}]bool
+// newTestRunnerWithLogger creates a runner for testing with a pre-populated logger.
+func newTestRunnerWithLogger(logger *accesslog.Logger) *runner.Runner {
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{
+		Running:  true,
+		ExitCode: 0,
+		Error:    "",
+		Command:  "echo hello",
+	})
+	return rnr
 }
-
-func NewMockStatus() *MockStatus {
-	return &MockStatus{
-		RunStatus: RunStatus{Running: true, ExitCode: 0, Error: "", Command: "echo hello"},
-		Subs:      make(map[chan struct{}]bool),
-	}
-}
-
-func (m *MockStatus) Status() RunStatus { return m.RunStatus }
-func (m *MockStatus) Subscribe() chan struct{} {
-	ch := make(chan struct{}, 1)
-	m.Subs[ch] = true
-	return ch
-}
-func (m *MockStatus) Unsubscribe(ch chan struct{}) { delete(m.Subs, ch) }
 
 // --- parseLastEventID unit tests ---
 
@@ -78,7 +72,7 @@ func TestParseLastEventID_ZeroIndex(t *testing.T) {
 
 func TestSSE_SessionEventSentFirst(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 
 	sessionID := GetSessionID(t, srv.URL())
 
@@ -104,7 +98,7 @@ func TestSSE_EntryEventIDFormat(t *testing.T) {
 		Rule:      "fs:ro:/usr",
 	}))
 
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 	sessionID := GetSessionID(t, srv.URL())
 
 	resp, err := http.Get(srv.URL() + "/events")
@@ -131,7 +125,7 @@ func TestSSE_SameSessionReconnect(t *testing.T) {
 		}))
 	}
 
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 	sessionID := GetSessionID(t, srv.URL())
 
 	// Reconnect with Last-Event-ID from same session at index 1
@@ -163,7 +157,7 @@ func TestSSE_CrossSessionReconnect(t *testing.T) {
 		}))
 	}
 
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 	sessionID := GetSessionID(t, srv.URL())
 
 	// Reconnect with Last-Event-ID from a different session
@@ -201,7 +195,7 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 			Rule:      "fs:ro:/usr",
 		}))
 	}
-	srv1 := StartServer(t, logger1, NewMockStatus())
+	srv1 := StartServer(t, logger1)
 
 	resp1, err := http.Get(srv1.URL() + "/events?from=3")
 	require.NoError(t, err)
@@ -221,7 +215,7 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 			Rule:      "fs:deny:/tmp",
 		}))
 	}
-	srv2 := StartServer(t, logger2, NewMockStatus())
+	srv2 := StartServer(t, logger2)
 	srv2SessionID := GetSessionID(t, srv2.URL())
 
 	req, err := http.NewRequest(http.MethodGet, srv2.URL()+"/events", nil)
@@ -252,7 +246,7 @@ func TestSSE_MalformedLastEventID(t *testing.T) {
 		Rule:      "fs:ro:/usr",
 	}))
 
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 	sessionID := GetSessionID(t, srv.URL())
 
 	// Reconnect with malformed Last-Event-ID (old numeric format)
@@ -275,7 +269,7 @@ func TestSSE_MalformedLastEventID(t *testing.T) {
 
 func TestIndex_SessionIDInHTML(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 
 	resp, err := http.Get(srv.URL() + "/")
 	require.NoError(t, err)
@@ -294,7 +288,7 @@ func TestIndex_SessionIDInHTML(t *testing.T) {
 
 func TestIndex_CommandInHTML(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 
 	resp, err := http.Get(srv.URL() + "/")
 	require.NoError(t, err)
@@ -313,7 +307,7 @@ func TestIndex_CommandInHTML(t *testing.T) {
 
 func TestSSE_CommandInStatusEvent(t *testing.T) {
 	logger := accesslog.New(nil)
-	srv := StartServer(t, logger, NewMockStatus())
+	srv := StartServer(t, logger)
 
 	resp, err := http.Get(srv.URL() + "/events")
 	require.NoError(t, err)
@@ -330,9 +324,25 @@ func TestSSE_CommandInStatusEvent(t *testing.T) {
 
 // StartServer creates and starts a Server on an OS-assigned port, returning it.
 // Use srv.URL() to get the actual bound address.
-func StartServer(t *testing.T, logger *accesslog.Logger, status StatusProvider) *Server {
+// If logger is nil, the runner will have no logger (nil Logger() return value).
+func StartServer(t *testing.T, logger *accesslog.Logger) *Server {
 	t.Helper()
-	srv := New(logger, status, "0")
+	r := newTestRunnerWithLogger(logger)
+	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
+	command := []string{"true"}
+	srv := New(r, cfg, command, "0")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	return srv
+}
+
+// StartServerWithRunner creates and starts a Server with the given runner.
+// Use this when you need a runner in a specific state.
+func StartServerWithRunner(t *testing.T, r *runner.Runner) *Server {
+	t.Helper()
+	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
+	command := []string{"true"}
+	srv := New(r, cfg, command, "0")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv

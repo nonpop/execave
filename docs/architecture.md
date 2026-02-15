@@ -10,6 +10,7 @@ flowchart TB
         FSRules[FS Rules: internal/fsrules]
         NetRules[Net Rules: internal/netrules]
         AccessLog[Access Log: internal/accesslog]
+        Runner[Runner: internal/runner]
         Sandbox[Sandbox: internal/sandbox]
         Monitor[Monitor: internal/monitor]
         Proxy[Proxy: internal/proxy]
@@ -27,8 +28,10 @@ flowchart TB
     end
 
     CLI --> Config
-    CLI --> Sandbox
-    CLI --> Monitor
+    CLI --> Runner
+    Runner --> Sandbox
+    Runner --> Monitor
+    Runner --> AccessLog
     CLI --> Proxy
     CLI --> WebUI
     Config --> FSRules
@@ -37,7 +40,7 @@ flowchart TB
     Monitor --> AccessLog
     Proxy --> NetRules
     Proxy --> AccessLog
-    WebUI --> AccessLog
+    WebUI --> Runner
     Sandbox --> FSRules
     Sandbox -->|bwrap| Tunnel
     Tunnel --> Process
@@ -51,81 +54,33 @@ flowchart TB
 
 ### Config (`internal/config/`)
 
-- Loads JSON configuration and routes rules by resource prefix
-- Routes `fs:` rules to `fsrules.Parse()` and `net:` rules to `netrules.Parse()`
-- Rejects unknown resource prefixes (not `fs:` or `net:`)
-- Calls each rule package's cross-rule validation after parsing
-- Thin layer focused on JSON parsing and rule routing
+Loads JSON configuration and routes rules to domain-specific parsers. Thin layer focused on JSON parsing and rule routing by resource prefix (`fs:` vs `net:`).
 
 ### FS Rules (`internal/fsrules/`)
 
-Self-contained FS rule engine handling parsing, validation, and resolution.
-
-**Parsing and validation:**
-- Rule syntax: `fs:<permission>:<path>`
-- Permissions: `rw`, `ro`, `none`
-- Path normalization (relative → absolute)
-- Cross-rule validation: no duplicates, managed paths protected, config file not writable
-- Symlinks resolved at runtime, not during config parsing
-
-**Rule resolution:**
-- Most-specific path wins (longest prefix matching)
-- `PermissionFor`: returns permission for a path
-- `CheckAccess`: resolves symlinks and checks operation permission
-- Used by both sandbox (config file protection) and monitor (access attribution)
+Self-contained filesystem rule engine. Parses `fs:<permission>:<path>` rules with validation, resolves permissions for paths using most-specific-wins matching, and handles symlink resolution at runtime. Used by sandbox for mount configuration and monitor for access attribution.
 
 See security-model.md for path normalization risks.
 
 ### Net Rules (`internal/netrules/`)
 
-Self-contained net rule engine handling parsing, validation, and resolution.
-
-**Parsing and validation:**
-- Rule syntax: `net:<protocol>:<target>:<port>`
-- Protocols: `https`, `http`, `none`
-- Target types: domain (with optional wildcard), IPv4/IPv6, CIDR
-- Parsing order: bracketed IPv6 → CIDR → IP → domain fallback
-- Cross-rule validation: no duplicate `(target, port)` identity, no mixed port patterns per target
-
-**Rule resolution:**
-- Single-dimension target specificity: exact > wildcard (domains), longer prefix > shorter (CIDRs)
-- Protocol compatibility: `none` matches any protocol
-- Default-deny when no rule matches
+Self-contained network rule engine. Parses `net:<protocol>:<target>:<port>` rules supporting domains (with wildcards), IPs, and CIDRs. Resolves permissions using target specificity matching with default-deny. Used by proxy for request authorization.
 
 ### Access Log (`internal/accesslog/`)
 
-In-memory access log storage with deduplication, filtering, and pub/sub notifications.
+In-memory access log with deduplication and pub/sub notifications. Filters infrastructure paths and notifies subscribers of new entries. Used by monitor (filesystem), proxy (network), and web UI (display).
 
-- Entry storage: maintains `[]Entry` slice with thread-safe access
-- Deduplication: each unique (operation, target, result) logged once
-- Infrastructure filtering: `/dev`, `/proc`, `/tmp`, `/newroot`, `/oldroot`
-- Pub/sub mechanism: subscribers notified on new entries (non-blocking sends)
-- Entry format: `Operation`, `Target`, `Result`, `Rule` fields
-- Used by monitor (filesystem), proxy (network), and web UI (display)
+### Runner (`internal/runner/`)
+
+Manages lifecycle of monitored sandbox executions with start/stop control, status tracking, and automatic cleanup. Creates fresh access logs per run and handles terminal restoration. Bridges web UI and CLI with sandbox+monitor subsystems.
 
 ### Web UI (`internal/webui/`)
 
-Localhost web server for real-time access log viewing. Active when `--monitor=PORT` is specified.
-
-- HTTP server bound to `127.0.0.1:PORT`
-- Dependencies: `*accesslog.Logger` (entries), `StatusProvider` interface (run status)
-- Routes:
-  - `GET /` - Server-rendered HTML page with current entries and SSE client
-  - `GET /events?from=N` - Server-Sent Events stream for real-time updates
-- `StatusProvider` interface: read-only access to `RunStatus` (command, running/exited, etc.) with pub/sub. Concrete `statusTracker` lives in `cmd/execave` — CLI orchestrator calls `SetRunning()`/`SetExited()`; Server subscribes for changes via the interface.
-- SSE cursor-based streaming: replays entries from index N, then streams new entries
-- Session-aware reconnection: SSE event IDs encode `sessionID:index`; cross-session reconnects replay from 0 and the client clears stale entries
-- Server lifecycle: starts before sandbox, survives sandbox exit, stops on SIGINT
+Localhost web server (`127.0.0.1:PORT`) for real-time access log viewing and run control. Serves server-rendered HTML with SSE streaming for live updates. Provides start/stop controls that delegate to runner. Survives sandbox exit for log review; active when `--monitor=PORT` is specified.
 
 ### Sandbox (`internal/sandbox/`)
 
-- Translates rules to bwrap args:
-  - `fs:rw` → `--bind`
-  - `fs:ro` → `--ro-bind`
-  - `fs:none` → `--tmpfs` (directories) or `--bind /dev/null` (files)
-- Mount ordering: shortest paths first (parents before children); children overlay parents
-
-When net rules are configured or monitoring is enabled, the sandbox bind-mounts the proxy UDS (`/tmp/execave-proxy.sock`) and the execave binary (`/tmp/execave`) read-only, then wraps the user command with `execave network-tunnel`.
+Translates filesystem rules to bwrap mount arguments (`--bind`, `--ro-bind`, `--tmpfs`). When network access or monitoring is enabled, injects proxy tunnel infrastructure into the sandbox namespace.
 
 See security-model.md for bwrap arg risks.
 
@@ -145,41 +100,19 @@ Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, networ
 
 ### Proxy (`internal/proxy/`)
 
-Forward HTTP proxy listening on a Unix domain socket. Runs on the host (trusted side).
-
-- Handles CONNECT for HTTPS tunneling and plain HTTP forwarding
-- Checks each request against `netrules.Resolver` allowlist
-- Denied requests receive 403 Forbidden
-- Logs each request to `accesslog.Logger` (if monitoring enabled)
-- Lifecycle: `Start()` creates UDS → `Stop()` drains connections → removes UDS
+Forward HTTP proxy on Unix domain socket (host-side). Handles HTTPS CONNECT tunneling and HTTP forwarding, checking requests against network rules. Denies unauthorized requests and logs all attempts when monitoring is enabled.
 
 ### Tunnel (`internal/tunnel/`)
 
-TCP-to-UDS bridge running inside the sandbox (untrusted side).
-
-- Listens on `127.0.0.1:0` inside the sandbox
-- Relays TCP connections to the proxy UDS
-- Sets `HTTP_PROXY`/`HTTPS_PROXY`/`http_proxy`/`https_proxy` to `http://127.0.0.1:<port>`
-- Unsets `NO_PROXY`/`no_proxy` (bypass would lose connectivity, not circumvent allowlist)
-- Runs user command as subprocess, propagates exit code
-- Fail-closed: exits non-zero if listener bind or UDS access fails
+TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, relays connections to proxy UDS, and configures HTTP proxy environment variables. Wraps user command and propagates exit code. Fail-closed on infrastructure errors.
 
 ### Monitor (`internal/monitor/`)
 
-Optional (`--monitor=PORT`). Traces filesystem access via strace and logs with rule attribution. Displayed in real-time web UI.
-
-- Wraps bwrap: `strace -- bwrap [args] -- cmd`
-- Parses strace output, maps syscalls to operations (READ/WRITE)
-- Filters setup/infrastructure syscalls (bwrap's namespace creation)
-- Uses `fsrules.Resolver` for symlink resolution and rule matching
-- Filters non-existent path reads (via resolver's `PathNotFound` field)
-- Constructs `accesslog.Entry` for each access and delegates to `accesslog.Logger`
-- Symlinks targeting managed paths logged as UNKNOWN (host can't resolve sandbox-internal filesystems)
-- Entries stored in memory (not file) and streamed to web UI via SSE
+Optional filesystem access tracer (`--monitor=PORT`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
 
 ## Data Flow
 
-**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates access logger and status tracker (if `--monitor=PORT`) → starts web UI server with status tracker as `StatusProvider` (if `--monitor=PORT`) → starts proxy (if net rules or monitoring) → executes `bwrap` (or `strace + bwrap` with monitoring)
+**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates runner (if `--monitor=PORT`) → starts web UI server with runner (if `--monitor=PORT`) → starts proxy (if net rules or monitoring) → calls `runner.Start()` for initial run (if monitoring) or executes `bwrap` directly (if not monitoring)
 
 **Runtime (without net rules, no monitoring):** Kernel enforces namespace isolation (mount, PID, IPC, network). No network access. No proxy.
 

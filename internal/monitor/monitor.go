@@ -92,14 +92,28 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 
 	// Wait for strace (and traced command) to exit
 	err = cmd.Wait()
+
+	// Close the read end to unblock the processing goroutine. When strace is
+	// killed (context cancellation), descendant processes (bwrap, sandboxed
+	// command) may briefly hold the pipe write end open — they inherit fd 3
+	// from strace but never use it. Without this close, the processing
+	// goroutine blocks on read waiting for EOF that won't come until all
+	// descendants die, which delays all post-exit cleanup (terminal
+	// restoration, screen clearing, etc.).
+	// In the normal exit case this is harmless: strace has already closed its
+	// write end and the goroutine has already reached EOF or is about to.
+	_ = straceR.Close()
+
 	exitCode, exitErr := extractExitCode(err)
 	if exitErr != nil {
 		return exitCode, exitErr
 	}
 
-	// Wait for processing goroutine to finish (it drains remaining pipe data)
+	// Wait for processing goroutine to finish
 	processingErr := <-processingErrCh
-	if processingErr != nil {
+	if processingErr != nil && ctx.Err() == nil {
+		// Ignore pipe read errors caused by the forced close above.
+		// Only report processing errors from normal (non-cancelled) runs.
 		return exitCode, fmt.Errorf("process strace output: %w", processingErr)
 	}
 

@@ -3,9 +3,9 @@ schema: use-case-driven
 context: |
   Security-critical Linux filesystem and network sandbox (bubblewrap + strace). Bugs enable sandbox escapes or unintended access.
   Tech: Go, Linux namespaces. Domain: Filesystem isolation, network isolation, mount namespaces, rule-based access control. See docs/security-model.md.
-  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, sandbox, monitor, proxy, tunnel, webui.
+  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, runner, sandbox, monitor, proxy, tunnel, webui.
   Network: Default-deny (no NIC). When net rules present or monitoring enabled: forward proxy on UDS + TCP-to-UDS tunnel bridge. Proxy enforces allowlist (deny-all with no net rules).
-  Monitoring: --monitor=PORT starts localhost web UI with real-time access log via SSE. In-memory entry storage with pub/sub notifications. Server survives sandbox exit for log review.
+  Monitoring: --monitor=PORT starts localhost web UI with real-time access log via SSE and run control (start/stop/restart). Runner manages monitored sandbox lifecycle, creates fresh access log per run. Server survives sandbox exit for log review.
 
 rules:
   proposal:

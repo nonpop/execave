@@ -13,10 +13,9 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/monitor"
 	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/proxy"
+	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/nonpop/execave/internal/webui"
@@ -121,6 +120,17 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPort strin
 	return nil
 }
 
+// validateMonitorPort validates the monitor port flag when monitoring is enabled.
+func validateMonitorPort(cmd *cobra.Command, port string) error {
+	if !cmd.Flags().Changed("monitor") {
+		return nil
+	}
+	if port == "" {
+		return errors.New("--monitor requires a port number (e.g., --monitor=9876)")
+	}
+	return validatePort(port)
+}
+
 func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort string) (int, error) {
 	command := extractCommand(cmd, args)
 
@@ -129,18 +139,10 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 		return 0, fmt.Errorf("load config from %s: %w", configPath, err)
 	}
 
-	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-
 	monitorEnabled := cmd.Flags().Changed("monitor")
 
-	// Validate monitor port if monitoring is enabled
-	if monitorEnabled {
-		if monitorPort == "" {
-			return 0, errors.New("--monitor requires a port number (e.g., --monitor=9876)")
-		}
-		if err := validatePort(monitorPort); err != nil {
-			return 0, fmt.Errorf("invalid port for --monitor: %w", err)
-		}
+	if err := validateMonitorPort(cmd, monitorPort); err != nil {
+		return 0, fmt.Errorf("invalid port for --monitor: %w", err)
 	}
 
 	absConfigPath, err := filepath.Abs(configPath)
@@ -155,6 +157,23 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 
+	// Ignore SIGTTOU so terminal ioctls (tcsetattr, tcflush, tcsetpgrp)
+	// succeed when execave is in a background process group. This happens
+	// when --new-session is skipped (Linux 6.2+): the sandboxed process can
+	// call tcsetpgrp() to become the foreground group, and when it dies,
+	// execave is left as a background group.
+	//
+	// Must use signal.Ignore (not signal.Notify): the kernel's
+	// tty_check_change checks for SIG_IGN disposition specifically. A Go
+	// runtime handler (signal.Notify) does not satisfy is_ignored(), causing
+	// an infinite SIGTTOU/restart loop on terminal ioctls from a background
+	// group.
+	//
+	// SIG_IGN is inherited by children across exec, but this is harmless:
+	// interactive shells (bash, zsh) reset their own signal handlers on
+	// startup, and non-interactive children don't use job control.
+	signal.Ignore(syscall.SIGTTOU)
+
 	// Restore terminal state on exit, even if command fails.
 	// This prevents sandboxed processes from leaving the terminal in a bad state
 	// (e.g., echo disabled, raw mode enabled).
@@ -163,9 +182,15 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 
 	ctx := context.Background()
 
+	// When monitoring is enabled, the runner manages the logger lifecycle
+	// and updates the proxy via OnLoggerChange. Pass nil logger to the proxy.
 	logger := setupAccessLog(monitorEnabled)
+	proxyLogger := logger
+	if monitorEnabled {
+		proxyLogger = nil
+	}
 
-	netPath, proxyCleanup, err := setupNetworking(cfg, logger, monitorEnabled)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitorEnabled)
 	if err != nil {
 		return 0, err
 	}
@@ -176,7 +201,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 	sb := sandbox.New(cfg, absConfigPath, netPath)
 
 	if monitorEnabled {
-		return runMonitored(ctx, sb, logger, resolver, command, monitorPort, sigCh)
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitorPort, sigCh)
 	}
 
 	exitCode, err := sb.Run(ctx, command)
@@ -238,20 +263,20 @@ func validatePort(port string) error {
 // or if monitoring is enabled. When monitoring is enabled without net rules, the
 // proxy starts with an empty rule set (deny-all) so that HTTP-proxy-aware
 // programs' network access attempts are logged.
-func setupNetworking(cfg *config.Config, logger *accesslog.Logger, monitorEnabled bool) (*sandbox.NetworkPath, func(), error) {
+func setupNetworking(cfg *config.Config, logger *accesslog.Logger, monitorEnabled bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
 	if !cfg.HasNetRules() && !monitorEnabled {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	netPath, proxyInstance, err := startProxy(cfg, logger)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cleanup := func() {
 		if err := proxyInstance.Stop(); err != nil {
 			fmt.Fprintf(os.Stderr, "execave: stop proxy: %v\n", err)
 		}
 	}
-	return netPath, cleanup, nil
+	return netPath, proxyInstance, cleanup, nil
 }
 
 func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkPath, *proxy.Proxy, error) {
@@ -286,35 +311,45 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 }
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring and web UI.
-func runMonitored(ctx context.Context, sb *sandbox.Sandbox, logger *accesslog.Logger, resolver *fsrules.Resolver, command []string, port string, sigCh chan os.Signal) (int, error) {
-	// Create run status tracker
-	status := newStatusTracker(command)
+// access monitoring and web UI with run control.
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, port string, sigCh chan os.Signal) (int, error) {
+	// Create runner
+	rnr := runner.New(cfg, absConfigPath, netPath)
 
-	// Start web UI server
-	server := webui.New(logger, status, port)
+	// Wire logger lifecycle: when the runner creates a fresh logger on each Start,
+	// update the proxy so network access entries go to the same logger.
+	if httpProxy != nil {
+		rnr.OnLoggerChange = httpProxy.SetLogger
+	}
+
+	// Start web UI server with runner
+	server := webui.New(rnr, cfg, command, port)
 	if err := server.Start(ctx); err != nil {
 		return 0, fmt.Errorf("start web UI server: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "execave: monitor running at %s\n", server.URL())
 
-	status.SetRunning()
+	// Start initial run
+	if err := rnr.Start(ctx, cfg, command); err != nil {
+		return 0, fmt.Errorf("start initial run: %w", err)
+	}
 
-	// Run sandbox with monitoring
-	bwrapArgs := sb.BuildBwrapArgs(command)
-	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath())
-	exitCode, runErr := mon.Run(ctx, command)
-
-	status.SetExited(exitCode, runErr)
-
-	fmt.Fprintf(os.Stderr, "execave: process exited with code %d. Monitor still running at %s\n", exitCode, server.URL())
-	fmt.Fprintf(os.Stderr, "execave: Press Ctrl-C to stop monitor and exit\n")
-
-	// Wait for SIGINT then exit immediately
+	// Wait for SIGINT
 	<-sigCh
 
-	if runErr != nil {
-		return 0, fmt.Errorf("run monitor+sandbox: %w", runErr)
+	// Wait for the active run to finish. The child already received SIGINT
+	// via the process group and is dying — don't call Stop() which would
+	// escalate to SIGKILL via context cancellation.
+	statusCh := rnr.Subscribe()
+	for rnr.Status().Running {
+		<-statusCh
 	}
-	return exitCode, nil
+	rnr.Unsubscribe(statusCh)
+
+	// Get final status
+	status := rnr.Status()
+	if status.Error != "" {
+		return status.ExitCode, fmt.Errorf("run monitor+sandbox: %s", status.Error)
+	}
+	return status.ExitCode, nil
 }

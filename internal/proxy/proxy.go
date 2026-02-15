@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -35,7 +36,7 @@ const (
 // Proxy is a forward HTTP proxy that listens on a UDS and enforces net rules.
 type Proxy struct {
 	resolver  *netrules.Resolver
-	logger    *accesslog.Logger
+	logger    atomic.Pointer[accesslog.Logger]
 	listener  net.Listener
 	udsPath   string
 	wg        sync.WaitGroup
@@ -46,15 +47,25 @@ type Proxy struct {
 // New creates a new Proxy with the given net rules resolver and access logger.
 // logger may be nil if access logging is not needed.
 func New(resolver *netrules.Resolver, logger *accesslog.Logger) *Proxy {
-	return &Proxy{
+	proxy := &Proxy{
 		resolver:  resolver,
-		logger:    logger,
+		logger:    atomic.Pointer[accesslog.Logger]{},
 		listener:  nil,
 		udsPath:   "",
 		wg:        sync.WaitGroup{},
 		server:    nil,
 		transport: &http.Transport{},
 	}
+	if logger != nil {
+		proxy.logger.Store(logger)
+	}
+	return proxy
+}
+
+// SetLogger replaces the access logger. Safe for concurrent use with request handlers.
+// logger may be nil to disable access logging.
+func (p *Proxy) SetLogger(logger *accesslog.Logger) {
+	p.logger.Store(logger)
 }
 
 // Start creates the UDS at the given path and begins accepting connections.
@@ -211,7 +222,8 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result netrules.ResolveResult) {
-	if p.logger == nil {
+	logger := p.logger.Load()
+	if logger == nil {
 		return
 	}
 
@@ -220,7 +232,7 @@ func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result 
 		logResult = accesslog.ResultDeny
 	}
 
-	if err := p.logger.Log(accesslog.Entry{
+	if err := logger.Log(accesslog.Entry{
 		Operation: opType,
 		Target:    target,
 		Result:    logResult,

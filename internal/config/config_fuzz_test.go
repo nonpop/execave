@@ -32,7 +32,7 @@ func FuzzLoad(f *testing.F) {
 		configPath := filepath.Join(tmpDir, "fuzz.json")
 
 		if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
-			t.Skip("failed to write config file")
+			t.Fatal("failed to write config file")
 		}
 
 		cfg, err := config.Load(configPath, nil)
