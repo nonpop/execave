@@ -21,6 +21,7 @@ import (
 	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 const (
@@ -154,6 +155,12 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 
+	// Restore terminal state on exit, even if command fails.
+	// This prevents sandboxed processes from leaving the terminal in a bad state
+	// (e.g., echo disabled, raw mode enabled).
+	restoreTerminal := saveTerminalState()
+	defer restoreTerminal()
+
 	ctx := context.Background()
 
 	logger := setupAccessLog(monitorEnabled)
@@ -177,6 +184,24 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 		return 0, fmt.Errorf("run sandbox: %w", err)
 	}
 	return exitCode, nil
+}
+
+// saveTerminalState saves the current terminal state and returns a function
+// that restores it. Call the returned function via defer to ensure the terminal
+// is restored even if the sandboxed process leaves it in a bad state.
+func saveTerminalState() func() {
+	stdinFd := int(os.Stdin.Fd())
+	if !term.IsTerminal(stdinFd) {
+		return func() {}
+	}
+	oldState, err := term.GetState(stdinFd)
+	if err != nil {
+		// IsTerminal just confirmed stdin is a terminal; GetState uses the
+		// same ioctl so failure here means the fd was closed concurrently.
+		panic(fmt.Sprintf("get terminal state after IsTerminal succeeded: %v", err))
+	}
+	// Ignore restore errors - terminal is already in unknown state.
+	return func() { _ = term.Restore(stdinFd, oldState) }
 }
 
 // extractCommand extracts the command to run from cobra arguments.

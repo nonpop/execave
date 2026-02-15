@@ -22,7 +22,10 @@
       "Bash(git status:*)",
       "Bash(go get:*)",
       "Bash(xargs:*)",
-      "Bash(openspec list:*)"
+      "Bash(openspec list:*)",
+      "Bash(go list:*)",
+      "Bash(go doc:*)",
+      "Bash(go env:*)"
     ]
   }
 }
