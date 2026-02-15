@@ -10,7 +10,6 @@ import (
 
 func roRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "ro:" + path,
@@ -19,7 +18,6 @@ func roRule(path string) fsrules.Rule {
 
 func rwRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "rw:" + path,

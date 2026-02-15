@@ -41,7 +41,6 @@ func fsRule(permission Permission, path string) Rule {
 	}
 
 	return Rule{
-		Resource:   ResourceFS,
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,

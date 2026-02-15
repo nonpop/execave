@@ -43,9 +43,6 @@ func FuzzLoad(f *testing.F) {
 		// Invariants that must hold for any successfully loaded config:
 		seenPaths := make(map[string]bool)
 		for _, rule := range cfg.FSRules {
-			// Resource must be valid (not Unknown)
-			assert.NotEqual(t, fsrules.ResourceUnknown, rule.Resource)
-
 			// Permission must be valid (not Unknown)
 			assert.NotEqual(t, fsrules.PermissionUnknown, rule.Permission)
 

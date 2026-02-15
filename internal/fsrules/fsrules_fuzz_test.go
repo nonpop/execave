@@ -35,9 +35,6 @@ func FuzzParseRule(f *testing.F) {
 
 		// Invariants for successfully parsed rules:
 
-		// Resource must be valid
-		assert.NotEqual(t, ResourceUnknown, rule.Resource)
-
 		// Permission must be valid
 		assert.NotEqual(t, PermissionUnknown, rule.Permission)
 

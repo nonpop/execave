@@ -26,7 +26,6 @@ func TestParseRule_Valid(t *testing.T) {
 
 			assert.Equal(t, tt.expectedPerm, rule.Permission)
 			assert.Equal(t, tt.expectedPath, rule.Path)
-			assert.Equal(t, ResourceFS, rule.Resource)
 		})
 	}
 }

@@ -62,7 +62,6 @@ func (e *monitorTestEnv) readLog() string {
 
 func roRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
@@ -71,7 +70,6 @@ func roRule(path string) fsrules.Rule {
 
 func rwRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,

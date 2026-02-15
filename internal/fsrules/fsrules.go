@@ -14,21 +14,10 @@ import (
 
 // Rule represents a parsed filesystem access rule.
 type Rule struct {
-	Resource   Resource
 	Permission Permission
 	Path       string
 	RawRule    string // Original rule for error messages and logging
 }
-
-// Resource represents the type of resource a rule applies to.
-type Resource int
-
-const (
-	// ResourceUnknown represents an uninitialized or invalid state.
-	ResourceUnknown Resource = iota
-	// ResourceFS represents filesystem access.
-	ResourceFS
-)
 
 // Permission represents the access level. Higher values are stricter.
 type Permission int
@@ -72,7 +61,6 @@ func Parse(ruleBody, configDir string) (Rule, error) {
 	normalizedPath := normalizePath(path, configDir)
 
 	return Rule{
-		Resource:   ResourceFS,
 		Permission: perm,
 		Path:       normalizedPath,
 		RawRule:    ruleBody,

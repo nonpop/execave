@@ -74,7 +74,6 @@ func (e *monitorTestEnv) logLines() []string {
 
 func roRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
@@ -111,7 +110,6 @@ func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
 
 func rwRule(path string) fsrules.Rule {
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,

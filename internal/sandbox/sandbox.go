@@ -160,7 +160,6 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 
 	if writableConfig {
 		syntheticRule := fsrules.Rule{
-			Resource:   fsrules.ResourceFS,
 			Permission: fsrules.PermissionReadOnly,
 			Path:       s.configPath,
 			RawRule:    "fs:ro:" + s.configPath,

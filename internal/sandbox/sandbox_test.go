@@ -28,7 +28,6 @@ func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
 	}
 
 	return fsrules.Rule{
-		Resource:   fsrules.ResourceFS,
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
