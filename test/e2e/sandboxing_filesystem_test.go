@@ -1,9 +1,15 @@
 package e2e_test
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -256,4 +262,64 @@ func TestE2E_SandboxingFilesystem_RelativePathsInRulesResolvedRelativeToConfigDi
 
 	assertExitCode(t, result, 0)
 	assert.Contains(t, result.Stdout, "hello")
+}
+
+// TestE2E_SandboxingFilesystem_TUIApplicationsReceiveTerminalResizeSignals tests that
+// on modern kernels (Linux 6.2+) where TIOCSTI is blocked, sandboxed TUI applications
+// receive SIGWINCH for terminal resize events.
+func TestE2E_SandboxingFilesystem_TUIApplicationsReceiveTerminalResizeSignals(t *testing.T) {
+	failIfNoBwrap(t)
+
+	// Skip test on old kernels where TIOCSTI is not blocked by default
+	data, err := os.ReadFile("/proc/sys/dev/tty/legacy_tiocsti")
+	if err != nil {
+		t.Skip("skipping: /proc/sys/dev/tty/legacy_tiocsti not available (pre-6.2 kernel)")
+	}
+	// Trim whitespace and check for "0"
+	if strings.TrimSpace(string(data)) != "0" {
+		t.Skipf("skipping: TIOCSTI not blocked by kernel (expected '0', got '%s')", strings.TrimSpace(string(data)))
+	}
+
+	tmpDir := testTempDir(t)
+	signalFile := filepath.Join(tmpDir, "signal-received")
+	scriptFile := filepath.Join(tmpDir, "trap-sigwinch.sh")
+
+	// Create a script that traps SIGWINCH and writes to a file, then loops
+	script := fmt.Sprintf(`#!/bin/bash
+trap 'echo "received" > %[1]s && exit 0' WINCH
+# Loop for a while to give time for signal delivery
+for i in {1..50}; do
+  sleep 0.1
+  # Exit early if signal was received
+  [ -f %[1]s ] && exit 0
+done
+exit 1`, signalFile)
+	createFile(t, scriptFile, script)
+
+	rules := append(systemPaths(), "fs:rw:"+tmpDir)
+	configPath := writeConfig(t, rules)
+
+	// Start the sandboxed process in the background
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binaryPath, "--config", configPath, "--", "bash", scriptFile) //#nosec G204 -- test code intentionally launches binary with test-controlled args
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	require.NoError(t, cmd.Start())
+
+	// Give the sandbox time to start and set up the signal handler
+	time.Sleep(500 * time.Millisecond)
+
+	// Send SIGWINCH to the sandboxed process group
+	require.NoError(t, syscall.Kill(-cmd.Process.Pid, syscall.SIGWINCH))
+
+	// Wait for the process to complete
+	err = cmd.Wait()
+	require.NoError(t, err)
+
+	// Verify the signal was received
+	data, err = os.ReadFile(signalFile) //#nosec G304 -- test-controlled file path in temp directory
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "received")
 }

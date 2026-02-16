@@ -58,7 +58,7 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 		"--monitor=0",
 		"--",
 		"sh", "-c", "cat "+testFile+" && sleep 10")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} //nolint:exhaustruct
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stderrPipe, err := cmd.StderrPipe()
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 		"--monitor=0",
 		"--",
 		"cat", dataFile)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} //nolint:exhaustruct
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout strings.Builder
 	cmd.Stdout = &stdout

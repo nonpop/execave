@@ -47,7 +47,7 @@ flowchart LR
 | Sandboxed process can't see host processes | PID namespace isolation |
 | Sandboxed process can't signal host processes | PID namespace isolation |
 | Sandboxed process can't share memory with host | IPC namespace isolation |
-| Sandboxed process can't inject terminal input | `--new-session` (no controlling TTY) |
+| Sandboxed process can't inject terminal input | Kernel TIOCSTI disabling (Linux 6.2+) or `--new-session` fallback (older kernels) |
 | No network access by default | Network namespace isolation (`--unshare-all` without `--share-net`) |
 | Network access only via allowlist | Forward proxy on UDS enforces net rules; no NIC inside sandbox |
 | No DNS exfiltration | No DNS resolver reachable from sandbox |
@@ -73,7 +73,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Process enumeration | PID namespace - only sees own processes | None |
 | Kill/signal host processes | PID namespace - host PIDs don't exist | None |
 | Shared memory exploitation | IPC namespace isolation | None |
-| Terminal injection (TIOCSTI, CVE-2017-5226) | `--new-session` detaches controlling TTY | None |
+| Terminal injection (TIOCSTI, CVE-2017-5226) | Kernel blocks TIOCSTI (Linux 6.2+); fallback to `--new-session` on older kernels | None |
 | Direct network access | No NIC in sandbox (network namespace isolation) | None |
 | DNS exfiltration | No DNS resolver reachable from sandbox | None |
 | UDP/ICMP covert channel | No network stack; only TCP relay via proxy | None |

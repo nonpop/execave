@@ -40,7 +40,7 @@ linters:
     exhaustruct:
       exclude:
         - '.+/cobra\.Command$'
-        - '(net|net/http|crypto/tls)\..+' # stdlib structs are well-known, well-behaved, and stable
+        - '(net|net/http|crypto/tls|syscall)\..+' # stdlib structs are well-known, well-behaved, and stable
 
     goconst:
       ignore-tests: true

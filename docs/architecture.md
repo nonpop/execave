@@ -141,7 +141,7 @@ The sandboxed process inherits the host's working directory. If the host cwd is 
 
 #### Process Isolation
 
-Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, network). Uses `--new-session` to detach the controlling terminal. Environment variables pass through from the host. Network is isolated by default; when net rules are configured or monitoring is enabled, a proxy-tunnel bridge provides controlled access (or deny-all logging with no net rules).
+Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, network). On older kernels, uses `--new-session` to prevent TIOCSTI terminal injection; on Linux 6.2+ where the kernel blocks TIOCSTI, `--new-session` is skipped to allow SIGWINCH delivery for TUI applications. Environment variables pass through from the host. Network is isolated by default; when net rules are configured or monitoring is enabled, a proxy-tunnel bridge provides controlled access (or deny-all logging with no net rules).
 
 ### Proxy (`internal/proxy/`)
 

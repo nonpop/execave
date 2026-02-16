@@ -234,7 +234,7 @@ func runMonitoredCmd(t *testing.T, opts monitorRunOpts, args ...string) monitore
 	t.Helper()
 
 	cmd := exec.CommandContext(context.Background(), binaryPath, args...) // #nosec G204 -- test code with controlled args
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}                 //nolint:exhaustruct
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	var stdout strings.Builder
 	cmd.Stdout = &stdout

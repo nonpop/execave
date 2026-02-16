@@ -16,6 +16,9 @@ import (
 	"github.com/nonpop/execave/internal/fsrules"
 )
 
+// tiocSTISysctlPath is the sysctl path for TIOCSTI legacy mode.
+const tiocSTISysctlPath = "/proc/sys/dev/tty/legacy_tiocsti"
+
 // ManagedDirs are directories the sandbox handles automatically.
 // Includes: runtime infrastructure (/dev, /proc), isolation (/tmp),
 // and bwrap's internal pivot_root directories (/newroot, /oldroot).
@@ -103,6 +106,21 @@ func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 	return 0, nil
 }
 
+// tiocSTIBlocked reports whether the kernel blocks TIOCSTI terminal injection.
+// Returns true only when sysctl at path contains "0" (TIOCSTI disabled).
+// Returns false for all other cases: sysctl contains non-zero value, file absent, or unreadable.
+// This fail-safe default ensures --new-session is used when kernel status is unknown.
+func tiocSTIBlocked(sysctlPath string) bool {
+	data, err := os.ReadFile(sysctlPath) //#nosec G304 -- sysctlPath is a hardcoded constant, not user input
+	if err != nil {
+		// File absent (pre-6.2 kernel) or unreadable - assume TIOCSTI enabled
+		return false
+	}
+
+	content := strings.TrimSpace(string(data))
+	return content == "0"
+}
+
 // BuildBwrapArgs constructs bwrap arguments (exported for monitor integration).
 func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	args := []string{}
@@ -111,7 +129,11 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	args = append(args, "--unshare-all")
 
 	// Create new session to prevent TIOCSTI terminal injection attacks (CVE-2017-5226).
-	args = append(args, "--new-session")
+	// Skip on modern kernels (6.2+) where TIOCSTI is already blocked by the kernel.
+	// This allows SIGWINCH delivery for TUI applications while maintaining security.
+	if !tiocSTIBlocked(tiocSTISysctlPath) {
+		args = append(args, "--new-session")
+	}
 
 	// Environment variables pass through from host (no --clearenv)
 

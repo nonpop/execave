@@ -25,7 +25,8 @@
       "Bash(openspec list:*)",
       "Bash(go list:*)",
       "Bash(go doc:*)",
-      "Bash(go env:*)"
+      "Bash(go env:*)",
+      "Bash(openspec instructions playbooks:*)"
     ]
   }
 }
