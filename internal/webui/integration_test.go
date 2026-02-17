@@ -11,6 +11,8 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/stretchr/testify/assert"
@@ -74,11 +76,11 @@ func TestIntegration_AccessLogPage_PageDisplaysEntries(t *testing.T) {
 	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.URL()+"/")
 
-	// All four columns present in a table row
+	// Three columns present in a table row; matched rule visible as tooltip
 	assert.Contains(t, body, `<td class="operation">READ</td>`)
 	assert.Contains(t, body, `<td class="target">/tmp/data/file.txt</td>`)
 	assert.Contains(t, body, "OK")
-	assert.Contains(t, body, `<td class="rule">fs:ro:/tmp/data</td>`)
+	assert.Contains(t, body, `title="fs:ro:/tmp/data"`)
 }
 
 func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
@@ -137,9 +139,10 @@ func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status)
+	// Read initial events (session + status + rules)
 	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status
+	readEventWithTimeout(t, eventCh) // rules
 
 	// Log a new entry after SSE connection is established
 	require.NoError(t, logger.Log(accesslog.Entry{
@@ -174,14 +177,14 @@ func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + entries 30..49 = 22 events
-	events := webui.ReadSSEEvents(t, resp, 22)
-	require.Len(t, events, 22)
+	// session + status + rules + entries 30..49 = 23 events
+	events := webui.ReadSSEEvents(t, resp, 23)
+	require.Len(t, events, 23)
 
 	// First entry event should be index 30
-	assert.Equal(t, sessionID+":30", events[2].ID)
+	assert.Equal(t, sessionID+":30", events[3].ID)
 	// Last entry event should be index 49
-	assert.Equal(t, sessionID+":49", events[21].ID)
+	assert.Equal(t, sessionID+":49", events[22].ID)
 }
 
 // --- Requirement: No entries dropped between page load and SSE ---
@@ -206,14 +209,14 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + 2 entries (50, 51)
-	events := webui.ReadSSEEvents(t, resp, 4)
-	require.Len(t, events, 4)
+	// session + status + rules + 2 entries (50, 51)
+	events := webui.ReadSSEEvents(t, resp, 5)
+	require.Len(t, events, 5)
 
-	assert.Equal(t, sessionID+":50", events[2].ID)
-	assert.Contains(t, events[2].Data, "entry50")
-	assert.Equal(t, sessionID+":51", events[3].ID)
-	assert.Contains(t, events[3].Data, "entry51")
+	assert.Equal(t, sessionID+":50", events[3].ID)
+	assert.Contains(t, events[3].Data, "entry50")
+	assert.Equal(t, sessionID+":51", events[4].ID)
+	assert.Contains(t, events[4].Data, "entry51")
 }
 
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLastEventId(t *testing.T) {
@@ -239,12 +242,12 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + entries 76..79 = 6 events
-	events := webui.ReadSSEEvents(t, resp, 6)
-	require.Len(t, events, 6)
+	// session + status + rules + entries 76..79 = 7 events
+	events := webui.ReadSSEEvents(t, resp, 7)
+	require.Len(t, events, 7)
 
 	// First entry should be index 76 (resume from next after 75)
-	assert.Equal(t, sessionID+":76", events[2].ID)
+	assert.Equal(t, sessionID+":76", events[3].ID)
 }
 
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnectReplaysFromStart(t *testing.T) {
@@ -270,13 +273,13 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + all 5 entries from 0
-	events := webui.ReadSSEEvents(t, resp, 7)
-	require.Len(t, events, 7)
+	// session + status + rules + all 5 entries from 0
+	events := webui.ReadSSEEvents(t, resp, 8)
+	require.Len(t, events, 8)
 
 	// Replayed from entry 0
-	assert.Equal(t, sessionID+":0", events[2].ID)
-	assert.Equal(t, sessionID+":4", events[6].ID)
+	assert.Equal(t, sessionID+":0", events[3].ID)
+	assert.Equal(t, sessionID+":4", events[7].ID)
 }
 
 // --- Requirement: Run status display ---
@@ -362,9 +365,10 @@ func TestIntegration_RunStatusDisplay_StatusUpdatesStreamedViaSse(t *testing.T) 
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status)
+	// Read initial events (session + status + rules)
 	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status (Running)
+	readEventWithTimeout(t, eventCh) // rules
 
 	// Change status and notify
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "sleep 60"})
@@ -449,6 +453,104 @@ func TestIntegration_RunControlEndpoints_StopEndpointWhenIdle(t *testing.T) {
 
 	// Response is 200 (no-op)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// --- Requirement: Rules pane ---
+
+func TestIntegration_RulesPane_RulesDisplayedOnPageLoad(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+
+	// Create config with rules
+	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
+	require.NoError(t, err)
+	fsRule1.RawRule = "fs:ro:/usr/lib"
+	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
+	require.NoError(t, err)
+	fsRule2.RawRule = "fs:rw:/tmp"
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := fetchBody(t, srv.URL()+"/")
+
+	// Verify rules are present in the HTML
+	assert.Contains(t, body, "fs:ro:/usr/lib")
+	assert.Contains(t, body, "fs:rw:/tmp")
+
+	// Verify rules appear in the expected order (fs rules first)
+	idxRule1 := strings.Index(body, "fs:ro:/usr/lib")
+	idxRule2 := strings.Index(body, "fs:rw:/tmp")
+	assert.Less(t, idxRule1, idxRule2, "fs:ro:/usr/lib should appear before fs:rw:/tmp")
+}
+
+func TestIntegration_RulesPane_EmptyRulesDisplayed(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+
+	cfg := &config.Config{
+		FSRules:      nil,
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := fetchBody(t, srv.URL()+"/")
+
+	// The page should still render successfully
+	assert.Contains(t, body, "Execave Access Monitor")
+}
+
+func TestIntegration_RulesPane_BothFsAndNetRulesDisplayed(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+
+	// Create fs rule
+	fsRule, err := fsrules.Parse("ro:/usr/lib", "/")
+	require.NoError(t, err)
+	fsRule.RawRule = "fs:ro:/usr/lib"
+
+	// Create net rule
+	netRule, err := netrules.Parse("https:example.com:443")
+	require.NoError(t, err)
+	netRule.RawRule = "net:https:example.com:443"
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule},
+		NetRules:     []netrules.Rule{netRule},
+		ManagedPaths: nil,
+	}
+
+	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := fetchBody(t, srv.URL()+"/")
+
+	// Verify both rules are present in the HTML
+	assert.Contains(t, body, "fs:ro:/usr/lib")
+	assert.Contains(t, body, "net:https:example.com:443")
+
+	// Verify fs rules appear before net rules
+	idxFsRule := strings.Index(body, "fs:ro:/usr/lib")
+	idxNetRule := strings.Index(body, "net:https:example.com:443")
+	assert.Less(t, idxFsRule, idxNetRule, "fs rules should appear before net rules")
 }
 
 // --- Requirement: Run control buttons ---

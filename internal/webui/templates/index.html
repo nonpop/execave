@@ -179,15 +179,61 @@
             color: #f9826c;
         }
 
-        td.rule {
-            color: #586069;
-            font-size: 12px;
-        }
-
         .empty-state {
             padding: 40px;
             text-align: center;
             color: #586069;
+        }
+
+        .content {
+            display: flex;
+            gap: 20px;
+        }
+
+        .rules-pane {
+            flex: 0 0 350px;
+            background-color: #fff;
+            border: 1px solid #e1e4e8;
+            border-radius: 6px;
+            padding: 16px;
+            overflow-y: auto;
+            max-height: calc(100vh - 200px);
+        }
+
+        .rules-pane h2 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #24292e;
+        }
+
+        .rules-list {
+            list-style: none;
+        }
+
+        .rules-list li {
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            border-radius: 3px;
+            font-size: 12px;
+            color: #24292e;
+            background-color: #f6f8fa;
+            word-break: break-all;
+        }
+
+        .rules-list li:hover {
+            background-color: #eaecef;
+        }
+
+        .log-pane {
+            flex: 1;
+            min-width: 0;
+            overflow-y: auto;
+            max-height: calc(100vh - 200px);
+        }
+
+        .highlight {
+            background-color: #fff8c5 !important;
         }
     </style>
 </head>
@@ -217,33 +263,44 @@
         {{end}}
     </div>
 
-    <div class="container">
-        <table id="entries-table" data-entry-count="{{.EntryCount}}" data-session-id="{{.SessionID}}">
-            <thead>
-                <tr>
-                    <th>Operation</th>
-                    <th>Target</th>
-                    <th>Result</th>
-                    <th>Rule</th>
-                </tr>
-            </thead>
-            <tbody id="entries-body">
-                {{if eq .EntryCount 0}}
-                <tr>
-                    <td colspan="4" class="empty-state">No access log entries yet. Waiting for sandbox activity...</td>
-                </tr>
-                {{else}}
-                {{range .Entries}}
-                <tr>
-                    <td class="operation">{{.Operation}}</td>
-                    <td class="target">{{.Target}}</td>
-                    <td class="result {{if eq .Result "OK"}}ok{{else if eq .Result "DENY"}}deny{{else}}unknown{{end}}">{{.Result}}</td>
-                    <td class="rule">{{.Rule}}</td>
-                </tr>
+    <div class="content">
+        <div class="rules-pane">
+            <h2>Rules</h2>
+            <ul class="rules-list">
+                {{range .Rules}}
+                <li data-rule="{{.}}">{{.}}</li>
                 {{end}}
-                {{end}}
-            </tbody>
-        </table>
+            </ul>
+        </div>
+
+        <div class="log-pane">
+            <div class="container">
+                <table id="entries-table" data-entry-count="{{.EntryCount}}" data-session-id="{{.SessionID}}">
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>Target</th>
+                            <th>Result</th>
+                        </tr>
+                    </thead>
+                    <tbody id="entries-body">
+                        {{if eq .EntryCount 0}}
+                        <tr>
+                            <td colspan="3" class="empty-state">No access log entries yet. Waiting for sandbox activity...</td>
+                        </tr>
+                        {{else}}
+                        {{range .Entries}}
+                        <tr data-rule="{{.Rule}}" title="{{.Rule}}">
+                            <td class="operation">{{.Operation}}</td>
+                            <td class="target">{{.Target}}</td>
+                            <td class="result {{if eq .Result "OK"}}ok{{else if eq .Result "DENY"}}deny{{else}}unknown{{end}}">{{.Result}}</td>
+                        </tr>
+                        {{end}}
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -281,6 +338,8 @@
 
                 // Append new entry row using safe DOM methods
                 const row = tbody.insertRow();
+                row.dataset.rule = entry.rule;
+                row.title = entry.rule;
 
                 const opCell = row.insertCell();
                 opCell.className = 'operation';
@@ -294,14 +353,32 @@
                 resultCell.className = 'result ' + getResultClass(entry.result);
                 resultCell.textContent = entry.result;
 
-                const ruleCell = row.insertCell();
-                ruleCell.className = 'rule';
-                ruleCell.textContent = entry.rule;
+                attachEntryHoverListener(row);
             });
 
             eventSource.addEventListener('status', function(e) {
                 const status = JSON.parse(e.data);
                 updateStatus(status);
+            });
+
+            eventSource.addEventListener('rules', function(e) {
+                const rules = JSON.parse(e.data);
+                const rulesList = document.querySelector('.rules-list');
+
+                // Clear existing rules
+                while (rulesList.firstChild) {
+                    rulesList.removeChild(rulesList.firstChild);
+                }
+
+                // Add new rules
+                rules.forEach(function(rule) {
+                    const li = document.createElement('li');
+                    li.dataset.rule = rule;
+                    li.textContent = rule;
+                    rulesList.appendChild(li);
+
+                    attachRuleHoverListener(li);
+                });
             });
 
             eventSource.onerror = function() {
@@ -396,6 +473,56 @@
                     }
                 }
             }
+
+            // Attach hover listener to a single rule element
+            function attachRuleHoverListener(ruleElement) {
+                ruleElement.addEventListener('mouseenter', function() {
+                    const rule = ruleElement.getAttribute('data-rule');
+                    const matchingRows = document.querySelectorAll('tbody tr[data-rule="' + CSS.escape(rule) + '"]');
+                    matchingRows.forEach(function(row) {
+                        row.classList.add('highlight');
+                    });
+                });
+
+                ruleElement.addEventListener('mouseleave', function() {
+                    const highlighted = document.querySelectorAll('.highlight');
+                    highlighted.forEach(function(el) {
+                        el.classList.remove('highlight');
+                    });
+                });
+            }
+
+            // Attach hover listeners to initial rules
+            const ruleElements = document.querySelectorAll('.rules-list li');
+            ruleElements.forEach(function(ruleElement) {
+                attachRuleHoverListener(ruleElement);
+            });
+
+            // Attach hover listener to a single entry row
+            function attachEntryHoverListener(row) {
+                row.addEventListener('mouseenter', function() {
+                    const rule = row.getAttribute('data-rule');
+                    if (rule) {
+                        const matchingRule = document.querySelector('.rules-list li[data-rule="' + CSS.escape(rule) + '"]');
+                        if (matchingRule) {
+                            matchingRule.classList.add('highlight');
+                        }
+                    }
+                });
+
+                row.addEventListener('mouseleave', function() {
+                    const highlighted = document.querySelectorAll('.highlight');
+                    highlighted.forEach(function(el) {
+                        el.classList.remove('highlight');
+                    });
+                });
+            }
+
+            // Attach listeners to initial rows
+            const initialRows = tbody.querySelectorAll('tr[data-rule]');
+            initialRows.forEach(function(row) {
+                attachEntryHoverListener(row);
+            });
         })();
     </script>
 </body>

@@ -330,15 +330,22 @@ func assertWebUIHasEntry(t *testing.T, webUI string, substrings ...string) {
 	t.Errorf("web UI has no single row containing all of %q", substrings)
 }
 
-// parseTableRows extracts the content between each <tr>...</tr> pair in the HTML.
+// parseTableRows extracts the content between each <tr...>...</tr> pair in the HTML.
+// Handles both <tr> and <tr data-rule="..."> formats.
 func parseTableRows(html string) []string {
 	var rows []string
 	rest := html
 	for {
-		start := strings.Index(rest, "<tr>")
+		start := strings.Index(rest, "<tr")
 		if start == -1 {
 			break
 		}
+		// Find the end of the opening tag
+		tagEnd := strings.Index(rest[start:], ">")
+		if tagEnd == -1 {
+			break
+		}
+		// Find the closing tag
 		end := strings.Index(rest[start:], "</tr>")
 		if end == -1 {
 			break

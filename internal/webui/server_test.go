@@ -8,6 +8,7 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -105,11 +106,11 @@ func TestSSE_EntryEventIDFormat(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + 1 entry
-	events := ReadSSEEvents(t, resp, 3)
-	require.GreaterOrEqual(t, len(events), 3)
+	// session + status + rules + 1 entry
+	events := ReadSSEEvents(t, resp, 4)
+	require.GreaterOrEqual(t, len(events), 4)
 
-	entryEvent := events[2]
+	entryEvent := events[3]
 	assert.Equal(t, "entry", entryEvent.Event)
 	assert.Equal(t, sessionID+":0", entryEvent.ID)
 }
@@ -137,13 +138,14 @@ func TestSSE_SameSessionReconnect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should get: session + status + entry at index 2 only
-	events := ReadSSEEvents(t, resp, 3)
-	require.GreaterOrEqual(t, len(events), 3)
+	// Should get: session + status + rules + entry at index 2 only
+	events := ReadSSEEvents(t, resp, 4)
+	require.GreaterOrEqual(t, len(events), 4)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, "status", events[1].Event)
-	assert.Equal(t, "entry", events[2].Event)
-	assert.Equal(t, sessionID+":2", events[2].ID)
+	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "entry", events[3].Event)
+	assert.Equal(t, sessionID+":2", events[3].ID)
 }
 
 func TestSSE_CrossSessionReconnect(t *testing.T) {
@@ -169,15 +171,16 @@ func TestSSE_CrossSessionReconnect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should replay from 0: session + status + 2 entries
-	events := ReadSSEEvents(t, resp, 4)
-	require.GreaterOrEqual(t, len(events), 4)
+	// Should replay from 0: session + status + rules + 2 entries
+	events := ReadSSEEvents(t, resp, 5)
+	require.GreaterOrEqual(t, len(events), 5)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, sessionID, events[0].Data)
-	assert.Equal(t, "entry", events[2].Event)
-	assert.Equal(t, sessionID+":0", events[2].ID)
+	assert.Equal(t, "rules", events[2].Event)
 	assert.Equal(t, "entry", events[3].Event)
-	assert.Equal(t, sessionID+":1", events[3].ID)
+	assert.Equal(t, sessionID+":0", events[3].ID)
+	assert.Equal(t, "entry", events[4].Event)
+	assert.Equal(t, sessionID+":1", events[4].ID)
 }
 
 // TestSSE_SessionEventIDEnablesCrossSessionDetection verifies that when a
@@ -199,9 +202,9 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 
 	resp1, err := http.Get(srv1.URL() + "/events?from=3")
 	require.NoError(t, err)
-	events1 := ReadSSEEvents(t, resp1, 2) // session + status only
+	events1 := ReadSSEEvents(t, resp1, 3) // session + status + rules only
 	resp1.Body.Close()                    //nolint:errcheck,gosec // best-effort close in test
-	require.Len(t, events1, 2)
+	require.Len(t, events1, 3)
 	sessionEventID := events1[0].ID
 	require.NotEmpty(t, sessionEventID, "session event must have an id for Last-Event-ID")
 
@@ -226,15 +229,16 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 	require.NoError(t, err)
 	defer resp2.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should detect cross-session and replay from 0: session + status + 2 entries
-	events2 := ReadSSEEvents(t, resp2, 4)
-	require.Len(t, events2, 4)
+	// Should detect cross-session and replay from 0: session + status + rules + 2 entries
+	events2 := ReadSSEEvents(t, resp2, 5)
+	require.Len(t, events2, 5)
 	assert.Equal(t, "session", events2[0].Event)
 	assert.Equal(t, srv2SessionID, events2[0].Data)
-	assert.Equal(t, "entry", events2[2].Event)
-	assert.Equal(t, srv2SessionID+":0", events2[2].ID)
+	assert.Equal(t, "rules", events2[2].Event)
 	assert.Equal(t, "entry", events2[3].Event)
-	assert.Equal(t, srv2SessionID+":1", events2[3].ID)
+	assert.Equal(t, srv2SessionID+":0", events2[3].ID)
+	assert.Equal(t, "entry", events2[4].Event)
+	assert.Equal(t, srv2SessionID+":1", events2[4].ID)
 }
 
 func TestSSE_MalformedLastEventID(t *testing.T) {
@@ -258,13 +262,14 @@ func TestSSE_MalformedLastEventID(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should replay from 0: session + status + 1 entry
-	events := ReadSSEEvents(t, resp, 3)
-	require.GreaterOrEqual(t, len(events), 3)
+	// Should replay from 0: session + status + rules + 1 entry
+	events := ReadSSEEvents(t, resp, 4)
+	require.GreaterOrEqual(t, len(events), 4)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, sessionID, events[0].Data)
-	assert.Equal(t, "entry", events[2].Event)
-	assert.Equal(t, sessionID+":0", events[2].ID)
+	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "entry", events[3].Event)
+	assert.Equal(t, sessionID+":0", events[3].ID)
 }
 
 func TestIndex_SessionIDInHTML(t *testing.T) {
@@ -318,6 +323,56 @@ func TestSSE_CommandInStatusEvent(t *testing.T) {
 	require.GreaterOrEqual(t, len(events), 2)
 	assert.Equal(t, "status", events[1].Event)
 	assert.Contains(t, events[1].Data, `"command":"echo hello"`)
+}
+
+func TestSSE_RulesEventSentOnConnect(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	resp, err := http.Get(srv.URL() + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	// session + status + rules
+	events := ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+	assert.Equal(t, "session", events[0].Event)
+	assert.Equal(t, "status", events[1].Event)
+	assert.Equal(t, "rules", events[2].Event)
+}
+
+func TestSSE_RulesEventContainsConfigRules(t *testing.T) {
+	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
+	require.NoError(t, err)
+	fsRule1.RawRule = "fs:ro:/usr/lib"
+	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
+	require.NoError(t, err)
+	fsRule2.RawRule = "fs:rw:/tmp"
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	logger := accesslog.New(nil)
+	r := newTestRunnerWithLogger(logger)
+	srv := New(r, cfg, []string{"true"}, "0")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	resp, err := http.Get(srv.URL() + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	// session + status + rules
+	events := ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+
+	rulesEvent := events[2]
+	assert.Equal(t, "rules", rulesEvent.Event)
+	assert.Contains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
+	assert.Contains(t, rulesEvent.Data, `"fs:rw:/tmp"`)
 }
 
 // --- helpers ---

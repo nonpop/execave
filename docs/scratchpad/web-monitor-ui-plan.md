@@ -37,7 +37,6 @@ The UI is localhost-only, server-rendered with minimal JS, session-only history,
 - `saved_config_doc` (full JSON document model for preserving unknown fields)
 - `draft_rules`
 - `initial_command` + `command_override`
-- `runs[]` history (per-run tabs, in memory only)
 - `active_run` handle (cancel func + status)
 
 2. Thread safety:
@@ -75,7 +74,7 @@ The UI is localhost-only, server-rendered with minimal JS, session-only history,
 4. UNKNOWN handling:
 - Show in separate unmatched category with reason.
 - Do not associate UNKNOWN entries with rules.
-5. Keep runs as separate tabs (timestamp + command + exit status).
+5. Each new run clears the previous run's log entries.
 
 ### 6. Save Semantics
 1. Save writes canonical pretty JSON to the original config path.
@@ -89,7 +88,7 @@ The UI is localhost-only, server-rendered with minimal JS, session-only history,
 1. Main layout panes:
 - Left: config editor (rule builder + raw JSON toggle)
 - Center: run controls/status + command override
-- Right: run tabs and access log table
+- Right: run status and access log table
 2. Matching interactions:
 - Click log row -> highlight matched rule.
 - Click rule -> filter/highlight matching log rows.
@@ -128,9 +127,9 @@ The UI is localhost-only, server-rendered with minimal JS, session-only history,
 - Unknown top-level fields remain preserved.
 - External file drift shows warning but save still succeeds and overwrites.
 
-6. History/session:
-- Multiple runs remain as separate tabs.
-- Restarting UI process clears history (no persistence).
+6. Run replacement:
+- Starting a new run clears previous run's log entries.
+- Restarting UI process resets all state.
 
 ## Assumptions and Defaults
 1. Linux-only behavior remains unchanged.

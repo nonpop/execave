@@ -246,6 +246,78 @@ func TestE2E_IteratingConfig_RestartReplacesActiveRun(t *testing.T) {
 	_ = cmd.Wait()
 }
 
+// TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog tests that the web UI displays
+// config rules in a rules pane alongside the access log table.
+func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
+	env := newMonitorTest(t)
+
+	dataDir := filepath.Join(env.TmpDir, "data")
+	tmpDir := filepath.Join(env.TmpDir, "tmp")
+	createFile(t, filepath.Join(dataDir, "file.txt"), "test data")
+	createFile(t, filepath.Join(tmpDir, "out.txt"), "output")
+
+	rules := append(systemPaths(), "fs:ro:"+dataDir, "fs:rw:"+tmpDir)
+	configPath := writeConfig(t, rules)
+
+	// Start execave with monitoring
+	//nolint:gosec // G204: test uses controlled input from test fixtures
+	cmd := exec.CommandContext(context.Background(), binaryPath,
+		"--config", configPath,
+		"--monitor=0",
+		"--",
+		"ls", dataDir)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stderrPipe, err := cmd.StderrPipe()
+	require.NoError(t, err)
+	cmd.Stdout = os.Stdout
+
+	require.NoError(t, cmd.Start())
+
+	// Wait for web UI to be ready, extract monitor URL
+	var monitorURL string
+	var stderrOnce sync.Once
+	ready := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			if after, ok := strings.CutPrefix(scanner.Text(), "execave: monitor running at "); ok {
+				monitorURL = after
+				stderrOnce.Do(func() { close(ready) })
+			}
+		}
+		stderrOnce.Do(func() { close(ready) })
+	}()
+	<-ready
+	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
+
+	// Wait for the run to complete
+	time.Sleep(500 * time.Millisecond)
+
+	// Fetch web UI and verify both rules pane and access log are present
+	webUI := fetchWebUI(t, monitorURL)
+
+	// Verify rules pane is present
+	assert.Contains(t, webUI, "Rules")
+
+	// Verify both rules are displayed
+	assert.Contains(t, webUI, "fs:ro:"+dataDir)
+	assert.Contains(t, webUI, "fs:rw:"+tmpDir)
+
+	// Verify access log table is present (has the standard headers)
+	assert.Contains(t, webUI, "Operation")
+	assert.Contains(t, webUI, "Target")
+	assert.Contains(t, webUI, "Result")
+	assert.Contains(t, webUI, "Rule")
+
+	// Verify at least one access log entry is present (from ls command)
+	assert.Contains(t, webUI, dataDir)
+
+	// Clean up
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+	_ = cmd.Wait()
+}
+
 // TestE2E_IteratingConfig_StartButtonClickTriggersStart is a placeholder for testing
 // that clicking the Start button in the browser triggers a POST /api/start request.
 // This requires browser/JS execution which is not supported in this test framework.

@@ -143,18 +143,29 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	}
 	status := s.runner.Status()
 
+	// Extract raw rules from config
+	rules := make([]string, 0, len(s.cfg.FSRules)+len(s.cfg.NetRules))
+	for _, r := range s.cfg.FSRules {
+		rules = append(rules, r.RawRule)
+	}
+	for _, r := range s.cfg.NetRules {
+		rules = append(rules, r.RawRule)
+	}
+
 	data := struct {
 		Entries    []accesslog.Entry
 		EntryCount int
 		Status     runner.RunStatus
 		SessionID  string
 		Command    string
+		Rules      []string
 	}{
 		Entries:    entries,
 		EntryCount: len(entries),
 		Status:     status,
 		SessionID:  s.sessionID,
 		Command:    status.Command,
+		Rules:      rules,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -252,9 +263,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		defer stream.logger.Unsubscribe(stream.entryCh)
 	}
 
-	// Send session event, initial status, and initial entries from startIndex
+	// Send session event, initial status, rules, and initial entries from startIndex
 	s.sendSessionEvent(w, startIndex)
 	s.sendStatusEvent(w, s.runner.Status())
+	s.sendRulesEvent(w)
 	if stream.logger != nil {
 		stream.entries = stream.logger.Entries()
 		for i := startIndex; i < len(stream.entries); i++ {
@@ -331,6 +343,25 @@ func (s *Server) sendStatusEvent(w http.ResponseWriter, status runner.RunStatus)
 		panic(fmt.Sprintf("failed to marshal status: %v", err))
 	}
 	_, _ = fmt.Fprintf(w, "event: status\n")
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+// sendRulesEvent sends the current config rules as an SSE event.
+// Write errors are ignored: they only occur on client disconnect, which ctx.Done handles.
+func (s *Server) sendRulesEvent(w http.ResponseWriter) {
+	rules := make([]string, 0, len(s.cfg.FSRules)+len(s.cfg.NetRules))
+	for _, r := range s.cfg.FSRules {
+		rules = append(rules, r.RawRule)
+	}
+	for _, r := range s.cfg.NetRules {
+		rules = append(rules, r.RawRule)
+	}
+
+	data, err := json.Marshal(rules)
+	if err != nil {
+		panic(fmt.Sprintf("failed to marshal rules: %v", err))
+	}
+	_, _ = fmt.Fprintf(w, "event: rules\n")
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
