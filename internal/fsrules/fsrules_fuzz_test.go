@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func FuzzParseRule(f *testing.F) {
@@ -14,6 +15,8 @@ func FuzzParseRule(f *testing.F) {
 	f.Add("none:/secret", "/config")
 	f.Add("ro:./relative", "/config")
 	f.Add("rw:../parent", "/config")
+	f.Add("rw:~/project", "/config")
+	f.Add("ro:~", "/config")
 
 	// Seed with invalid rules
 	f.Add("ro", "/config")
@@ -21,6 +24,7 @@ func FuzzParseRule(f *testing.F) {
 	f.Add(":", "/config")
 	f.Add("", "/config")
 	f.Add("invalid:/path", "/config")
+	f.Add("ro:~username/data", "/config")
 
 	f.Fuzz(func(t *testing.T, ruleStr, configDir string) {
 		// Use absolute configDir to test path resolution properly
@@ -62,6 +66,9 @@ func FuzzNormalizePath(f *testing.F) {
 	f.Add("/path/./current", "/tmp")
 	f.Add("", "/tmp")
 	f.Add("/", "/tmp")
+	f.Add("~/project", "/home/user")
+	f.Add("~", "/home/user")
+	f.Add("~foo", "/home/user")
 
 	f.Fuzz(func(t *testing.T, path, configDir string) {
 		// Use absolute configDir
@@ -69,9 +76,12 @@ func FuzzNormalizePath(f *testing.F) {
 			configDir = "/fuzz" + configDir
 		}
 
-		result := normalizePath(path, configDir)
+		result, err := normalizePath(path, configDir)
+		if err != nil {
+			return // ~username or other error is fine
+		}
 
-		// Invariants for path normalization:
+		// Invariants for successful path normalization:
 
 		// Result must be absolute (since configDir is absolute)
 		assert.True(t, filepath.IsAbs(result))
@@ -79,7 +89,9 @@ func FuzzNormalizePath(f *testing.F) {
 		// Result must be clean (idempotent under filepath.Clean)
 		assert.Equal(t, filepath.Clean(result), result)
 
-		// Normalizing the result again must be idempotent
-		assert.Equal(t, result, normalizePath(result, configDir))
+		// Normalizing the result again must be idempotent (result is already absolute, no tilde)
+		result2, err2 := normalizePath(result, configDir)
+		require.NoError(t, err2)
+		assert.Equal(t, result, result2)
 	})
 }

@@ -1,6 +1,7 @@
 package fsrules_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/nonpop/execave/internal/fsrules"
@@ -138,6 +139,94 @@ func TestIntegration_ManagedPathsCannotBeTargetedByRules_PathWithManagedPrefixIn
 	err := fsrules.Validate(rules, "/config.json", []string{"/dev", "/proc", "/tmp"})
 
 	assert.NoError(t, err)
+}
+
+// --- Requirement: Tilde expansion in paths ---
+
+func TestIntegration_TildeExpansionInPaths_TildeSlashPathExpandedToAbsolute(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	rule, err := fsrules.Parse("rw:~/project", "/")
+
+	require.NoError(t, err)
+	assert.Equal(t, homeDir+"/project", rule.Path)
+}
+
+func TestIntegration_TildeExpansionInPaths_BareTildeExpandedToHomeDirectory(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	rule, err := fsrules.Parse("ro:~", "/")
+
+	require.NoError(t, err)
+	assert.Equal(t, homeDir, rule.Path)
+}
+
+func TestIntegration_TildeExpansionInPaths_TildePathCleanedAfterExpansion(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	rule, err := fsrules.Parse("rw:~/project/../other", "/")
+
+	require.NoError(t, err)
+	assert.Equal(t, homeDir+"/other", rule.Path)
+}
+
+func TestIntegration_TildeExpansionInPaths_TildeUsernameRejected(t *testing.T) {
+	_, err := fsrules.Parse("ro:~otheruser/data", "/home/user")
+
+	require.ErrorContains(t, err, "~username")
+}
+
+// --- Requirement: Tilde-expanded paths participate in validation ---
+
+func TestIntegration_TildeExpandedPathsParticipateInValidation_TildeAndAbsolutePathDuplicateDetected(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tildeRule, err := fsrules.Parse("ro:~/project", "/")
+	require.NoError(t, err)
+
+	rules := []fsrules.Rule{
+		tildeRule,
+		roRule(homeDir + "/project"),
+	}
+
+	err = fsrules.Validate(rules, "/config.toml", nil)
+
+	require.ErrorContains(t, err, "duplicate path")
+}
+
+func TestIntegration_TildeExpandedPathsParticipateInValidation_TildePathAndEquivalentRelativePathDuplicateDetected(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tildeRule, err := fsrules.Parse("rw:~/project", homeDir)
+	require.NoError(t, err)
+
+	relRule, err := fsrules.Parse("rw:project", homeDir)
+	require.NoError(t, err)
+
+	rules := []fsrules.Rule{tildeRule, relRule}
+
+	err = fsrules.Validate(rules, "/config.toml", nil)
+
+	require.ErrorContains(t, err, "duplicate path")
+	require.ErrorContains(t, err, homeDir+"/project")
+}
+
+func TestIntegration_TildeExpandedPathsParticipateInValidation_TildePathTargetingConfigFileRejected(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	configPath := homeDir + "/myproject/execave.toml"
+	rule, err := fsrules.Parse("rw:~/myproject/execave.toml", "/")
+	require.NoError(t, err)
+
+	err = fsrules.Validate([]fsrules.Rule{rule}, configPath, nil)
+
+	require.ErrorContains(t, err, "config file must not be writable")
 }
 
 // --- Requirement: Most specific rule wins ---

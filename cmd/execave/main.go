@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	defaultConfigPath = "./execave.json"
+	defaultConfigPath = "./execave.toml"
 )
 
 func main() {
@@ -322,8 +322,14 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 		rnr.OnLoggerChange = httpProxy.SetLogger
 	}
 
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return 0, fmt.Errorf("resolve user home directory: %w", err)
+	}
+	configDir := filepath.Dir(absConfigPath)
+
 	// Start web UI server with runner
-	server := webui.New(rnr, cfg, command, port)
+	server := webui.New(rnr, cfg, command, port, homeDir, configDir)
 	if err := server.Start(ctx); err != nil {
 		return 0, fmt.Errorf("start web UI server: %w", err)
 	}

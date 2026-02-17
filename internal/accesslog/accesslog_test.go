@@ -82,7 +82,7 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 	for i := range numGoroutines {
 		for j := range entriesPerGoroutine {
 			expectedPath := fmt.Sprintf("/tmp/file-%d-%d.txt", i, j)
-			assert.True(t, entryMap[expectedPath], "expected path %s to be logged", expectedPath)
+			assert.True(t, entryMap[expectedPath])
 		}
 	}
 }
@@ -185,9 +185,9 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 
 			entries := logger.Entries()
 			if tt.filtered {
-				assert.Empty(t, entries, "expected path to be filtered")
+				assert.Empty(t, entries)
 			} else {
-				assert.Len(t, entries, 1, "expected path to be logged")
+				assert.Len(t, entries, 1)
 			}
 		})
 	}
@@ -211,7 +211,7 @@ func TestLogger_NonExistentReadLogged(t *testing.T) {
 	err := logger.Log(readEntry)
 	require.NoError(t, err)
 	entries := logger.Entries()
-	require.Len(t, entries, 1, "read of non-existent file should be logged")
+	require.Len(t, entries, 1)
 	assert.Equal(t, OperationRead, entries[0].Operation)
 }
 

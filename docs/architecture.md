@@ -54,11 +54,11 @@ flowchart TB
 
 ### Config (`internal/config/`)
 
-Loads JSON configuration and routes rules to domain-specific parsers. Thin layer focused on JSON parsing and rule routing by resource prefix (`fs:` vs `net:`).
+Loads TOML configuration and routes rules to domain-specific parsers. Thin layer focused on TOML parsing and rule routing by resource prefix (`fs:` vs `net:`). The default config filename is `execave.toml`.
 
 ### FS Rules (`internal/fsrules/`)
 
-Self-contained filesystem rule engine. Parses `fs:<permission>:<path>` rules with validation, resolves permissions for paths using most-specific-wins matching, and handles symlink resolution at runtime. Used by sandbox for mount configuration and monitor for access attribution.
+Self-contained filesystem rule engine. Parses `fs:<permission>:<path>` rules with validation, resolves permissions for paths using most-specific-wins matching, and handles symlink resolution at runtime. Paths support `~/...` tilde expansion and relative paths (resolved against the config file directory). Used by sandbox for mount configuration and monitor for access attribution.
 
 See security-model.md for path normalization risks.
 
@@ -76,7 +76,7 @@ Manages lifecycle of monitored sandbox executions with start/stop control, statu
 
 ### Web UI (`internal/webui/`)
 
-Localhost web server (`127.0.0.1:PORT`) for real-time access log viewing and run control. Serves server-rendered HTML with SSE streaming for live updates. Provides start/stop controls that delegate to runner. Survives sandbox exit for log review; active when `--monitor=PORT` is specified.
+Localhost web server (`127.0.0.1:PORT`) for real-time access log viewing and run control. Serves server-rendered HTML with SSE streaming for live updates. Filesystem target paths are displayed in shortened form: relative to the config directory if the path is under it, otherwise `~/...` form if the path is under the home directory, otherwise absolute. Network targets (HTTPS/HTTP) are shown verbatim. Provides start/stop controls that delegate to runner. Survives sandbox exit for log review; active when `--monitor=PORT` is specified.
 
 ### Sandbox (`internal/sandbox/`)
 
@@ -88,7 +88,7 @@ See security-model.md for bwrap arg risks.
 
 **Automatic:** `/dev`, `/proc`, `/tmp` (require special bwrap args)
 
-**Explicit (must be in config):** Everything else—`/usr`, `/lib`, `/lib64`, `/sys`, dynamic linker files, user data. See `execave.json.example`.
+**Explicit (must be in config):** Everything else—`/usr`, `/lib`, `/lib64`, `/sys`, dynamic linker files, user data. See `execave.toml.example`.
 
 #### Working Directory
 

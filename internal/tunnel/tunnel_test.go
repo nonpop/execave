@@ -59,7 +59,7 @@ func TestRun_NoCommand(t *testing.T) {
 	udsPath := startEchoUDS(t)
 
 	exitCode, err := tunnel.Run(udsPath, nil)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "no command specified")
 	assert.Equal(t, 1, exitCode)
 }
 

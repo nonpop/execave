@@ -3,6 +3,7 @@ module github.com/nonpop/execave
 go 1.25.6
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/term v0.40.0

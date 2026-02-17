@@ -318,66 +318,96 @@ func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
 	_ = cmd.Wait()
 }
 
-// TestE2E_IteratingConfig_StartButtonClickTriggersStart is a placeholder for testing
-// that clicking the Start button in the browser triggers a POST /api/start request.
-// This requires browser/JS execution which is not supported in this test framework.
-func TestE2E_IteratingConfig_StartButtonClickTriggersStart(t *testing.T) {
-	t.Skip("needs browser/JS execution")
-	// This test would verify:
-	// - Click "Start" button when idle
-	// - Verify POST /api/start is sent
-	// - Verify status updates to "Running" in the UI
+// TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig tests that
+// after execave restarts with a new config, a reconnecting SSE client receives a
+// rules event containing the updated rules.
+//
+// The visual rules pane update in the browser requires JavaScript and is not tested here.
+func TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig(t *testing.T) {
+	env := newMonitorTest(t)
+
+	dataDir := filepath.Join(env.TmpDir, "data")
+	createFile(t, filepath.Join(dataDir, "file.txt"), "test data")
+
+	// New config with a distinctive net rule (simulating what was added after restart)
+	newNetRule := "net:http:127.0.0.1:9999"
+	rules := append(systemPaths(), "fs:ro:"+dataDir, newNetRule)
+	configPath := writeConfig(t, rules)
+
+	//nolint:gosec // G204: test uses controlled input from test fixtures
+	cmd := exec.CommandContext(context.Background(), binaryPath,
+		"--config", configPath,
+		"--monitor=0",
+		"--",
+		"sleep", "60")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stderrPipe, err := cmd.StderrPipe()
+	require.NoError(t, err)
+	cmd.Stdout = os.Stdout
+
+	require.NoError(t, cmd.Start())
+
+	var monitorURL string
+	var stderrOnce sync.Once
+	ready := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			if after, ok := strings.CutPrefix(scanner.Text(), "execave: monitor running at "); ok {
+				monitorURL = after
+				stderrOnce.Do(func() { close(ready) })
+			}
+		}
+		stderrOnce.Do(func() { close(ready) })
+	}()
+	<-ready
+	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
+
+	defer func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+		_ = cmd.Wait()
+	}()
+
+	// Simulate browser reconnecting after execave restart: use a cross-session
+	// Last-Event-ID so the server replays from index 0 and emits fresh rules.
+	req, err := http.NewRequest(http.MethodGet, monitorURL+"/events", nil)
+	require.NoError(t, err)
+	req.Header.Set("Last-Event-ID", "old-session:0")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	// Read initial events: session + status + rules
+	events := readSSEEvents(resp, 3)
+	require.GreaterOrEqual(t, len(events), 3)
+
+	// Find the rules event
+	var rulesData string
+	for _, ev := range events {
+		if ev.event == "rules" {
+			rulesData = ev.data
+			break
+		}
+	}
+	require.NotEmpty(t, rulesData, "rules event not found in SSE stream")
+
+	// New config's rules are delivered to the reconnecting client
+	assert.Contains(t, rulesData, `"fs:ro:`+dataDir+`"`)
+	assert.Contains(t, rulesData, `"`+newNetRule+`"`)
 }
 
-// TestE2E_IteratingConfig_RestartButtonClickTriggersRestart is a placeholder for testing
-// that clicking the Restart button triggers a POST /api/start request while running.
-// This requires browser/JS execution which is not supported in this test framework.
-func TestE2E_IteratingConfig_RestartButtonClickTriggersRestart(t *testing.T) {
-	t.Skip("needs browser/JS execution")
-	// This test would verify:
-	// - Process is running
-	// - Click "Restart" button
-	// - Verify POST /api/start is sent
-	// - Verify access log is cleared in the browser
-	// - Verify new entries appear from the restarted run
+// TestE2E_IteratingConfig_HoverARuleToSeeMatchingLogEntries is a placeholder.
+// Hovering over a rule to highlight matching log entries requires JavaScript
+// execution in a browser and cannot be tested via plain HTTP.
+func TestE2E_IteratingConfig_HoverARuleToSeeMatchingLogEntries(t *testing.T) {
+	t.Skip("hover interaction requires JavaScript execution in a browser; see comment above")
 }
 
-// TestE2E_IteratingConfig_StopButtonClickTriggersStop is a placeholder for testing
-// that clicking the Stop button triggers a POST /api/stop request.
-// This requires browser/JS execution which is not supported in this test framework.
-func TestE2E_IteratingConfig_StopButtonClickTriggersStop(t *testing.T) {
-	t.Skip("needs browser/JS execution")
-	// This test would verify:
-	// - Process is running
-	// - Click "Stop" button
-	// - Verify POST /api/stop is sent
-	// - Verify status updates to "Exited" in the UI
-	// - Verify Stop button becomes disabled
-}
-
-// TestE2E_IteratingConfig_SSEStatusEventsUpdateButtonLabels is a placeholder for testing
-// that SSE status events update button labels and disabled state.
-// This requires browser/JS execution which is not supported in this test framework.
-func TestE2E_IteratingConfig_SSEStatusEventsUpdateButtonLabels(t *testing.T) {
-	t.Skip("needs browser/JS execution")
-	// This test would verify:
-	// - Connect to SSE stream
-	// - Receive status event with Running=true
-	// - Verify "Start" button label changes to "Restart"
-	// - Verify "Stop" button becomes enabled
-	// - Receive status event with Running=false
-	// - Verify "Restart" button label changes to "Start"
-	// - Verify "Stop" button becomes disabled
-}
-
-// TestE2E_IteratingConfig_SessionEventClearsAccessLogTable is a placeholder for testing
-// that receiving a "session" SSE event clears the browser's access log table.
-// This requires browser/JS execution which is not supported in this test framework.
-func TestE2E_IteratingConfig_SessionEventClearsAccessLogTable(t *testing.T) {
-	t.Skip("needs browser/JS execution")
-	// This test would verify:
-	// - Access log table has entries from a run
-	// - Trigger a restart (sends session event)
-	// - Verify the table is cleared in the browser
-	// - Verify new entries appear from the new run
+// TestE2E_IteratingConfig_HoverALogEntryToSeeItsMatchedRule is a placeholder.
+// Hovering over a log entry to highlight its matched rule requires JavaScript
+// execution in a browser and cannot be tested via plain HTTP.
+func TestE2E_IteratingConfig_HoverALogEntryToSeeItsMatchedRule(t *testing.T) {
+	t.Skip("hover interaction requires JavaScript execution in a browser; see comment above")
 }

@@ -27,6 +27,53 @@ func newTestRunnerWithLogger(logger *accesslog.Logger) *runner.Runner {
 	return rnr
 }
 
+// --- shortenPath unit tests ---
+
+func TestShortenPath_PathUnderConfigDirShortenedToRelative(t *testing.T) {
+	result := shortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
+	assert.Equal(t, "src/main.go", result)
+}
+
+func TestShortenPath_PathUnderHomeDirButOutsideConfigDirShortenedToTilde(t *testing.T) {
+	result := shortenPath("/home/user/.ssh/id_rsa", "/home/user", "/home/user/project")
+	assert.Equal(t, "~/.ssh/id_rsa", result)
+}
+
+func TestShortenPath_PathUnderBothConfigDirTakesPriority(t *testing.T) {
+	result := shortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
+	assert.Equal(t, "src/main.go", result)
+}
+
+func TestShortenPath_PathOutsideHomeDirShownAsAbsolute(t *testing.T) {
+	result := shortenPath("/usr/lib/libc.so", "/home/user", "/home/user/project")
+	assert.Equal(t, "/usr/lib/libc.so", result)
+}
+
+func TestShortenPath_PathEqualToConfigDirShortenedToDot(t *testing.T) {
+	result := shortenPath("/home/user/project", "/home/user", "/home/user/project")
+	assert.Equal(t, ".", result)
+}
+
+func TestShortenPath_EmptyHomeDirDisablesTildeShortening(t *testing.T) {
+	result := shortenPath("/home/user/.ssh/id_rsa", "", "/home/user/project")
+	assert.Equal(t, "/home/user/.ssh/id_rsa", result)
+}
+
+func TestShortenPath_PathEqualToHomeDir(t *testing.T) {
+	result := shortenPath("/home/user", "/home/user", "/home/user/project")
+	assert.Equal(t, "~", result)
+}
+
+func TestShortenPath_EmptyConfigDirUsesAbsoluteOrTilde(t *testing.T) {
+	result := shortenPath("/home/user/project/src/main.go", "/home/user", "")
+	assert.Equal(t, "~/project/src/main.go", result)
+}
+
+func TestShortenPath_BothEmptyReturnsAbsolute(t *testing.T) {
+	result := shortenPath("/home/user/project/src/main.go", "", "")
+	assert.Equal(t, "/home/user/project/src/main.go", result)
+}
+
 // --- parseLastEventID unit tests ---
 
 func TestParseLastEventID_Valid(t *testing.T) {
@@ -357,7 +404,7 @@ func TestSSE_RulesEventContainsConfigRules(t *testing.T) {
 
 	logger := accesslog.New(nil)
 	r := newTestRunnerWithLogger(logger)
-	srv := New(r, cfg, []string{"true"}, "0")
+	srv := New(r, cfg, []string{"true"}, "0", "", "")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -380,12 +427,20 @@ func TestSSE_RulesEventContainsConfigRules(t *testing.T) {
 // StartServer creates and starts a Server on an OS-assigned port, returning it.
 // Use srv.URL() to get the actual bound address.
 // If logger is nil, the runner will have no logger (nil Logger() return value).
+// Path shortening is disabled (empty homeDir and configDir).
 func StartServer(t *testing.T, logger *accesslog.Logger) *Server {
+	t.Helper()
+	return StartServerWithPaths(t, logger, "", "")
+}
+
+// StartServerWithPaths creates and starts a Server with the given homeDir and configDir
+// for path shortening.
+func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, configDir string) *Server {
 	t.Helper()
 	r := newTestRunnerWithLogger(logger)
 	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
 	command := []string{"true"}
-	srv := New(r, cfg, command, "0")
+	srv := New(r, cfg, command, "0", homeDir, configDir)
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
@@ -393,16 +448,18 @@ func StartServer(t *testing.T, logger *accesslog.Logger) *Server {
 
 // StartServerWithRunner creates and starts a Server with the given runner.
 // Use this when you need a runner in a specific state.
+// Path shortening is disabled (empty homeDir and configDir).
 func StartServerWithRunner(t *testing.T, r *runner.Runner) *Server {
 	t.Helper()
 	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
 	command := []string{"true"}
-	srv := New(r, cfg, command, "0")
+	srv := New(r, cfg, command, "0", "", "")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
 }
 
+// SSEEvent represents a parsed Server-Sent Event for test assertions.
 type SSEEvent struct {
 	Event string
 	Data  string

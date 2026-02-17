@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_ConfiguringExecave_DefaultConfigLocation tests that execave reads ./execave.json
+// TestE2E_ConfiguringExecave_DefaultConfigLocation tests that execave reads ./execave.toml
 // from the current working directory by default.
 func TestE2E_ConfiguringExecave_DefaultConfigLocation(t *testing.T) {
 	failIfNoBwrap(t)
@@ -39,7 +39,7 @@ func TestE2E_ConfiguringExecave_CustomConfigPathViaConfig(t *testing.T) {
 // TestE2E_ConfiguringExecave_MissingConfigFileShowsError tests that a missing config file
 // produces a clear error message.
 func TestE2E_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
-	result := runExecave(t, "", "--config", "/nonexistent/config.json", "--", "true")
+	result := runExecave(t, "", "--config", "/nonexistent/config.toml", "--", "true")
 
 	assertExitCode(t, result, 1)
 	assert.Contains(t, result.Stderr, "config file not found")
@@ -111,9 +111,9 @@ func TestE2E_ConfiguringExecave_MixedPortPatternsOnSameTargetRejected(t *testing
 // rw access to the config file itself is rejected.
 func TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.T) {
 	tmpDir := testTempDir(t)
-	configPath := filepath.Join(tmpDir, "execave.json")
+	configPath := filepath.Join(tmpDir, "execave.toml")
 
-	configContent := `{"rules": ["fs:rw:` + configPath + `"]}`
+	configContent := `rules = ["fs:rw:` + configPath + `"]`
 	err := os.WriteFile(configPath, []byte(configContent), 0o600)
 	require.NoError(t, err)
 
@@ -132,4 +132,78 @@ func TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected(t *testing.T) {
 
 	assertExitCode(t, result, 1)
 	assert.Contains(t, result.Stderr, "managed path")
+}
+
+// TestE2E_ConfiguringExecave_TildeRuleExpandsAndMountsCorrectly tests that a tilde
+// path in a rule is expanded to the home directory and the path is mounted correctly.
+func TestE2E_ConfiguringExecave_TildeRuleExpandsAndMountsCorrectly(t *testing.T) {
+	failIfNoBwrap(t)
+
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tmpDir := testTempDir(t)
+	dataFile := filepath.Join(tmpDir, "data.txt")
+	createFile(t, dataFile, "tilde content")
+
+	// Compute the tilde form of tmpDir (must be under homeDir for this test)
+	rel, err := filepath.Rel(homeDir, tmpDir)
+	require.NoError(t, err)
+	require.False(t, filepath.IsAbs(rel), "testTempDir must be under home directory")
+
+	tildeDir := "~/" + rel
+	rules := append(systemPaths(), "fs:ro:"+tildeDir)
+
+	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "cat", dataFile)
+
+	assertExitCode(t, result, 0)
+	assert.Contains(t, result.Stdout, "tilde content")
+}
+
+// TestE2E_ConfiguringExecave_TildeDuplicatePathRejected tests that two tilde rules
+// that expand to the same absolute path are rejected with a duplicate path error.
+func TestE2E_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tmpDir := testTempDir(t)
+	rel, err := filepath.Rel(homeDir, tmpDir)
+	require.NoError(t, err)
+	require.False(t, filepath.IsAbs(rel), "testTempDir must be under home directory")
+
+	tildeDir := "~/" + rel
+	rules := []string{
+		"fs:ro:" + tildeDir,
+		"fs:rw:" + tmpDir, // same path as above, without tilde
+	}
+
+	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "true")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "duplicate path")
+	assert.Contains(t, result.Stderr, tmpDir)
+}
+
+// TestE2E_ConfiguringExecave_CommentsInConfig tests that TOML comments in the config
+// file are ignored and the config loads successfully.
+func TestE2E_ConfiguringExecave_CommentsInConfig(t *testing.T) {
+	failIfNoBwrap(t)
+
+	tmpDir := testTempDir(t)
+	configPath := filepath.Join(tmpDir, "execave.toml")
+	content := `# Sandbox config
+rules = [
+    # System libraries
+    "fs:ro:/usr",
+    "fs:ro:/lib",
+    "fs:ro:/lib64",
+    "fs:ro:/etc/ld.so.cache",  # linker cache
+]`
+	err := os.WriteFile(configPath, []byte(content), 0o600)
+	require.NoError(t, err)
+
+	result := runExecave(t, "", "--config", configPath, "--", "echo", "hello")
+
+	assertExitCode(t, result, 0)
+	assert.Contains(t, result.Stdout, "hello")
 }

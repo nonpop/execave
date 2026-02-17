@@ -8,6 +8,7 @@ package fsrules
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -58,7 +59,10 @@ func Parse(ruleBody, configDir string) (Rule, error) {
 		return Rule{}, fmt.Errorf("invalid permission type %q (must be 'ro', 'rw', or 'none')", permStr)
 	}
 
-	normalizedPath := normalizePath(path, configDir)
+	normalizedPath, err := normalizePath(path, configDir)
+	if err != nil {
+		return Rule{}, err
+	}
 
 	return Rule{
 		Permission: perm,
@@ -67,12 +71,31 @@ func Parse(ruleBody, configDir string) (Rule, error) {
 	}, nil
 }
 
-// normalizePath resolves relative paths against configDir and cleans the result.
-func normalizePath(path, configDir string) string {
+// normalizePath expands tilde, resolves relative paths against configDir, and cleans the result.
+// A leading "~/" or bare "~" expands to os.UserHomeDir(). "~username" returns an error.
+// If os.UserHomeDir() fails, an error is returned.
+func normalizePath(path, configDir string) (string, error) {
+	switch {
+	case strings.HasPrefix(path, "~/"):
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand tilde in path %q: %w", path, err)
+		}
+		path = homeDir + path[1:] // path[1:] = "/" + rest
+	case path == "~":
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand tilde in path %q: %w", path, err)
+		}
+		path = homeDir
+	case len(path) > 1 && path[0] == '~':
+		return "", fmt.Errorf("~username paths not supported: %q", path)
+	}
+
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(configDir, path)
 	}
-	return filepath.Clean(path)
+	return filepath.Clean(path), nil
 }
 
 // Validate performs cross-rule validation: checks for duplicate paths,

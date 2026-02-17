@@ -28,7 +28,9 @@
       "Bash(go env:*)",
       "Bash(openspec instructions playbooks:*)",
       "Bash(git log:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "WebSearch",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

@@ -106,7 +106,7 @@ func TestIntegration_Runner_StartWhileRunningStopsPreviousRun(t *testing.T) {
 	// THEN the previous run is terminated
 	// AND a new run starts with a fresh access log
 	logger2 := env.runner.Logger()
-	assert.NotSame(t, logger1, logger2, "Logger should be replaced")
+	assert.NotSame(t, logger1, logger2)
 
 	// AND Status returns Running=true
 	status := env.runner.Status()
@@ -140,7 +140,7 @@ func TestIntegration_Runner_LoggerIsReplacedOnStart(t *testing.T) {
 
 	// THEN Logger returns a new logger
 	logger2 := env.runner.Logger()
-	assert.NotSame(t, logger1, logger2, "Logger should be replaced")
+	assert.NotSame(t, logger1, logger2)
 
 	// Wait for run to complete
 	env.waitForIdle()
@@ -273,7 +273,7 @@ collectLoop:
 	}
 
 	// Should have received at least 2 notifications (start and exit)
-	assert.GreaterOrEqual(t, receivedNotifications, 2, "Should receive notifications for start and exit")
+	assert.GreaterOrEqual(t, receivedNotifications, 2)
 }
 
 // TestIntegration_Runner_ConcurrentStatusReadsDuringRun tests the "Concurrent status reads during run" scenario.

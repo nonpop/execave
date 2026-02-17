@@ -86,7 +86,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 
 | Area | Risk | Implementation | Verification |
 |------|------|----------------|--------------|
-| Path normalization | `..`/`.` bypass | `filepath.Clean()` at config parse time | Fuzz tests + unit tests + e2e tests |
+| Path normalization | `..`/`.` bypass, tilde escape | `filepath.Clean()` after tilde/relative expansion at config parse time; `~username` rejected; tilde-expanded paths pass identical validation pipeline | Fuzz tests + unit tests + e2e tests |
 | Rule resolution | Wrong permission | Longest prefix matching algorithm | Fuzz tests + unit tests + e2e tests |
 | bwrap args | Missing bind, wrong flags | Declarative mount generation | Unit tests + e2e tests |
 | Mount ordering | Conflicting permissions | Parents first; children overlay | Integration tests + e2e tests |

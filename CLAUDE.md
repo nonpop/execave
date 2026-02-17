@@ -43,6 +43,7 @@ golangci-lint run --fix                   # Lint
 
 - Follow conventions in `docs/testing.md`
 - Use testify: `require` for setup, `assert` for assertions
+- **No assertion messages** — never pass a message argument to assert/require calls (`assert.Equal(t, want, got)` not `assert.Equal(t, want, got, "message")`)
 - Strict TDD: failing test first, then implement
 - Integration/E2E tests: black-box (`package_test`), public API only
 - Unit tests: white-box (same package), direct access to internals

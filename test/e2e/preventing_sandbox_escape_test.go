@@ -3,10 +3,12 @@ package e2e_test
 import (
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestE2E_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRules tests that
@@ -55,9 +57,16 @@ func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t
 	result := env.runMonitored(t, rules, "cat", hop1)
 	assert.NotEqual(t, 0, result.ExitCode)
 
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	hop1Rel, err := filepath.Rel(homeDir, hop1)
+	require.NoError(t, err)
+	hop2Rel, err := filepath.Rel(homeDir, hop2)
+	require.NoError(t, err)
+
 	// First hop OK, intermediate hop denied
-	assertWebUIHasEntry(t, result.WebUI, "READ", hop1, "OK", "fs:ro:"+mountDir)
-	assertWebUIHasEntry(t, result.WebUI, "READ", hop2, "DENY", "no-matching-rule")
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+hop1Rel, "OK", "fs:ro:"+mountDir)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+hop2Rel, "DENY", "no-matching-rule")
 
 	// Secret file never reached
 	assert.NotContains(t, result.WebUI, secretFile)
@@ -70,7 +79,7 @@ func TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented(t *testing.
 	failIfNoBwrap(t)
 
 	tmpDir := testTempDir(t)
-	configPath := filepath.Join(tmpDir, "execave.json")
+	configPath := filepath.Join(tmpDir, "execave.toml")
 	otherFile := filepath.Join(tmpDir, "other.txt")
 	createFile(t, otherFile, "other data")
 
@@ -83,7 +92,7 @@ func TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented(t *testing.
 
 	assert.NotEqual(t, 0, result.ExitCode)
 	assert.Contains(t, result.Stderr, "execave: config file forced read-only")
-	assert.Contains(t, result.Stderr, "execave.json: Read-only file system")
+	assert.Contains(t, result.Stderr, "execave.toml: Read-only file system")
 
 	// Other files in the same directory remain writable
 	result = runExecave(t, "", "--config", configPath, "--",

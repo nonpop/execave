@@ -34,11 +34,16 @@ func TestE2E_MonitoringAccess_ViewAccessLogInWebUI(t *testing.T) {
 	result := env.runMonitored(t, rules, "cat", dataFile)
 	assertExitCode(t, result.execaveResult, 0)
 
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dataFileRel, err := filepath.Rel(homeDir, dataFile)
+	require.NoError(t, err)
+
 	// Stderr contains the monitor URL
 	assert.Contains(t, result.Stderr, "monitor running at http://127.0.0.1:")
 
 	// Web UI displays entry with all four columns
-	assertWebUIHasEntry(t, result.WebUI, "READ", dataFile, "OK", "fs:ro:"+dataDir)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+dataFileRel, "OK", "fs:ro:"+dataDir)
 }
 
 // TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI tests that log entries appear
@@ -88,7 +93,11 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 
 	// The READ entry should be visible in the web UI before the command exits
 	webUI := fetchWebUI(t, monitorURL)
-	assert.Contains(t, webUI, testFile)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	testFileRel, err := filepath.Rel(homeDir, testFile)
+	require.NoError(t, err)
+	assert.Contains(t, webUI, "~/"+testFileRel)
 
 	// Clean up
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
@@ -97,6 +106,8 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 
 // TestE2E_MonitoringAccess_WebUISurvivesSandboxExit tests that the web UI remains
 // accessible after the sandboxed command exits, and the post-exit message is printed.
+//
+//nolint:funlen
 func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 	env := newMonitorTest(t)
 
@@ -149,7 +160,11 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 
 	// Web UI is still accessible after sandbox exit
 	webUI := fetchWebUI(t, monitorURL)
-	assertWebUIHasEntry(t, webUI, "READ", dataFile)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dataFileRel, err := filepath.Rel(homeDir, dataFile)
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, webUI, "READ", "~/"+dataFileRel)
 
 	// Clean up: send SIGINT to stop the server
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
@@ -254,7 +269,11 @@ func TestE2E_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *tes
 	assertExitCode(t, result.execaveResult, 0)
 
 	// Both filesystem and network entries in the web UI
-	assertWebUIHasEntry(t, result.WebUI, "READ", dataFile, "OK")
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	dataFileRel, err := filepath.Rel(homeDir, dataFile)
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+dataFileRel, "OK")
 	assertWebUIHasEntry(t, result.WebUI, "HTTPS", host+":"+port, "OK")
 }
 
@@ -308,7 +327,11 @@ func TestE2E_MonitoringAccess_LogDeduplication(t *testing.T) {
 	assertExitCode(t, result.execaveResult, 0)
 
 	// Deduplicated: the target should appear exactly once as a table cell value
-	targetCell := `<td class="target">` + testFile + `</td>`
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	testFileRel, err := filepath.Rel(homeDir, testFile)
+	require.NoError(t, err)
+	targetCell := `<td class="target">` + "~/" + testFileRel + `</td>`
 	count := strings.Count(result.WebUI, targetCell)
 	// Deduplicated: target cell should appear exactly once
 	assert.Equal(t, 1, count)
@@ -332,8 +355,14 @@ func TestE2E_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 	assertExitCode(t, result.execaveResult, 0)
 
 	// Both the symlink hop and the resolved target are logged
-	assertWebUIHasEntry(t, result.WebUI, "READ", linkPath, "OK", "fs:ro:"+mountDir)
-	assertWebUIHasEntry(t, result.WebUI, "READ", targetPath, "OK", "fs:ro:"+mountDir)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	linkPathRel, err := filepath.Rel(homeDir, linkPath)
+	require.NoError(t, err)
+	targetPathRel, err := filepath.Rel(homeDir, targetPath)
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+linkPathRel, "OK", "fs:ro:"+mountDir)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+targetPathRel, "OK", "fs:ro:"+mountDir)
 }
 
 // TestE2E_MonitoringAccess_FilesystemEnforcementDecisionsAccuratelyLogged tests that
@@ -360,8 +389,14 @@ func TestE2E_MonitoringAccess_FilesystemEnforcementDecisionsAccuratelyLogged(t *
 		"sh", "-c", "cat "+allowedFile+" || true; cat "+deniedFile+" || true")
 
 	// Verify enforcement decisions in the web UI
-	assertWebUIHasEntry(t, result.WebUI, "READ", allowedFile, "OK", "fs:ro:"+allowedFile)
-	assertWebUIHasEntry(t, result.WebUI, "READ", deniedFile, "DENY", "fs:none:"+deniedFile)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	allowedFileRel, err := filepath.Rel(homeDir, allowedFile)
+	require.NoError(t, err)
+	deniedFileRel, err := filepath.Rel(homeDir, deniedFile)
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+allowedFileRel, "OK", "fs:ro:"+allowedFile)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+deniedFileRel, "DENY", "fs:none:"+deniedFile)
 }
 
 // TestE2E_MonitoringAccess_NetworkEnforcementDecisionsAccuratelyLogged tests that
@@ -426,9 +461,15 @@ func TestE2E_MonitoringAccess_FilesystemRulePrecedenceReflectedCorrectly(t *test
 	assertExitCode(t, result.execaveResult, 0)
 
 	// Verify enforcement decisions in the web UI
-	assertWebUIHasEntry(t, result.WebUI, "WRITE", projectFile, "OK", "fs:rw:"+projectDir)
-	assertWebUIHasEntry(t, result.WebUI, "READ", gitFile, "OK", "fs:ro:"+gitDir)
-	assertWebUIHasEntry(t, result.WebUI, "WRITE", gitFile, "DENY", "fs:ro:"+gitDir)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	projectFileRel, err := filepath.Rel(homeDir, projectFile)
+	require.NoError(t, err)
+	gitFileRel, err := filepath.Rel(homeDir, gitFile)
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, result.WebUI, "WRITE", "~/"+projectFileRel, "OK", "fs:rw:"+projectDir)
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+gitFileRel, "OK", "fs:ro:"+gitDir)
+	assertWebUIHasEntry(t, result.WebUI, "WRITE", "~/"+gitFileRel, "DENY", "fs:ro:"+gitDir)
 }
 
 // TestE2E_MonitoringAccess_NetworkRulePrecedenceReflectedCorrectly tests that

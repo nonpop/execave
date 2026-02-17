@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"html/template"
 	"net"
+	"path/filepath"
 	"net/http"
 	"os"
 	"strconv"
@@ -49,12 +50,16 @@ type Server struct {
 	sessionID  string
 	httpServer *http.Server
 	runCtx     context.Context //nolint:containedctx // stored from Start for use in HTTP handlers
+	homeDir    string          // user home directory for path shortening; empty disables tilde form
+	configDir  string          // directory of the config file for relative path shortening
 }
 
 // New creates a new Server that displays entries from the given runner.
 // The server binds to 127.0.0.1:port when Start() is called.
 // cfg and command are stored for run control endpoints (start/restart).
-func New(rnr *runner.Runner, cfg *config.Config, command []string, port string) *Server {
+// homeDir and configDir are used to shorten filesystem target paths for display;
+// pass empty strings to disable shortening.
+func New(rnr *runner.Runner, cfg *config.Config, command []string, port, homeDir, configDir string) *Server {
 	var buf [8]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		panic(fmt.Sprintf("generate session ID: %v", err))
@@ -68,6 +73,8 @@ func New(rnr *runner.Runner, cfg *config.Config, command []string, port string) 
 		sessionID:  hex.EncodeToString(buf[:]),
 		httpServer: nil,
 		runCtx:     nil,
+		homeDir:    homeDir,
+		configDir:  configDir,
 	}
 }
 
@@ -143,6 +150,15 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	}
 	status := s.runner.Status()
 
+	// Shorten filesystem target paths for display.
+	shortened := make([]accesslog.Entry, len(entries))
+	for i, e := range entries {
+		shortened[i] = e
+		if (e.Operation == accesslog.OperationRead || e.Operation == accesslog.OperationWrite) && filepath.IsAbs(e.Target) {
+			shortened[i].Target = shortenPath(e.Target, s.homeDir, s.configDir)
+		}
+	}
+
 	// Extract raw rules from config
 	rules := make([]string, 0, len(s.cfg.FSRules)+len(s.cfg.NetRules))
 	for _, r := range s.cfg.FSRules {
@@ -160,8 +176,8 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		Command    string
 		Rules      []string
 	}{
-		Entries:    entries,
-		EntryCount: len(entries),
+		Entries:    shortened,
+		EntryCount: len(shortened),
 		Status:     status,
 		SessionID:  s.sessionID,
 		Command:    status.Command,
@@ -301,12 +317,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 // sendEntryEvent sends a single entry as an SSE event.
 // Write errors are ignored: they only occur on client disconnect, which ctx.Done handles.
 func (s *Server) sendEntryEvent(w http.ResponseWriter, entry accesslog.Entry, index int) {
+	target := entry.Target
+	if (entry.Operation == accesslog.OperationRead || entry.Operation == accesslog.OperationWrite) && filepath.IsAbs(target) {
+		target = shortenPath(target, s.homeDir, s.configDir)
+	}
 	entryDto := struct {
 		Operation accesslog.OperationType `json:"operation"`
 		Target    string                  `json:"target"`
 		Result    accesslog.ResultType    `json:"result"`
 		Rule      string                  `json:"rule"`
-	}(entry)
+	}{
+		Operation: entry.Operation,
+		Target:    target,
+		Result:    entry.Result,
+		Rule:      entry.Rule,
+	}
 
 	data, err := json.Marshal(entryDto)
 	if err != nil {

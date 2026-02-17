@@ -96,10 +96,8 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 	sb := sandbox.New(cfg, "", nil)
 	args := sb.BuildBwrapArgs([]string{"true"})
 
-	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir),
-		"expected --tmpfs %s in args: %v", noneDir, args)
-	assert.True(t, argsContainSequence(args, "--chmod", "0000", noneDir),
-		"expected --chmod 0000 %s in args: %v", noneDir, args)
+	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
+	assert.True(t, argsContainSequence(args, "--chmod", "0000", noneDir))
 }
 
 func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
@@ -121,10 +119,8 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 	sb := sandbox.New(cfg, "", nil)
 	args := sb.BuildBwrapArgs([]string{"true"})
 
-	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir),
-		"expected --tmpfs %s in args: %v", noneDir, args)
-	assert.True(t, argsContainSequence(args, "--chmod", "0111", noneDir),
-		"expected --chmod 0111 %s in args: %v", noneDir, args)
+	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
+	assert.True(t, argsContainSequence(args, "--chmod", "0111", noneDir))
 }
 
 func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
@@ -145,13 +141,10 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 	args := sb.BuildBwrapArgs([]string{"true"})
 
 	// File should use /dev/null bind, not tmpfs
-	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", noneFile),
-		"expected --bind /dev/null %s in args: %v", noneFile, args)
+	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", noneFile))
 	// No --chmod should be present for the file
-	assert.False(t, argsContainSequence(args, "--chmod", "0000", noneFile),
-		"unexpected --chmod 0000 %s in args: %v", noneFile, args)
-	assert.False(t, argsContainSequence(args, "--chmod", "0111", noneFile),
-		"unexpected --chmod 0111 %s in args: %v", noneFile, args)
+	assert.False(t, argsContainSequence(args, "--chmod", "0000", noneFile))
+	assert.False(t, argsContainSequence(args, "--chmod", "0111", noneFile))
 }
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {

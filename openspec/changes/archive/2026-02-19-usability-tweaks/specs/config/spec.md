@@ -1,18 +1,4 @@
-# Config Capability
-
-## Purpose
-
-The config capability loads and parses the execave configuration file. It reads TOML, routes rules to the appropriate engine by resource prefix (`fs:` or `net:`), and rejects unrecognized or malformed input at load time.
-
-## Requirements
-
-### Requirement: Config file location
-
-`config.Load` SHALL accept an explicit file path. If the file does not exist, it SHALL return an error.
-
-#### Scenario: Config file not found
-- **WHEN** the config file does not exist at the given path
-- **THEN** Load returns an error containing "config file not found"
+## MODIFIED Requirements
 
 ### Requirement: Config file format
 

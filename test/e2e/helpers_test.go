@@ -3,7 +3,6 @@ package e2e_test
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -73,20 +72,23 @@ func failIfNoPython3(t *testing.T) {
 	require.NoError(t, err)
 }
 
-type configJSON struct {
-	Rules []string `json:"rules"`
+// tomlConfig formats rules as a TOML config file.
+func tomlConfig(rules []string) []byte {
+	var sb strings.Builder
+	sb.WriteString("rules = [\n")
+	for _, r := range rules {
+		fmt.Fprintf(&sb, "    %q,\n", r)
+	}
+	sb.WriteString("]\n")
+	return []byte(sb.String())
 }
 
 func writeConfig(t *testing.T, rules []string) string {
 	t.Helper()
 	dir := testTempDir(t)
-	configPath := filepath.Join(dir, "execave.json")
+	configPath := filepath.Join(dir, "execave.toml")
 
-	cfg := configJSON{Rules: rules}
-	data, err := json.Marshal(cfg)
-	require.NoError(t, err)
-
-	err = os.WriteFile(configPath, data, 0o600)
+	err := os.WriteFile(configPath, tomlConfig(rules), 0o600)
 	require.NoError(t, err)
 
 	return configPath
@@ -94,13 +96,9 @@ func writeConfig(t *testing.T, rules []string) string {
 
 func writeConfigInDir(t *testing.T, dir string, rules []string) {
 	t.Helper()
-	configPath := filepath.Join(dir, "execave.json")
+	configPath := filepath.Join(dir, "execave.toml")
 
-	cfg := configJSON{Rules: rules}
-	data, err := json.Marshal(cfg)
-	require.NoError(t, err)
-
-	err = os.WriteFile(configPath, data, 0o600)
+	err := os.WriteFile(configPath, tomlConfig(rules), 0o600)
 	require.NoError(t, err)
 }
 
@@ -191,6 +189,7 @@ type monitoredResult struct {
 
 	WebUI      string
 	MonitorURL string
+	ConfigDir  string // directory of the config file used for this run
 }
 
 // runMonitored runs execave with monitoring enabled using the given rules and command args.
@@ -199,10 +198,13 @@ type monitoredResult struct {
 func (env monitorTestEnv) runMonitored(t *testing.T, rules []string, args ...string) monitoredResult {
 	t.Helper()
 	configPath := writeConfig(t, rules)
+	configDir := filepath.Dir(configPath)
 	execArgs := make([]string, 0, 4+len(args))
 	execArgs = append(execArgs, "--config", configPath, "--monitor=0", "--")
 	execArgs = append(execArgs, args...)
-	return runExecaveMonitored(t, execArgs...)
+	result := runExecaveMonitored(t, execArgs...)
+	result.ConfigDir = configDir
+	return result
 }
 
 // runMonitoredWithInterrupt runs execave with monitoring enabled and sends SIGINT
@@ -211,13 +213,16 @@ func (env monitorTestEnv) runMonitored(t *testing.T, rules []string, args ...str
 func (env monitorTestEnv) runMonitoredWithInterrupt(t *testing.T, rules []string, args ...string) monitoredResult {
 	t.Helper()
 	configPath := writeConfig(t, rules)
+	configDir := filepath.Dir(configPath)
 	execArgs := make([]string, 0, 4+len(args))
 	execArgs = append(execArgs, "--config", configPath, "--monitor=0", "--")
 	execArgs = append(execArgs, args...)
-	return runMonitoredCmd(t, monitorRunOpts{
+	result := runMonitoredCmd(t, monitorRunOpts{
 		readyLine:     "execave: monitor running at ",
 		preFetchDelay: 200 * time.Millisecond,
 	}, execArgs...)
+	result.ConfigDir = configDir
+	return result
 }
 
 // monitorRunOpts configures how runMonitoredCmd determines readiness.
@@ -295,7 +300,7 @@ func runMonitoredCmd(t *testing.T, opts monitorRunOpts, args ...string) monitore
 		}
 	}
 
-	return monitoredResult{execaveResult: result, WebUI: webUI, MonitorURL: monitorURL}
+	return monitoredResult{execaveResult: result, WebUI: webUI, MonitorURL: monitorURL, ConfigDir: ""}
 }
 
 // runExecaveMonitored starts execave with monitoring in the background, waits for the
@@ -364,6 +369,37 @@ func rowContainsAll(row string, substrings []string) bool {
 		}
 	}
 	return true
+}
+
+// sseEvent is a parsed Server-Sent Event for E2E test assertions.
+type sseEvent struct {
+	event string
+	data  string
+	id    string
+}
+
+// readSSEEvents reads up to n SSE events from the response body.
+func readSSEEvents(resp *http.Response, n int) []sseEvent {
+	scanner := bufio.NewScanner(resp.Body)
+	var events []sseEvent
+	var current sseEvent
+	for len(events) < n && scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			current.event = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			current.data = strings.TrimPrefix(line, "data: ")
+		case strings.HasPrefix(line, "id: "):
+			current.id = strings.TrimPrefix(line, "id: ")
+		case line == "":
+			if current.event != "" || current.data != "" || current.id != "" {
+				events = append(events, current)
+				current = sseEvent{}
+			}
+		}
+	}
+	return events
 }
 
 // systemPaths returns rules for basic command execution.

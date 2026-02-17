@@ -11,27 +11,26 @@ import (
 )
 
 func FuzzLoad(f *testing.F) {
-	// Seed corpus with valid examples
-	f.Add(`{"rules": []}`)
-	f.Add(`{"rules": ["fs:ro:/usr/bin"]}`)
-	f.Add(`{"rules": ["fs:rw:/home", "fs:ro:/etc"]}`)
-	f.Add(`{"rules": ["fs:none:/secret"]}`)
-	f.Add(`{"rules": ["fs:ro:./relative"]}`)
-	f.Add(`{"rules": ["fs:rw:/path/with/../dots"]}`)
+	// Seed corpus with valid TOML examples
+	f.Add(`rules = []`)
+	f.Add(`rules = ["fs:ro:/usr/bin"]`)
+	f.Add(`rules = ["fs:rw:/home", "fs:ro:/etc"]`)
+	f.Add(`rules = ["fs:none:/secret"]`)
+	f.Add(`rules = ["fs:ro:./relative"]`)
+	f.Add(`rules = ["fs:rw:/path/with/../dots"]`)
 
 	// Seed with some invalid examples
-	f.Add(`{"rules": ["invalid"]}`)
-	f.Add(`{"rules": [123]}`)
-	f.Add(`{"rules": "not an array"}`)
+	f.Add(`rules = ["invalid"]`)
 	f.Add(`{invalid json}`)
+	f.Add(`invalid toml [[[`)
 	f.Add(``)
 
-	f.Fuzz(func(t *testing.T, configJSON string) {
+	f.Fuzz(func(t *testing.T, configTOML string) {
 		// Create temporary config file
 		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, "fuzz.json")
+		configPath := filepath.Join(tmpDir, "fuzz.toml")
 
-		if err := os.WriteFile(configPath, []byte(configJSON), 0o600); err != nil {
+		if err := os.WriteFile(configPath, []byte(configTOML), 0o600); err != nil {
 			t.Fatal("failed to write config file")
 		}
 

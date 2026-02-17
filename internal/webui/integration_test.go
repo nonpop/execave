@@ -37,7 +37,7 @@ func TestIntegration_WebServerBinding_InvalidPortRejected(t *testing.T) {
 	rnr.SetTestLogger(logger)
 	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
 	command := []string{"true"}
-	srv := webui.New(rnr, cfg, command, "notaport")
+	srv := webui.New(rnr, cfg, command, "notaport", "", "")
 
 	err := srv.Start(t.Context())
 	assert.ErrorContains(t, err, "listen on port notaport")
@@ -56,7 +56,7 @@ func TestIntegration_WebServerBinding_PortAlreadyInUse(t *testing.T) {
 	rnr.SetTestLogger(logger)
 	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
 	command := []string{"true"}
-	srv := webui.New(rnr, cfg, command, port)
+	srv := webui.New(rnr, cfg, command, port, "", "")
 
 	err = srv.Start(t.Context())
 	assert.ErrorContains(t, err, "listen on port "+port)
@@ -125,6 +125,82 @@ func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) 
 	firstCount := strings.Count(first, `<td class="target">`)
 	secondCount := strings.Count(second, `<td class="target">`)
 	assert.Equal(t, firstCount, secondCount)
+}
+
+// --- Requirement: Path shortening for display ---
+
+func TestIntegration_PathShortening_FilesystemPathShortenedToRelativeForm(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/project/src/main.go",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:rw:~/project",
+	}))
+
+	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
+	body := fetchBody(t, srv.URL()+"/")
+
+	assert.Contains(t, body, `<td class="target">src/main.go</td>`)
+	// Rule shown verbatim in row attributes
+	assert.Contains(t, body, `data-rule="fs:rw:~/project"`)
+}
+
+func TestIntegration_PathShortening_FilesystemPathShortenedToTildeForm(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/.ssh/id_rsa",
+		Result:    accesslog.ResultDeny,
+		Rule:      "no-matching-rule",
+	}))
+
+	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
+	body := fetchBody(t, srv.URL()+"/")
+
+	assert.Contains(t, body, `<td class="target">~/.ssh/id_rsa</td>`)
+}
+
+func TestIntegration_PathShortening_NonFilesystemTargetNotShortened(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:api.example.com:443",
+	}))
+
+	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
+	body := fetchBody(t, srv.URL()+"/")
+
+	assert.Contains(t, body, `<td class="target">api.example.com:443</td>`)
+}
+
+func TestIntegration_PathShortening_SseEntryEventUsesShortPath(t *testing.T) {
+	logger := accesslog.New(nil)
+
+	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
+
+	resp, err := http.Get(srv.URL() + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	eventCh := readSSEEventsAsync(resp)
+	readEventWithTimeout(t, eventCh) // session
+	readEventWithTimeout(t, eventCh) // status
+	readEventWithTimeout(t, eventCh) // rules
+
+	// Log entry after SSE connection is established
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/project/src/main.go",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:rw:~/project",
+	}))
+
+	entryEvent := readEventWithTimeout(t, eventCh)
+	assert.Equal(t, "entry", entryEvent.Event)
+	assert.Contains(t, entryEvent.Data, `"target":"src/main.go"`)
 }
 
 // --- Requirement: Real-time entry streaming ---
@@ -477,7 +553,7 @@ func TestIntegration_RulesPane_RulesDisplayedOnPageLoad(t *testing.T) {
 		ManagedPaths: nil,
 	}
 
-	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -505,7 +581,7 @@ func TestIntegration_RulesPane_EmptyRulesDisplayed(t *testing.T) {
 		ManagedPaths: nil,
 	}
 
-	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -537,7 +613,7 @@ func TestIntegration_RulesPane_BothFsAndNetRulesDisplayed(t *testing.T) {
 		ManagedPaths: nil,
 	}
 
-	srv := webui.New(rnr, cfg, []string{"true"}, "0")
+	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -592,6 +668,149 @@ func TestIntegration_RunControlButtons_RestartButtonAndEnabledStopShownWhenRunni
 	// Check that the stop button line doesn't contain "disabled"
 	assert.NotContains(t, body, `id="stop-btn" class="stop" disabled`)
 	assert.Contains(t, body, `id="stop-btn" class="stop" >Stop<`)
+}
+
+// --- Requirement: Rules refreshed on SSE reconnect ---
+
+func TestIntegration_RulesRefreshedOnSseReconnect_RulesEventSentOnSseConnect(t *testing.T) {
+	fsRule, err := fsrules.Parse("ro:/usr/lib", "/")
+	require.NoError(t, err)
+	fsRule.RawRule = "fs:ro:/usr/lib"
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	resp, err := http.Get(srv.URL() + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	// session + status + rules
+	events := webui.ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+
+	rulesEvent := events[2]
+	assert.Equal(t, "rules", rulesEvent.Event)
+	assert.Contains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
+}
+
+func TestIntegration_RulesRefreshedOnSseReconnect_RulesPaneUpdatedOnCrossSessionReconnect(t *testing.T) {
+	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
+	require.NoError(t, err)
+	fsRule1.RawRule = "fs:ro:/usr/lib"
+	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
+	require.NoError(t, err)
+	fsRule2.RawRule = "fs:rw:/tmp"
+
+	cfg1 := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	logger1 := accesslog.New(nil)
+	rnr1 := runner.NewTestRunner()
+	rnr1.SetTestLogger(logger1)
+	rnr1.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv1 := webui.New(rnr1, cfg1, []string{"true"}, "0", "", "")
+	require.NoError(t, srv1.Start(t.Context()))
+	sessionID1 := webui.GetSessionID(t, srv1.URL())
+	require.NoError(t, srv1.Shutdown(t.Context()))
+
+	// Server 2 with a different set of rules
+	fsRule3, err := fsrules.Parse("ro:/opt", "/")
+	require.NoError(t, err)
+	fsRule3.RawRule = "fs:ro:/opt"
+
+	cfg2 := &config.Config{
+		FSRules:      []fsrules.Rule{fsRule3},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	logger2 := accesslog.New(nil)
+	rnr2 := runner.NewTestRunner()
+	rnr2.SetTestLogger(logger2)
+	rnr2.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv2 := webui.New(rnr2, cfg2, []string{"true"}, "0", "", "")
+	require.NoError(t, srv2.Start(t.Context()))
+	t.Cleanup(func() { _ = srv2.Shutdown(t.Context()) })
+
+	// Simulate browser reconnecting to new server with old session's Last-Event-ID
+	req, err := http.NewRequest(http.MethodGet, srv2.URL()+"/events", nil)
+	require.NoError(t, err)
+	req.Header.Set("Last-Event-ID", sessionID1+":0")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	// session + status + rules
+	events := webui.ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+
+	rulesEvent := events[2]
+	assert.Equal(t, "rules", rulesEvent.Event)
+	// Server 2's rules are present
+	assert.Contains(t, rulesEvent.Data, `"fs:ro:/opt"`)
+	// Server 1's old rules are not present
+	assert.NotContains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
+	assert.NotContains(t, rulesEvent.Data, `"fs:rw:/tmp"`)
+}
+
+// TestIntegration_RulesRefreshedOnSseReconnect_HoverListenersWorkAfterRulesRefresh is a
+// placeholder. After a rules SSE event the client replaces the rules pane DOM nodes and
+// re-attaches mouseenter/mouseleave listeners. Verifying that those listeners fire
+// correctly requires JavaScript execution in a browser.
+func TestIntegration_RulesRefreshedOnSseReconnect_HoverListenersWorkAfterRulesRefresh(t *testing.T) {
+	t.Skip("hover listener re-attachment after rules refresh requires JavaScript execution in a browser")
+}
+
+// --- Requirement: Hover rule highlights matching log entries ---
+
+// TestIntegration_HoverRuleHighlightsMatchingLogEntries_HoveringARuleHighlightsItsEntries is a
+// placeholder. The highlight is applied by a JavaScript mouseenter handler that adds a CSS
+// class to matching log rows. Verifying this requires JavaScript execution in a browser.
+func TestIntegration_HoverRuleHighlightsMatchingLogEntries_HoveringARuleHighlightsItsEntries(t *testing.T) {
+	t.Skip("hover highlighting requires JavaScript execution in a browser")
+}
+
+// TestIntegration_HoverRuleHighlightsMatchingLogEntries_LeavingARuleClearsHighlights is a
+// placeholder. The highlight is cleared by a JavaScript mouseleave handler. Verifying this
+// requires JavaScript execution in a browser.
+func TestIntegration_HoverRuleHighlightsMatchingLogEntries_LeavingARuleClearsHighlights(t *testing.T) {
+	t.Skip("hover highlighting requires JavaScript execution in a browser")
+}
+
+// --- Requirement: Hover log entry highlights matched rule ---
+
+// TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnEntryHighlightsItsRule is a
+// placeholder. The rule highlight is applied by a JavaScript mouseenter handler on log rows.
+// Verifying this requires JavaScript execution in a browser.
+func TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnEntryHighlightsItsRule(t *testing.T) {
+	t.Skip("hover highlighting requires JavaScript execution in a browser")
+}
+
+// TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnUnmatchedEntryHighlightsNothing
+// is a placeholder. Verifying that no rule is highlighted when hovering an unmatched entry
+// requires JavaScript execution in a browser.
+func TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnUnmatchedEntryHighlightsNothing(t *testing.T) {
+	t.Skip("hover highlighting requires JavaScript execution in a browser")
+}
+
+// TestIntegration_HoverLogEntryHighlightsMatchedRule_LeavingAnEntryClearsRuleHighlights is a
+// placeholder. The rule highlight is cleared by a JavaScript mouseleave handler. Verifying
+// this requires JavaScript execution in a browser.
+func TestIntegration_HoverLogEntryHighlightsMatchedRule_LeavingAnEntryClearsRuleHighlights(t *testing.T) {
+	t.Skip("hover highlighting requires JavaScript execution in a browser")
 }
 
 // --- Integration test helpers ---

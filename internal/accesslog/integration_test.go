@@ -180,3 +180,118 @@ func TestIntegration_LogFormat_DeniedHttpRequestLogged(t *testing.T) {
 	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
 }
+
+// --- Requirement: Log deduplication ---
+
+func TestIntegration_LogDeduplication_RepeatedReadsDeduplicated(t *testing.T) {
+	logger := accesslog.New(nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/tmp/data/file.txt",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/tmp/data",
+	}
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+
+	assert.Len(t, logger.Entries(), 1)
+}
+
+func TestIntegration_LogDeduplication_ReadAndWriteBothLogged(t *testing.T) {
+	logger := accesslog.New(nil)
+
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/tmp/data/file.txt",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/tmp/data",
+	}))
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationWrite,
+		Target:    "/tmp/data/file.txt",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:rw:/tmp/data",
+	}))
+
+	assert.Len(t, logger.Entries(), 2)
+}
+
+func TestIntegration_LogDeduplication_RepeatedHttpsRequestsDeduplicated(t *testing.T) {
+	logger := accesslog.New(nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationHTTPS,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:https:api.example.com:443",
+	}
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+
+	assert.Len(t, logger.Entries(), 1)
+}
+
+func TestIntegration_LogDeduplication_RepeatedWritesDeduplicated(t *testing.T) {
+	logger := accesslog.New(nil)
+
+	entry := accesslog.Entry{
+		Operation: accesslog.OperationWrite,
+		Target:    "/tmp/project/output.txt",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:rw:/tmp/project",
+	}
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+	require.NoError(t, logger.Log(entry))
+
+	assert.Len(t, logger.Entries(), 1)
+}
+
+// --- Requirement: Infrastructure path filtering ---
+
+func TestIntegration_InfrastructurePathFiltering_InfrastructurePathsNotLogged(t *testing.T) {
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+
+	err := logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/proc/self/status",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/proc",
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, logger.Entries())
+}
+
+func TestIntegration_InfrastructurePathFiltering_InfrastructureWritesNotLogged(t *testing.T) {
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+
+	err := logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationWrite,
+		Target:    "/dev/tty",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:rw:/dev",
+	})
+	require.NoError(t, err)
+
+	assert.Empty(t, logger.Entries())
+}
+
+func TestIntegration_InfrastructurePathFiltering_NonInfrastructurePathsStillLogged(t *testing.T) {
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+
+	err := logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/usr/bin/bash",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/usr",
+	})
+	require.NoError(t, err)
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, "/usr/bin/bash", entries[0].Target)
+}

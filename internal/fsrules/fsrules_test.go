@@ -1,6 +1,8 @@
 package fsrules
 
 import (
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,69 +57,105 @@ func TestParseRule_InvalidPermission(t *testing.T) {
 
 func TestNormalizePath_AbsolutePath(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("/home/user/../user/project/./src", configDir)
+	result, err := normalizePath("/home/user/../user/project/./src", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project/src", result)
 }
 
 func TestNormalizePath_TrailingSlash(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("/home/user/project/", configDir)
+	result, err := normalizePath("/home/user/project/", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project", result)
 }
 
 func TestNormalizePath_RelativePath(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("./src", configDir)
+	result, err := normalizePath("./src", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/myproject/src", result)
 }
 
 func TestNormalizePath_RelativeWithParent(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("../shared", configDir)
+	result, err := normalizePath("../shared", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/shared", result)
 }
 
 func TestNormalizePath_TrulyRelative(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("src", configDir)
+	result, err := normalizePath("src", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/myproject/src", result)
 }
 
 func TestNormalizePath_CurrentDir(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath(".", configDir)
+	result, err := normalizePath(".", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/myproject", result)
 }
 
-func TestNormalizePath_TildeNotExpanded(t *testing.T) {
-	// Tilde is not expanded - it's treated as a literal directory name.
-	// This documents current behavior; tilde expansion may be added later.
-	configDir := "/home/user/myproject"
-	result := normalizePath("~/project", configDir)
-	assert.Equal(t, "/home/user/myproject/~/project", result)
+func TestNormalizePath_TildeSlashExpanded(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	result, err := normalizePath("~/project", "/")
+	require.NoError(t, err)
+	assert.Equal(t, homeDir+"/project", result)
+}
+
+func TestNormalizePath_BareTildeExpanded(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	result, err := normalizePath("~", "/")
+	require.NoError(t, err)
+	assert.Equal(t, homeDir, result)
+}
+
+func TestNormalizePath_TildePathCleaned(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	result, err := normalizePath("~/project/../other", "/")
+	require.NoError(t, err)
+	assert.Equal(t, homeDir+"/other", result)
+}
+
+func TestNormalizePath_TildeUsernameRejected(t *testing.T) {
+	_, err := normalizePath("~otheruser/data", "/home/user")
+	require.Error(t, err)
+	assert.True(t,
+		strings.Contains(err.Error(), "~username") || strings.Contains(err.Error(), "not supported"))
 }
 
 func TestNormalizePath_EmptyPath(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("", configDir)
+	result, err := normalizePath("", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/myproject", result)
 }
 
 func TestNormalizePath_RootPath(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("/", configDir)
+	result, err := normalizePath("/", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/", result)
 }
 
 func TestNormalizePath_MultipleSlashes(t *testing.T) {
 	configDir := "/home/user/myproject"
-	result := normalizePath("/home//user///project", configDir)
+	result, err := normalizePath("/home//user///project", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/home/user/project", result)
 }
 
 func TestNormalizePath_ParentTraversalBeyondRoot(t *testing.T) {
 	// Traversing beyond root stops at root.
 	configDir := "/home/user"
-	result := normalizePath("../../../..", configDir)
+	result, err := normalizePath("../../../..", configDir)
+	require.NoError(t, err)
 	assert.Equal(t, "/", result)
 }

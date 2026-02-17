@@ -1,14 +1,14 @@
 // Package config handles parsing and validation of execave configuration files.
-// It loads JSON configuration and routes resource-specific rules to their parsers.
+// It loads TOML configuration and routes resource-specific rules to their parsers.
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/netrules"
 )
@@ -38,9 +38,9 @@ func Load(path string, managedPaths []string) (*Config, error) {
 	}
 
 	var raw struct {
-		Rules []string `json:"rules"`
+		Rules []string `toml:"rules"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := toml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 

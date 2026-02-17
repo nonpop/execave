@@ -1,0 +1,73 @@
+# Comprehensive baseline config for sandboxing most standard tools.
+# Every entry is read-only unless noted. The sandbox starts empty
+# (default-deny), so anything not listed here does not exist inside
+# it (except /dev, /proc, and a private /tmp).
+
+rules = [
+  # -- Executables and shared libraries --
+  # Read-only, system-managed, no user secrets. Binaries and shared
+  # libraries (sh, libc, etc.); nothing runs without them.
+  "fs:ro:/usr",
+  "fs:ro:/lib",
+  "fs:ro:/lib64",
+  "fs:ro:/bin",
+  "fs:ro:/sbin",
+
+  # -- Dynamic linker configuration --
+  # Read-only linker metadata derived from ldconfig, no secrets. Without
+  # ld.so.cache the linker may fail to find libraries. ld.so.conf(.d) is
+  # the fallback when the cache is missing.
+  "fs:ro:/etc/ld.so.cache",
+  "fs:ro:/etc/ld.so.preload",
+  "fs:ro:/etc/ld.so.conf",
+  "fs:ro:/etc/ld.so.conf.d",
+
+  # -- User/group identity --
+  # World-readable by design; no password hashes (those are in shadow).
+  # getpwuid/getgrgid fail without these, breaking anything that resolves
+  # UIDs to names (git, ssh, build tools). nsswitch.conf tells glibc which
+  # lookup backends to use.
+  "fs:ro:/etc/passwd",
+  "fs:ro:/etc/group",
+  "fs:ro:/etc/nsswitch.conf",
+
+  # -- Timezone --
+  # Only the system timezone name and binary tzdata. Without these, time
+  # defaults to UTC  -- wrong timestamps everywhere.
+  "fs:ro:/etc/localtime",
+  "fs:ro:/etc/timezone",
+
+  # -- DNS and network resolution --
+  # resolv.conf for nameservers, hosts for local overrides (localhost),
+  # host.conf/gai.conf for resolver behavior, protocols/services for
+  # name-to-number mapping (getaddrinfo, getprotobyname). No credentials.
+  # The proxy-tunnel bridge also needs these even under network namespace
+  # isolation.
+  "fs:ro:/etc/hosts",
+  "fs:ro:/etc/resolv.conf",
+  "fs:ro:/etc/host.conf",
+  "fs:ro:/etc/gai.conf",
+  "fs:ro:/etc/protocols",
+  "fs:ro:/etc/services",
+
+  # -- TLS certificate bundles --
+  # Public CA roots only, no private keys. HTTPS verification (curl, git,
+  # pip, npm, ...) fails without them. Scoped to avoid /etc/ssl/private
+  # and /etc/pki/tls/private which hold private keys.
+  #
+  # NOTE: custom/corporate CAs installed via update-ca-certificates or
+  # update-ca-trust are compiled into these same bundles and will be
+  # visible to the sandboxed process. This is unavoidable without
+  # breaking HTTPS verification entirely.
+  #
+  "fs:ro:/etc/ssl/certs",
+  "fs:ro:/etc/pki/tls/certs",
+  "fs:ro:/etc/pki/ca-trust",
+  "fs:ro:/etc/ca-certificates",
+
+  # -- Working directory --
+  # The only read-write entry. "." resolves to the config file's directory.
+  # Scoped to one directory; everything outside remains inaccessible. The
+  # sandboxed process must read and write project files.
+  "fs:rw:.",
+]
