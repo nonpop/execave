@@ -3,7 +3,9 @@ package monitor_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -146,37 +148,15 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 }
 
 func TestIntegration_OperationTypeMapping_ReadingFileContentsLoggedAsRead(t *testing.T) {
-	//nolint:usetesting // Need a path outside /tmp
-	testDir, err := os.MkdirTemp(".", "monitor-integ-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(testDir) })
-
-	absTestDir, err := filepath.Abs(testDir)
-	require.NoError(t, err)
-	testFile := filepath.Join(absTestDir, "data.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0o600))
-
-	env := newMonitorTestEnv(t, func(_ string) *config.Config {
-		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(absTestDir)},
-			NetRules:     nil,
-			ManagedPaths: nil,
-		}
-	})
+	absTestDir, testFile := testDirWithFile(t, "data.txt", "content")
+	env := roRuleEnv(t, absTestDir)
 
 	// cat triggers openat(O_RDONLY) — classified as READ by classifyOpenOperation.
 	exitCode, err := env.run([]string{"cat", testFile})
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found, "openat(O_RDONLY) must be classified as READ")
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
 }
 
 func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *testing.T) {
@@ -474,17 +454,17 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 
 	// Both hops must be logged as READ
 	var aFound, bFound, targetFound bool
-	for _, e := range env.logger.Entries() {
+	for _, entry := range env.logger.Entries() {
 		switch {
-		case e.Target == aLink && e.Operation == accesslog.OperationRead:
+		case entry.Target == aLink && entry.Operation == accesslog.OperationRead:
 			aFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		case e.Target == bLink && e.Operation == accesslog.OperationRead:
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
+		case entry.Target == bLink && entry.Operation == accesslog.OperationRead:
 			bFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		case e.Target == targetFile && e.Operation == accesslog.OperationRead:
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
+		case entry.Target == targetFile && entry.Operation == accesslog.OperationRead:
 			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
 		}
 	}
 	assert.True(t, aFound)
@@ -578,17 +558,17 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 	assert.Equal(t, 0, exitCode)
 
 	var aFound, bFound, targetFound bool
-	for _, e := range env.logger.Entries() {
+	for _, entry := range env.logger.Entries() {
 		switch {
-		case e.Target == aLink && e.Operation == accesslog.OperationRead:
+		case entry.Target == aLink && entry.Operation == accesslog.OperationRead:
 			aFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		case e.Target == bLink && e.Operation == accesslog.OperationRead:
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
+		case entry.Target == bLink && entry.Operation == accesslog.OperationRead:
 			bFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		case e.Target == targetFile && e.Operation == accesslog.OperationRead:
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
+		case entry.Target == targetFile && entry.Operation == accesslog.OperationRead:
 			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
+			assert.Equal(t, accesslog.ResultOK, entry.Result)
 		}
 	}
 	assert.True(t, aFound)
@@ -1108,7 +1088,7 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 
 	// Restore permissions before removal so t.Cleanup can delete the tree.
 	t.Cleanup(func() {
-		_ = os.Chmod(restrictedDir, 0o750)
+		_ = os.Chmod(restrictedDir, 0o750) //nolint:gosec // Restore permissions for cleanup
 		_ = os.RemoveAll(testDir)
 	})
 
@@ -1178,4 +1158,517 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *
 	require.NotEqual(t, -1, readIdx)
 	require.NotEqual(t, -1, writeIdx)
 	assert.Less(t, readIdx, writeIdx)
+}
+
+// --- Requirement: Path resolution for *at() syscalls ---
+
+// skipIfNoGccOrNotAMD64 skips the test if gcc is unavailable or the architecture
+// is not amd64. Tests that require static binaries with x86_64 inline assembly
+// must call this.
+func skipIfNoGccOrNotAMD64(t *testing.T) {
+	t.Helper()
+	if runtime.GOARCH != "amd64" {
+		t.Skipf("test requires amd64 (got %s)", runtime.GOARCH)
+	}
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skip("gcc not available")
+	}
+}
+
+// skipIfNoGcc skips the test if gcc is unavailable.
+func skipIfNoGcc(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skip("gcc not available")
+	}
+}
+
+// compileStaticBinary compiles a minimal x86_64 static binary (no libc/dynamic linker)
+// from the given C source. The binary is written to binPath.
+// Tests must call skipIfNoGccOrNotAMD64 before using this helper.
+func compileStaticBinary(t *testing.T, src, binPath string) {
+	t.Helper()
+	cmd := exec.Command("gcc", "-nostdlib", "-static", "-o", binPath, src)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "gcc failed: %s", out)
+}
+
+// compileBinary compiles a standard C binary (with libc/dynamic linker)
+// from the given C source. The binary is written to binPath.
+func compileBinary(t *testing.T, src, binPath string) {
+	t.Helper()
+	cmd := exec.Command("gcc", "-o", binPath, src)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "gcc failed: %s", out)
+}
+
+// testDirWithFile creates a temporary directory outside /tmp containing a single file.
+// Returns the absolute directory path and the absolute file path.
+func testDirWithFile(t *testing.T, fileName, content string) (string, string) {
+	t.Helper()
+	//nolint:usetesting // Need a path outside /tmp
+	testDir, err := os.MkdirTemp(".", "monitor-integ-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(testDir) })
+
+	absTestDir, err := filepath.Abs(testDir)
+	require.NoError(t, err)
+	absFilePath := filepath.Join(absTestDir, fileName)
+	require.NoError(t, os.WriteFile(absFilePath, []byte(content), 0o600))
+	return absTestDir, absFilePath
+}
+
+// roRuleEnv creates a monitor test env with a single read-only rule for the given directory.
+func roRuleEnv(t *testing.T, absTestDir string) *monitorTestEnv {
+	t.Helper()
+	return newMonitorTestEnv(t, func(_ string) *config.Config {
+		return &config.Config{
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			ManagedPaths: nil,
+		}
+	})
+}
+
+// assertHasReadEntry asserts that the logger contains a READ entry with ResultOK for the given target.
+func assertHasReadEntry(t *testing.T, entries []accesslog.Entry, target string) {
+	t.Helper()
+	var found bool
+	for _, e := range entries {
+		if e.Target == target && e.Operation == accesslog.OperationRead {
+			found = true
+			assert.Equal(t, accesslog.ResultOK, e.Result)
+		}
+	}
+	assert.True(t, found)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_AbsoluteDirfdIgnored tests that when an
+// *at() syscall is called with an absolute path, the dirfd is not used for path
+// resolution. The logged path is exactly the absolute path argument.
+func TestIntegration_PathResolutionForAtSyscalls_AbsoluteDirfdIgnored(t *testing.T) {
+	absTestDir, testFile := testDirWithFile(t, "file.txt", "content")
+	env := roRuleEnv(t, absTestDir)
+
+	// cat calls openat(AT_FDCWD<working_dir>, "/absolute/path", O_RDONLY).
+	// Since the path is absolute, the AT_FDCWD annotation is ignored.
+	exitCode, err := env.run([]string{"cat", testFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd tests that
+// when strace annotates AT_FDCWD with a directory path, a relative path argument is
+// joined with that annotation to produce an absolute logged path.
+func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t *testing.T) {
+	//nolint:usetesting // Need a path outside /tmp
+	testDir, err := os.MkdirTemp(".", "monitor-integ-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(testDir) })
+
+	absTestDir, err := filepath.Abs(testDir)
+	require.NoError(t, err)
+	subDir := filepath.Join(absTestDir, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
+	testFile := filepath.Join(subDir, "file.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("content"), 0o600))
+
+	env := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return &config.Config{
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			ManagedPaths: nil,
+		}
+	})
+
+	// sh changes cwd to subDir; cat then runs with cwd=subDir.
+	// strace -y annotates: openat(AT_FDCWD<subDir>, "file.txt", O_RDONLY)
+	// parseLine joins annotation + "file.txt" → subDir/file.txt
+	exitCode, err := env.run([]string{"sh", "-c", "cd " + subDir + " && cat file.txt"})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range env.logger.Entries() {
+		if e.Target == testFile && e.Operation == accesslog.OperationRead {
+			found = true
+			assert.Equal(t, accesslog.ResultOK, e.Result)
+		}
+	}
+	assert.True(t, found, "AT_FDCWD annotation must be joined with relative path to form absolute path")
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_AtFdCwdUnresolvableWhenNoCwdTracked tests
+// that when strace cannot annotate AT_FDCWD and no cwd has been tracked for the pid,
+// a relative path is logged as UNKNOWN. Uses a minimal static binary to ensure the
+// access syscall is the first traceable call, before any cwd-establishing annotation.
+func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdUnresolvableWhenNoCwdTracked(t *testing.T) {
+	skipIfNoGccOrNotAMD64(t)
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "bare_access.c")
+	binFile := filepath.Join(tmpDir, "bare_access")
+
+	// Minimal static binary: calls access("untracked/relative.txt") directly via
+	// x86_64 inline assembly. No dynamic linker means no AT_FDCWD annotation
+	// precedes the access call, so no cwd is tracked for this pid.
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+long sys_access(const char *path, int mode) {
+	long ret;
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(21), "D"(path), "S"(mode) : "rcx", "r11", "memory");
+	return ret;
+}
+void sys_exit(int code) {
+	__asm__ volatile("syscall" :: "a"(231), "D"(code));
+	__builtin_unreachable();
+}
+void _start(void) {
+	sys_access("untracked/relative.txt", 0);
+	sys_exit(0);
+}
+`), 0o600))
+	compileStaticBinary(t, srcFile, binFile)
+
+	env := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return new(config.Config)
+	})
+
+	exitCode, err := env.run([]string{binFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range env.logger.Entries() {
+		if e.Target == "untracked/relative.txt" {
+			found = true
+			assert.Equal(t, accesslog.ResultUnknown, e.Result)
+			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
+		}
+	}
+	assert.True(t, found, "relative path without tracked cwd must be logged as UNKNOWN")
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdResolvesWithTrackedCwd tests
+// that when strace annotates a numeric dirfd with a directory path, a relative path
+// argument is joined with that fd annotation to produce an absolute logged path.
+func TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdResolvesWithTrackedCwd(t *testing.T) {
+	skipIfNoGcc(t)
+
+	absTestDir, testFile := testDirWithFile(t, "file.txt", "data")
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "dirfd_open.c")
+	binFile := filepath.Join(tmpDir, "dirfd_open")
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+#include <fcntl.h>
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+	int dirfd = open(argv[1], O_RDONLY|O_DIRECTORY);
+	if (dirfd < 0) return 1;
+	int fd = openat(dirfd, "file.txt", O_RDONLY);
+	if (fd >= 0) close(fd);
+	close(dirfd);
+	return 0;
+}
+`), 0o600))
+	compileBinary(t, srcFile, binFile)
+
+	env := roRuleEnv(t, absTestDir)
+
+	// The C program calls openat(dirfd, "file.txt", O_RDONLY).
+	// strace -y annotates: openat(3<absTestDir>, "file.txt", O_RDONLY)
+	// parseLine joins: absTestDir/file.txt
+	exitCode, err := env.run([]string{binFile, absTestDir})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdUnresolvableWhenNoCwdTracked
+// tests that when a numeric dirfd has no path annotation (strace could not resolve it)
+// and no cwd is tracked for the pid, a relative path is logged as UNKNOWN.
+// Uses a static binary to avoid cwd-establishing calls from the dynamic linker.
+func TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdUnresolvableWhenNoCwdTracked(t *testing.T) {
+	skipIfNoGccOrNotAMD64(t)
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "fd_relative.c")
+	binFile := filepath.Join(tmpDir, "fd_relative")
+
+	// Minimal static binary: calls openat(42, "fd-relative.txt", O_RDONLY) via inline
+	// assembly. fd 42 does not exist, so strace cannot annotate it. Combined with no
+	// dynamic linker (no AT_FDCWD annotation), no cwd is tracked → UNKNOWN.
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+long sys_openat(int dirfd, const char *path, int flags) {
+	long ret;
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(257), "D"(dirfd), "S"(path), "d"(flags) : "rcx", "r11", "memory");
+	return ret;
+}
+void sys_exit(int code) {
+	__asm__ volatile("syscall" :: "a"(231), "D"(code));
+	__builtin_unreachable();
+}
+void _start(void) {
+	sys_openat(42, "fd-relative.txt", 0); /* EBADF – fd 42 does not exist */
+	sys_exit(0);
+}
+`), 0o600))
+	compileStaticBinary(t, srcFile, binFile)
+
+	env := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return new(config.Config)
+	})
+
+	exitCode, err := env.run([]string{binFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range env.logger.Entries() {
+		if strings.HasSuffix(e.Target, "fd-relative.txt") {
+			found = true
+			assert.Equal(t, accesslog.ResultUnknown, e.Result)
+			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
+		}
+	}
+	assert.True(t, found, "unannotated numeric dirfd with relative path and no tracked cwd must be UNKNOWN")
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_EmptyPathWithAtEmptyPath tests that when
+// an *at() syscall uses an empty path argument with a numeric dirfd annotated by strace
+// (AT_EMPTY_PATH usage), the fd's annotated path is logged as the accessed path.
+func TestIntegration_PathResolutionForAtSyscalls_EmptyPathWithAtEmptyPath(t *testing.T) {
+	skipIfNoGcc(t)
+
+	absTestDir, testFile := testDirWithFile(t, "statme.txt", "data")
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "at_empty_path.c")
+	binFile := filepath.Join(tmpDir, "at_empty_path")
+	// The program opens a file and calls fstatat(fd, "", AT_EMPTY_PATH).
+	// Strace -y shows: newfstatat(3</path/to/statme.txt>, "", AT_EMPTY_PATH|...)
+	// The monitor must use the fd's annotated path as the accessed path.
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+#define _GNU_SOURCE
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+	int fd = open(argv[1], O_RDONLY);
+	if (fd < 0) return 1;
+	struct stat st;
+	fstatat(fd, "", &st, AT_EMPTY_PATH);
+	close(fd);
+	return 0;
+}
+`), 0o600))
+	compileBinary(t, srcFile, binFile)
+
+	env := roRuleEnv(t, absTestDir)
+
+	exitCode, err := env.run([]string{binFile, testFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_ChdirUpdatesCwdForPid tests that a
+// successful chdir() call updates the monitored pid's tracked cwd, so subsequent
+// bare-path syscalls from that pid resolve against the new cwd.
+func TestIntegration_PathResolutionForAtSyscalls_ChdirUpdatesCwdForPid(t *testing.T) {
+	skipIfNoGcc(t)
+
+	absTestDir, testFile := testDirWithFile(t, "file.txt", "data")
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "chdir_access.c")
+	binFile := filepath.Join(tmpDir, "chdir_access")
+	// The program calls chdir(dir) then access("file.txt").
+	// chdir updates cwdByPid; the subsequent bare-path access("file.txt")
+	// resolves to dir/file.txt.
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+	chdir(argv[1]);
+	access("file.txt", R_OK);
+	return 0;
+}
+`), 0o600))
+	compileBinary(t, srcFile, binFile)
+
+	env := roRuleEnv(t, absTestDir)
+
+	exitCode, err := env.run([]string{binFile, absTestDir})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_FchdirUpdatesCwdForPid tests that a
+// successful fchdir() call updates the monitored pid's tracked cwd to the fd's
+// annotated path, so subsequent bare-path syscalls resolve against the new cwd.
+func TestIntegration_PathResolutionForAtSyscalls_FchdirUpdatesCwdForPid(t *testing.T) {
+	skipIfNoGcc(t)
+
+	absTestDir, testFile := testDirWithFile(t, "file.txt", "data")
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "fchdir_access.c")
+	binFile := filepath.Join(tmpDir, "fchdir_access")
+	// The program opens a directory fd, calls fchdir(fd), then access("file.txt").
+	// fchdir updates cwdByPid to fd's annotated path; bare-path access resolves.
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+#include <fcntl.h>
+#include <unistd.h>
+int main(int argc, char *argv[]) {
+	int dirfd = open(argv[1], O_RDONLY|O_DIRECTORY);
+	if (dirfd < 0) return 1;
+	fchdir(dirfd);
+	access("file.txt", R_OK);
+	close(dirfd);
+	return 0;
+}
+`), 0o600))
+	compileBinary(t, srcFile, binFile)
+
+	env := roRuleEnv(t, absTestDir)
+
+	exitCode, err := env.run([]string{binFile, absTestDir})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	assertHasReadEntry(t, env.logger.Entries(), testFile)
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_CwdClearedOnProcessExit tests that
+// cwd tracking state does not persist across monitor runs. Each call to mon.Run()
+// starts with a fresh cwdByPid, so no pid's cwd from a previous run can influence
+// path resolution in a subsequent run.
+func TestIntegration_PathResolutionForAtSyscalls_CwdClearedOnProcessExit(t *testing.T) {
+	skipIfNoGccOrNotAMD64(t)
+
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "bare_access2.c")
+	binFile := filepath.Join(tmpDir, "bare_access2")
+	require.NoError(t, os.WriteFile(srcFile, []byte(`
+long sys_access(const char *path, int mode) {
+	long ret;
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(21), "D"(path), "S"(mode) : "rcx", "r11", "memory");
+	return ret;
+}
+void sys_exit(int code) {
+	__asm__ volatile("syscall" :: "a"(231), "D"(code));
+	__builtin_unreachable();
+}
+void _start(void) {
+	sys_access("post-exit/relative.txt", 0);
+	sys_exit(0);
+}
+`), 0o600))
+	compileStaticBinary(t, srcFile, binFile)
+
+	// Run 1: a normal command that establishes cwd tracking for its pids.
+	env1 := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return new(config.Config)
+	})
+	_, _ = env1.run([]string{"sh", "-c", "true"})
+
+	// Run 2: fresh env — cwdByPid from run 1 is gone. Static binary makes a
+	// bare-path access with no dynamic linker, so no cwd is established.
+	// The path must be UNKNOWN regardless of what run 1 tracked.
+	env2 := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return new(config.Config)
+	})
+	exitCode, err := env2.run([]string{binFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range env2.logger.Entries() {
+		if e.Target == "post-exit/relative.txt" {
+			found = true
+			assert.Equal(t, accesslog.ResultUnknown, e.Result)
+			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
+		}
+	}
+	assert.True(t, found, "cwd state must not persist across monitor runs")
+}
+
+// TestIntegration_PathResolutionForAtSyscalls_CwdNotInheritedByNewPid tests that a
+// new process (created via fork from a parent that has a tracked cwd) starts with
+// no tracked cwd of its own. Its bare-path syscalls are UNKNOWN until it establishes
+// its own cwd via AT_FDCWD annotation, chdir, or fchdir.
+func TestIntegration_PathResolutionForAtSyscalls_CwdNotInheritedByNewPid(t *testing.T) {
+	skipIfNoGccOrNotAMD64(t)
+
+	tmpDir := t.TempDir()
+
+	// Minimal static binary: its first syscall is access("child-relative.txt"),
+	// before any AT_FDCWD-establishing call (no dynamic linker).
+	childSrc := filepath.Join(tmpDir, "child_bare.c")
+	childBin := filepath.Join(tmpDir, "child_bare")
+	require.NoError(t, os.WriteFile(childSrc, []byte(`
+long sys_access(const char *path, int mode) {
+	long ret;
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(21), "D"(path), "S"(mode) : "rcx", "r11", "memory");
+	return ret;
+}
+void sys_exit(int code) {
+	__asm__ volatile("syscall" :: "a"(231), "D"(code));
+	__builtin_unreachable();
+}
+void _start(void) {
+	sys_access("child-relative.txt", 0);
+	sys_exit(0);
+}
+`), 0o600))
+	compileStaticBinary(t, childSrc, childBin)
+
+	// Dynamic wrapper: establishes cwd tracking for its own pid (via dynamic
+	// linker AT_FDCWD annotations), then fork+execs the static child. The child
+	// gets a new pid with no tracked cwd, so its access must be UNKNOWN.
+	wrapperSrc := filepath.Join(tmpDir, "fork_exec.c")
+	wrapperBin := filepath.Join(tmpDir, "fork_exec")
+	require.NoError(t, os.WriteFile(wrapperSrc, []byte(`
+#include <unistd.h>
+#include <sys/wait.h>
+int main(int argc, char *argv[]) {
+	pid_t child = fork();
+	if (child == 0) {
+		char *args[] = {argv[1], (char *)0};
+		execv(argv[1], args);
+		_exit(1);
+	}
+	int status;
+	waitpid(child, &status, 0);
+	return 0;
+}
+`), 0o600))
+	compileBinary(t, wrapperSrc, wrapperBin)
+
+	env := newMonitorTestEnv(t, func(_ string) *config.Config {
+		return new(config.Config)
+	})
+
+	// The wrapper (dynamic) gets cwd tracked via AT_FDCWD annotations.
+	// The child (forked, new pid, static) has no tracked cwd of its own.
+	// The child's access("child-relative.txt") must be UNKNOWN.
+	exitCode, err := env.run([]string{wrapperBin, childBin})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range env.logger.Entries() {
+		if e.Target == "child-relative.txt" {
+			found = true
+			assert.Equal(t, accesslog.ResultUnknown, e.Result)
+			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
+		}
+	}
+	assert.True(t, found, "new pid must not inherit parent's tracked cwd")
 }

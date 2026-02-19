@@ -17,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegration_Runner_StartLaunchesMonitoredRun tests the "Start launches a monitored run" scenario.
-func TestIntegration_Runner_StartLaunchesMonitoredRun(t *testing.T) {
+// TestIntegration_RunLifecycle_StartLaunchesMonitoredRun tests the "Start launches a monitored run" scenario.
+func TestIntegration_RunLifecycle_StartLaunchesMonitoredRun(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -43,8 +43,8 @@ func TestIntegration_Runner_StartLaunchesMonitoredRun(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_StopTerminatesRunningProcess tests the "Stop terminates a running process" scenario.
-func TestIntegration_Runner_StopTerminatesRunningProcess(t *testing.T) {
+// TestIntegration_RunLifecycle_StopTerminatesRunningProcess tests the "Stop terminates a running process" scenario.
+func TestIntegration_RunLifecycle_StopTerminatesRunningProcess(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -66,8 +66,8 @@ func TestIntegration_Runner_StopTerminatesRunningProcess(t *testing.T) {
 	assert.False(t, status.Running)
 }
 
-// TestIntegration_Runner_StopIsNoOpWhenIdle tests the "Stop is no-op when idle" scenario.
-func TestIntegration_Runner_StopIsNoOpWhenIdle(t *testing.T) {
+// TestIntegration_RunLifecycle_StopIsNoOpWhenIdle tests the "Stop is no-op when idle" scenario.
+func TestIntegration_RunLifecycle_StopIsNoOpWhenIdle(t *testing.T) {
 	env := newRunnerTestEnv(t)
 
 	// WHEN no run is active
@@ -83,8 +83,8 @@ func TestIntegration_Runner_StopIsNoOpWhenIdle(t *testing.T) {
 	assert.Equal(t, status, newStatus)
 }
 
-// TestIntegration_Runner_StartWhileRunningStopsPreviousRun tests the "Start while running stops the previous run" scenario.
-func TestIntegration_Runner_StartWhileRunningStopsPreviousRun(t *testing.T) {
+// TestIntegration_RunLifecycle_StartWhileRunningStopsPreviousRun tests the "Start while running stops the previous run" scenario.
+func TestIntegration_RunLifecycle_StartWhileRunningStopsPreviousRun(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -116,8 +116,8 @@ func TestIntegration_Runner_StartWhileRunningStopsPreviousRun(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_LoggerIsReplacedOnStart tests the "Logger is replaced on start" scenario.
-func TestIntegration_Runner_LoggerIsReplacedOnStart(t *testing.T) {
+// TestIntegration_AccessLogging_LoggerIsReplacedOnStart tests the "Logger is replaced on start" scenario.
+func TestIntegration_AccessLogging_LoggerIsReplacedOnStart(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -146,8 +146,8 @@ func TestIntegration_Runner_LoggerIsReplacedOnStart(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_LoggerChangeCallbackInvokedOnStart tests the "Logger change callback invoked on start" scenario.
-func TestIntegration_Runner_LoggerChangeCallbackInvokedOnStart(t *testing.T) {
+// TestIntegration_AccessLogging_LoggerChangeCallbackInvokedOnStart tests the "Logger change callback invoked on start" scenario.
+func TestIntegration_AccessLogging_LoggerChangeCallbackInvokedOnStart(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -173,8 +173,8 @@ func TestIntegration_Runner_LoggerChangeCallbackInvokedOnStart(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_StatusReflectsRunningState tests the "Status reflects running state" scenario.
-func TestIntegration_Runner_StatusReflectsRunningState(t *testing.T) {
+// TestIntegration_StatusReporting_StatusReflectsRunningState tests the "Status reflects running state" scenario.
+func TestIntegration_StatusReporting_StatusReflectsRunningState(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -194,8 +194,8 @@ func TestIntegration_Runner_StatusReflectsRunningState(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_StatusReflectsExitState tests the "Status reflects exit state" scenario.
-func TestIntegration_Runner_StatusReflectsExitState(t *testing.T) {
+// TestIntegration_StatusReporting_StatusReflectsExitState tests the "Status reflects exit state" scenario.
+func TestIntegration_StatusReporting_StatusReflectsExitState(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -215,8 +215,8 @@ func TestIntegration_Runner_StatusReflectsExitState(t *testing.T) {
 	t.Logf("Exit code: %d, Error: %s", status.ExitCode, status.Error)
 }
 
-// TestIntegration_Runner_StatusReflectsNonZeroExit tests the "Status reflects non-zero exit" scenario.
-func TestIntegration_Runner_StatusReflectsNonZeroExit(t *testing.T) {
+// TestIntegration_StatusReporting_StatusReflectsNonZeroExit tests the "Status reflects non-zero exit" scenario.
+func TestIntegration_StatusReporting_StatusReflectsNonZeroExit(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -235,8 +235,8 @@ func TestIntegration_Runner_StatusReflectsNonZeroExit(t *testing.T) {
 	assert.Equal(t, 1, status.ExitCode)
 }
 
-// TestIntegration_Runner_SubscribersNotifiedOnStatusChange tests the "Subscribers notified on status change" scenario.
-func TestIntegration_Runner_SubscribersNotifiedOnStatusChange(t *testing.T) {
+// TestIntegration_StatusReporting_SubscribersNotifiedOnStatusChange tests the "Subscribers notified on status change" scenario.
+func TestIntegration_StatusReporting_SubscribersNotifiedOnStatusChange(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -276,8 +276,8 @@ collectLoop:
 	assert.GreaterOrEqual(t, receivedNotifications, 2)
 }
 
-// TestIntegration_Runner_ConcurrentStatusReadsDuringRun tests the "Concurrent status reads during run" scenario.
-func TestIntegration_Runner_ConcurrentStatusReadsDuringRun(t *testing.T) {
+// TestIntegration_StatusReporting_ConcurrentStatusReadsDuringRun tests the "Concurrent status reads during run" scenario.
+func TestIntegration_StatusReporting_ConcurrentStatusReadsDuringRun(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
@@ -309,9 +309,9 @@ func TestIntegration_Runner_ConcurrentStatusReadsDuringRun(t *testing.T) {
 	env.waitForIdle()
 }
 
-// TestIntegration_Runner_TerminalRestoredAfterKilledProcess tests the "Terminal restored after killed process" scenario.
+// TestIntegration_TerminalManagement_TerminalRestoredAfterKilledProcess tests the "Terminal restored after killed process" scenario.
 // This test verifies that terminal state is restored between runs.
-func TestIntegration_Runner_TerminalRestoredAfterKilledProcess(t *testing.T) {
+func TestIntegration_TerminalManagement_TerminalRestoredAfterKilledProcess(t *testing.T) {
 	t.Skip("needs interactive terminal testing - placeholder for manual verification")
 	// This test would verify:
 	// - Start a process that changes terminal state (e.g., `stty -echo`)
@@ -321,9 +321,9 @@ func TestIntegration_Runner_TerminalRestoredAfterKilledProcess(t *testing.T) {
 	// Manual test: Run a command that disables echo, stop it, restart, verify echo works
 }
 
-// TestIntegration_Runner_BufferedInputDiscardedOnRestart tests the "Buffered input discarded on restart" scenario.
+// TestIntegration_TerminalManagement_BufferedInputDiscardedOnRestart tests the "Buffered input discarded on restart" scenario.
 // This test verifies that stdin buffer is cleared between runs.
-func TestIntegration_Runner_BufferedInputDiscardedOnRestart(t *testing.T) {
+func TestIntegration_TerminalManagement_BufferedInputDiscardedOnRestart(t *testing.T) {
 	t.Skip("needs interactive stdin testing - placeholder for manual verification")
 	// This test would verify:
 	// - Type input while no process is running
@@ -332,8 +332,8 @@ func TestIntegration_Runner_BufferedInputDiscardedOnRestart(t *testing.T) {
 	// Manual test: Type input after process stops, then restart and verify input not received
 }
 
-// TestIntegration_Runner_TUIArtifactsClearedOnExit tests the "TUI artifacts cleared on exit" scenario.
-func TestIntegration_Runner_TUIArtifactsClearedOnExit(t *testing.T) {
+// TestIntegration_TerminalManagement_TUIArtifactsClearedOnExit tests the "TUI artifacts cleared on exit" scenario.
+func TestIntegration_TerminalManagement_TUIArtifactsClearedOnExit(t *testing.T) {
 	t.Skip("needs terminal escape sequence verification - placeholder for manual verification")
 	// This test would verify:
 	// - Run a TUI application (e.g., vim or htop)
@@ -348,8 +348,8 @@ func TestIntegration_Runner_TUIArtifactsClearedOnExit(t *testing.T) {
 	// Manual test: Run vim in sandbox, stop it, verify no TUI artifacts remain
 }
 
-// TestIntegration_Runner_ForegroundReclaimedAfterKilledProcess tests the "Foreground reclaimed after killed process" scenario.
-func TestIntegration_Runner_ForegroundReclaimedAfterKilledProcess(t *testing.T) {
+// TestIntegration_TerminalManagement_ForegroundReclaimedAfterKilledProcess tests the "Foreground reclaimed after killed process" scenario.
+func TestIntegration_TerminalManagement_ForegroundReclaimedAfterKilledProcess(t *testing.T) {
 	t.Skip("needs controlling terminal - placeholder for manual verification")
 	// This test would verify:
 	// - Run a process that calls tcsetpgrp() (e.g., bash)

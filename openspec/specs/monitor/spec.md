@@ -42,15 +42,137 @@ Filesystem operations MUST be classified as READ or WRITE for logging purposes:
 - **AND** sandboxed process creates directory `/home/user/project/newdir`
 - **THEN** log contains a WRITE entry for `/home/user/project/newdir`
 
+#### Scenario: Reading file contents logged as read
+- **WHEN** monitoring is enabled
+- **AND** sandboxed process reads file contents of `<tmp>/data/file.txt` via `openat(O_RDONLY)`
+- **AND** config contains `fs:ro:<tmp>/data`
+- **THEN** log contains a READ entry for `<tmp>/data/file.txt`
+
+#### Scenario: Writing file contents logged as write
+- **WHEN** monitoring is enabled
+- **AND** sandboxed process writes to `<tmp>/data/output.txt` via `openat(O_WRONLY|O_CREAT)`
+- **AND** config contains `fs:rw:<tmp>/data`
+- **THEN** log contains a WRITE entry for `<tmp>/data/output.txt`
+
 ### Requirement: Path resolution for *at() syscalls
 
-Paths from `*at()` syscalls with a resolved fd SHALL be joined with the fd path to produce an absolute path. When the fd path is unavailable and the syscall path is relative, the path SHALL be forwarded as-is for logging with result `UNKNOWN` and rule `unresolved-relative-path`.
+Paths from `*at()` syscalls with a resolved fd SHALL be joined with the fd path to produce an absolute path. When the path argument is absolute, the dirfd is ignored.
 
-#### Scenario: Unresolved relative path logged
+When a numeric dirfd is annotated with a path by strace (`fd<path>`) and the path argument is empty (AT_EMPTY_PATH usage), the fd's annotated path SHALL be used as the accessed path.
+
+The monitor SHALL track per-pid cwd from three sources in strace output:
+1. AT_FDCWD annotations on `*at()` syscalls (the `<path>` in `AT_FDCWD<path>`).
+2. `chdir(path)` syscalls — absolute paths recorded directly; relative paths joined with the pid's existing tracked cwd (if known).
+3. `fchdir(fd<path>)` syscalls — the fd's annotated path recorded as the pid's cwd.
+
+Cwd SHALL NOT be tracked during the bwrap setup phase (before the user command's execve), because setup-phase paths reflect the host namespace.
+
+When a bare-path syscall (e.g., `access`, `readlink`) produces a relative path, the monitor SHALL resolve it by joining with the tracked cwd for that pid. When no cwd has been tracked for the pid, the path SHALL be forwarded as-is for logging with result `UNKNOWN` and rule `unresolved-relative-path`.
+
+When a monitored process exits, the monitor SHALL clear its tracked cwd entry. New pids (from fork/exec) start with no tracked cwd and do not inherit the parent's cwd.
+
+#### Scenario: Absolute dirfd ignored
+
 - **WHEN** monitoring is enabled
-- **AND** sandboxed process accesses a relative path (e.g., `foo/bar.txt`)
-- **AND** the fd path for the `*at()` syscall is unavailable
-- **THEN** log contains line: `READ foo/bar.txt UNKNOWN unresolved-relative-path`
+- **AND** a sandboxed process calls an `*at()` syscall with an absolute path argument
+- **THEN** the dirfd (AT_FDCWD or numeric) is ignored and the absolute path is logged directly
+
+#### Scenario: AT_FDCWD resolves with tracked cwd
+
+- **WHEN** monitoring is enabled
+- **AND** strace annotates `AT_FDCWD` with a directory path (e.g., `openat(AT_FDCWD</dir>, "file", O_RDONLY)`)
+- **AND** the path argument is relative
+- **THEN** the monitor joins the annotation with the relative path to produce an absolute path
+- **AND** the absolute path is logged with the appropriate result
+
+#### Scenario: AT_FDCWD unresolvable when no cwd tracked
+
+- **WHEN** monitoring is enabled
+- **AND** strace cannot annotate `AT_FDCWD` (no `<path>` annotation)
+- **AND** no cwd has been tracked for that pid (no prior AT_FDCWD annotation, chdir, or fchdir)
+- **AND** the path argument is relative
+- **THEN** the path is logged as UNKNOWN with rule `unresolved-relative-path`
+
+#### Scenario: Relative dirfd resolves with tracked cwd
+
+- **WHEN** monitoring is enabled
+- **AND** strace annotates a numeric dirfd with a directory path (e.g., `openat(3</dir>, "file", O_RDONLY)`)
+- **AND** the path argument is relative
+- **THEN** the monitor joins the fd annotation with the relative path to produce an absolute path
+- **AND** the absolute path is logged with the appropriate result
+
+#### Scenario: Relative dirfd unresolvable when no cwd tracked
+
+- **WHEN** monitoring is enabled
+- **AND** a numeric dirfd has no path annotation (strace could not resolve it)
+- **AND** no cwd has been tracked for that pid
+- **AND** the path argument is relative
+- **THEN** the path is logged as UNKNOWN with rule `unresolved-relative-path`
+
+#### Scenario: Empty path with AT_EMPTY_PATH
+
+- **WHEN** monitoring is enabled
+- **AND** a sandboxed process calls an `*at()` syscall with an empty path and a numeric dirfd annotated with an absolute path (AT_EMPTY_PATH usage)
+- **THEN** the fd's annotated path is used as the accessed path and logged with the appropriate result
+
+#### Scenario: Chdir updates cwd for pid
+
+- **WHEN** monitoring is enabled
+- **AND** a process calls `chdir(path)` successfully
+- **THEN** the monitor updates the tracked cwd for that pid
+- **AND** subsequent bare-path syscalls from that pid are resolved against the new cwd
+
+#### Scenario: Fchdir updates cwd for pid
+
+- **WHEN** monitoring is enabled
+- **AND** a process calls `fchdir(fd)` successfully
+- **THEN** the monitor updates the tracked cwd for that pid to the fd's annotated path
+- **AND** subsequent bare-path syscalls from that pid are resolved against the new cwd
+
+#### Scenario: Cwd cleared on process exit
+
+- **WHEN** monitoring is enabled
+- **AND** a monitored process exits
+- **THEN** the monitor clears the tracked cwd for that pid
+- **AND** a subsequent monitored run starts with no inherited cwd state
+
+#### Scenario: Cwd not inherited by new pid
+
+- **WHEN** monitoring is enabled
+- **AND** a new process is created (via fork/exec) from a parent that has a tracked cwd
+- **THEN** the new pid starts with no tracked cwd
+- **AND** its bare-path syscalls are logged as UNKNOWN until it establishes its own cwd
+
+#### Scenario: Per-pid cwd isolation
+
+- **WHEN** monitoring is enabled
+- **AND** pid 12345 has cwd `/home/user/project-a` (from AT_FDCWD annotation)
+- **AND** pid 12346 has cwd `/home/user/project-b` (from AT_FDCWD annotation)
+- **AND** both pids call `access(".git/config", R_OK)`
+- **THEN** pid 12345's access resolves to `/home/user/project-a/.git/config`
+- **AND** pid 12346's access resolves to `/home/user/project-b/.git/config`
+
+#### Scenario: Cwd not tracked during bwrap setup phase
+
+- **WHEN** monitoring is enabled with bwrap
+- **AND** AT_FDCWD annotations appear during the bwrap setup phase (before the user command's execve)
+- **THEN** those annotations SHALL NOT be recorded as cwd for any pid
+- **AND** cwd tracking begins only after the setup phase ends
+
+#### Scenario: Relative chdir joined with existing cwd
+
+- **WHEN** monitoring is enabled
+- **AND** pid 12345 has cwd `/home/user/project` (from prior AT_FDCWD annotation)
+- **AND** pid 12345 calls `chdir("subdir")`
+- **THEN** the tracked cwd for pid 12345 is updated to `/home/user/project/subdir`
+
+#### Scenario: Relative chdir with no prior cwd is ignored
+
+- **WHEN** monitoring is enabled
+- **AND** pid 12345 has no tracked cwd
+- **AND** pid 12345 calls `chdir("subdir")`
+- **THEN** no cwd is recorded for pid 12345
+- **AND** subsequent bare-path relative calls from pid 12345 produce `UNKNOWN unresolved-relative-path`
 
 ### Requirement: Symlink path resolution in access logging
 

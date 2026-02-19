@@ -334,40 +334,7 @@ func TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig(t *t
 	rules := append(systemPaths(), "fs:ro:"+dataDir, newNetRule)
 	configPath := writeConfig(t, rules)
 
-	//nolint:gosec // G204: test uses controlled input from test fixtures
-	cmd := exec.CommandContext(context.Background(), binaryPath,
-		"--config", configPath,
-		"--monitor=0",
-		"--",
-		"sleep", "60")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	stderrPipe, err := cmd.StderrPipe()
-	require.NoError(t, err)
-	cmd.Stdout = os.Stdout
-
-	require.NoError(t, cmd.Start())
-
-	var monitorURL string
-	var stderrOnce sync.Once
-	ready := make(chan struct{})
-	go func() {
-		scanner := bufio.NewScanner(stderrPipe)
-		for scanner.Scan() {
-			if after, ok := strings.CutPrefix(scanner.Text(), "execave: monitor running at "); ok {
-				monitorURL = after
-				stderrOnce.Do(func() { close(ready) })
-			}
-		}
-		stderrOnce.Do(func() { close(ready) })
-	}()
-	<-ready
-	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
-
-	defer func() {
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
-		_ = cmd.Wait()
-	}()
+	monitorURL := startMonitoredExecave(t, configPath, "sleep", "60")
 
 	// Simulate browser reconnecting after execave restart: use a cross-session
 	// Last-Event-ID so the server replays from index 0 and emits fresh rules.

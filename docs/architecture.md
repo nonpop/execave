@@ -108,7 +108,7 @@ TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, 
 
 ### Monitor (`internal/monitor/`)
 
-Optional filesystem access tracer (`--monitor=PORT`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
+Optional filesystem access tracer (`--monitor=PORT`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
 
 ## Data Flow
 

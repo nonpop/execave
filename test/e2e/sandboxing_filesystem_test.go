@@ -264,10 +264,10 @@ func TestE2E_SandboxingFilesystem_RelativePathsInRulesResolvedRelativeToConfigDi
 	assert.Contains(t, result.Stdout, "hello")
 }
 
-// TestE2E_SandboxingFilesystem_TUIApplicationsReceiveTerminalResizeSignals tests that
+// TestE2E_SandboxingFilesystem_SandboxedProcessReceivesTerminalResizeSignal tests that
 // on modern kernels (Linux 6.2+) where TIOCSTI is blocked, sandboxed TUI applications
 // receive SIGWINCH for terminal resize events.
-func TestE2E_SandboxingFilesystem_TUIApplicationsReceiveTerminalResizeSignals(t *testing.T) {
+func TestE2E_SandboxingFilesystem_SandboxedProcessReceivesTerminalResizeSignal(t *testing.T) {
 	failIfNoBwrap(t)
 
 	// Skip test on old kernels where TIOCSTI is not blocked by default

@@ -112,9 +112,13 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 	// Wait for processing goroutine to finish
 	processingErr := <-processingErrCh
 	if processingErr != nil && ctx.Err() == nil {
-		// Ignore pipe read errors caused by the forced close above.
-		// Only report processing errors from normal (non-cancelled) runs.
-		return exitCode, fmt.Errorf("process strace output: %w", processingErr)
+		// Ignore pipe read errors caused by the forced close above (line 105).
+		// When strace exits normally, we close straceR to unblock descendants
+		// that inherited fd 3. This can race with the goroutine's read, causing
+		// os.ErrClosed. This is benign and expected in normal exit scenarios.
+		if !errors.Is(processingErr, os.ErrClosed) {
+			return exitCode, fmt.Errorf("process strace output: %w", processingErr)
+		}
 	}
 
 	return exitCode, nil
@@ -146,9 +150,9 @@ func extractExitCode(err error) (int, error) {
 
 func (m *Monitor) buildStraceArgs(command []string, outputFD int) []string {
 	straceArgs := []string{
-		"-f",               // Follow forks
-		"-y",               // Print paths for file descriptors
-		"-e", "trace=file", // Only file operations
+		"-f",                      // Follow forks
+		"-y",                      // Print paths for file descriptors
+		"-e", "trace=file,fchdir", // Only file operations (fchdir is fd-based so not in 'file' group)
 		"-s", "0", // Don't capture string arguments
 		"-o", fmt.Sprintf("/proc/self/fd/%d", outputFD), // Output to pipe
 		"-qq", // Suppress strace info messages
@@ -172,39 +176,29 @@ func (m *Monitor) buildStraceArgs(command []string, outputFD int) []string {
 func (m *Monitor) processStraceOutput(output io.Reader) error {
 	scanner := bufio.NewScanner(output)
 	parser := newStraceParser()
+	cwdByPid := make(map[string]string)
 
 	// When bwrap is used, strace captures bwrap's sandbox setup (namespace,
-	// mount, pivot_root) before the user command starts. The strace output
-	// contains execve calls for setup: bwrap's own (first), optionally the
-	// tunnel (second when net rules present), and the user command (last).
-	// Skip all lines until the final setup execve.
-	inSetup := len(m.bwrapArgs) > 0
-	expectedExecves := 2
-	if m.hasNetworkPath {
-		expectedExecves = 3
+	// mount, pivot_root) before the user command starts. Skip setup lines
+	// and process the user command's execve (the final setup execve).
+	if len(m.bwrapArgs) > 0 {
+		expectedExecves := 2
+		if m.hasNetworkPath {
+			expectedExecves = 3
+		}
+		result, line, ok := skipBwrapSetup(scanner, parser, expectedExecves)
+		if ok {
+			resolveCWD(cwdByPid, &result)
+			if err := m.processAccessEntry(result.syscall, result.path, line); err != nil {
+				return err
+			}
+		}
 	}
-	seenExecves := 0
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		syscall, path, ok := parser.parseLine(line)
-		if !ok {
-			continue // not a relevant syscall line (e.g., signal info, exit status)
-		}
-
-		if inSetup {
-			if syscall == "execve" || syscall == "execveat" {
-				seenExecves++
-			}
-			if seenExecves < expectedExecves {
-				continue
-			}
-			inSetup = false
-			// Fall through: log the user command's execve as a READ
-		}
-
-		if err := m.processAccessEntry(syscall, path, line); err != nil {
+		if err := m.processStraceLine(parser, cwdByPid, line); err != nil {
 			return err
 		}
 	}
@@ -213,6 +207,90 @@ func (m *Monitor) processStraceOutput(output io.Reader) error {
 		return fmt.Errorf("scan strace output: %w", err)
 	}
 	return nil
+}
+
+// processStraceLine handles a single strace output line: parses it,
+// updates cwd tracking, and logs access entries.
+func (m *Monitor) processStraceLine(parser *straceParser, cwdByPid map[string]string, line string) error {
+	result, ok := parser.parseLine(line)
+	if !ok {
+		return nil
+	}
+
+	// Process exit clears the tracked cwd for the exiting pid, preventing
+	// stale entries if the pid is reused within the same monitor run.
+	if result.syscall == "exit" {
+		delete(cwdByPid, result.pid)
+		return nil
+	}
+
+	if resolveCWD(cwdByPid, &result) {
+		return nil
+	}
+
+	return m.processAccessEntry(result.syscall, result.path, line)
+}
+
+// skipBwrapSetup advances the scanner past bwrap's sandbox setup lines.
+// The strace output contains execve calls for setup: bwrap's own (first),
+// optionally the tunnel (second when net rules present), and the user command
+// (last). Returns the parse result and raw line of the user command's execve.
+func skipBwrapSetup(scanner *bufio.Scanner, parser *straceParser, expectedExecves int) (parseResult, string, bool) {
+	seenExecves := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		result, ok := parser.parseLine(line)
+		if !ok {
+			continue
+		}
+		if result.syscall == "execve" || result.syscall == "execveat" {
+			seenExecves++
+		}
+		if seenExecves >= expectedExecves {
+			return result, line, true
+		}
+	}
+	return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, "", false
+}
+
+// resolveCWD tracks per-process working directories and resolves relative paths.
+// It updates cwdByPid from cwdHint, chdir, and fchdir changes, and resolves
+// relative result.path using the tracked cwd.
+// Returns true if the syscall was a chdir variant (caller should skip to next line).
+func resolveCWD(cwdByPid map[string]string, result *parseResult) bool {
+	if result.cwdHint != "" {
+		cwdByPid[result.pid] = result.cwdHint
+	}
+
+	// Handle chdir: update tracked cwd (only on success)
+	if result.syscall == "chdir" {
+		if !result.failed {
+			if filepath.IsAbs(result.path) {
+				cwdByPid[result.pid] = result.path
+			} else if existing, ok := cwdByPid[result.pid]; ok {
+				cwdByPid[result.pid] = filepath.Join(existing, result.path)
+			}
+			// Relative chdir with no prior cwd: silently skip
+		}
+		return true
+	}
+
+	// Handle fchdir: fd-annotated path is the new cwd (only on success)
+	if result.syscall == "fchdir" {
+		if !result.failed {
+			cwdByPid[result.pid] = result.path
+		}
+		return true
+	}
+
+	// Resolve bare-path relative paths using tracked cwd
+	if !filepath.IsAbs(result.path) {
+		if cwd, ok := cwdByPid[result.pid]; ok {
+			result.path = filepath.Join(cwd, result.path)
+		}
+	}
+
+	return false
 }
 
 func (m *Monitor) processAccessEntry(syscall, path, line string) error {
@@ -479,9 +557,20 @@ func classifyOpenOperation(line string) OperationType {
 	return OperationRead
 }
 
+// parseResult holds parsed data from a single strace line.
+type parseResult struct {
+	pid     string
+	syscall string
+	path    string
+	cwdHint string // populated when AT_FDCWD has a <path> annotation
+	failed  bool   // true when the syscall returned an error (= -1)
+}
+
 type straceParser struct {
 	syscallRegex    *regexp.Regexp
 	atSyscallRegex  *regexp.Regexp
+	fchdirRegex     *regexp.Regexp
+	exitEventRegex  *regexp.Regexp
 	fdFirstSyscalls map[string]bool
 }
 
@@ -491,8 +580,15 @@ func newStraceParser() *straceParser {
 		syscallRegex: regexp.MustCompile(`^\d*\s*(\w+)\("([^"]+)"`),
 		// Matches: [pid] syscall(fd<fdpath>, "path" — for *at() variants with fd as first arg
 		// With strace -y, fd shows as: AT_FDCWD</cwd/path> or 3</proc/self>
-		// Captures: 1=syscall, 2=fdpath (optional), 3=path
-		atSyscallRegex: regexp.MustCompile(`^\d*\s*(\w+)\((?:AT_FDCWD|\d+)(?:<([^>]*)>)?,\s*"([^"]+)"`),
+		// Captures: 1=syscall, 2=AT_FDCWD or fd number, 3=fdpath (optional), 4=path (may be empty)
+		// Empty path occurs with AT_EMPTY_PATH flag (e.g., fstatat(fd, "", AT_EMPTY_PATH)).
+		atSyscallRegex: regexp.MustCompile(`^\d*\s*(\w+)\((AT_FDCWD|\d+)(?:<([^>]*)>)?,\s*"([^"]*)"`),
+		// Matches: [pid] fchdir(fd<path>) — captures the fd-annotated path
+		// Captures: 1=path
+		fchdirRegex: regexp.MustCompile(`^\d*\s*fchdir\(\d+<([^>]+)>\)`),
+		// Matches process exit/kill events: "[pid] +++ exited with N +++"
+		// Captures: 1=pid
+		exitEventRegex: regexp.MustCompile(`^(\d+)\s*\+\+\+`),
 		fdFirstSyscalls: map[string]bool{
 			"openat": true, "fstatat": true, "newfstatat": true, "faccessat": true,
 			"faccessat2": true, "readlinkat": true, "mkdirat": true, "unlinkat": true,
@@ -502,26 +598,92 @@ func newStraceParser() *straceParser {
 	}
 }
 
-func (p *straceParser) parseLine(line string) (string, string, bool) {
+// extractPid reads the pid prefix from a strace line.
+// Strace -f file output uses "PID syscall(...)" format.
+// Returns empty string for single-process traces (no pid prefix).
+func (p *straceParser) extractPid(line string) string {
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	if i > 0 {
+		return line[:i]
+	}
+	return ""
+}
+
+// isFailed checks whether a strace line indicates a failed syscall.
+// Strace format: "syscall(...) = -1 ERRNO (description)" for failures.
+func (p *straceParser) isFailed(line string) bool {
+	idx := strings.LastIndex(line, ") = ")
+	if idx == -1 {
+		return false
+	}
+	rest := line[idx+4:]
+	return len(rest) > 0 && rest[0] == '-'
+}
+
+// parseAtSyscall interprets a matched *at/statx syscall line. It resolves
+// the accessed path from the dirfd annotation and relative path argument.
+func (p *straceParser) parseAtSyscall(pid string, matches []string, failed bool) (parseResult, bool) {
+	syscall := matches[1]
+	fdType := matches[2] // "AT_FDCWD" or numeric fd
+	fdPath := matches[3] // May be empty if strace didn't resolve fd
+	path := matches[4]
+
+	var cwdHint string
+	if fdType == "AT_FDCWD" && fdPath != "" {
+		cwdHint = fdPath
+	}
+
+	// AT_EMPTY_PATH: empty path means the fd itself is the accessed target.
+	// Only applies when a numeric dirfd is annotated with an absolute path.
+	if path == "" {
+		if fdType != "AT_FDCWD" && fdPath != "" && filepath.IsAbs(fdPath) {
+			path = fdPath
+		} else {
+			return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
+		}
+	}
+
+	// Resolve relative paths using the fd path
+	if fdPath != "" && !filepath.IsAbs(path) {
+		path = filepath.Join(fdPath, path)
+	}
+	return parseResult{pid: pid, syscall: syscall, path: path, cwdHint: cwdHint, failed: failed}, true
+}
+
+func (p *straceParser) parseLine(line string) (parseResult, bool) {
+	pid := p.extractPid(line)
+	failed := p.isFailed(line)
+
 	// Try *at/statx syscall format first (more specific)
 	matches := p.atSyscallRegex.FindStringSubmatch(line)
-	if len(matches) >= 4 && p.fdFirstSyscalls[matches[1]] {
-		syscall := matches[1]
-		fdPath := matches[2] // May be empty if strace didn't resolve fd
-		path := matches[3]
-
-		// Resolve relative paths using the fd path
-		if fdPath != "" && !filepath.IsAbs(path) {
-			path = filepath.Join(fdPath, path)
+	if len(matches) >= 5 && p.fdFirstSyscalls[matches[1]] {
+		if result, ok := p.parseAtSyscall(pid, matches, failed); ok {
+			return result, true
 		}
-		return syscall, path, true
+		return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
 	}
 
 	// Try standard syscall format
 	matches = p.syscallRegex.FindStringSubmatch(line)
-	if len(matches) < 3 {
-		return "", "", false
+	if len(matches) >= 3 {
+		return parseResult{pid: pid, syscall: matches[1], path: matches[2], cwdHint: "", failed: failed}, true
 	}
 
-	return matches[1], matches[2], true
+	// Try fchdir: format is "PID fchdir(fd<path>)" — no quoted string arg
+	matches = p.fchdirRegex.FindStringSubmatch(line)
+	if matches != nil {
+		return parseResult{pid: pid, syscall: "fchdir", path: matches[1], cwdHint: "", failed: failed}, true
+	}
+
+	// Detect process exit/kill events so the caller can clear stale cwd entries.
+	// Strace format: "PID +++ exited with N +++" or "PID +++ killed by SIGNAME +++"
+	matches = p.exitEventRegex.FindStringSubmatch(line)
+	if matches != nil {
+		return parseResult{pid: matches[1], syscall: "exit", path: "", cwdHint: "", failed: false}, true
+	}
+
+	return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
 }

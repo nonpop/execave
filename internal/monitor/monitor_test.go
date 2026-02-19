@@ -220,10 +220,11 @@ func TestMonitor_Deduplication(t *testing.T) {
 
 	t.Logf("Path counts: %v", pathCounts)
 
-	// Each path should appear at most once (deduplication)
-	for _, count := range pathCounts {
-		assert.LessOrEqual(t, count, 1)
-	}
+	// The test file should appear at most once due to deduplication
+	// (other paths like shared libraries may appear multiple times with different operations/results)
+	testFileCount, exists := pathCounts[testFile]
+	require.True(t, exists, "test file should appear in access log")
+	assert.LessOrEqual(t, testFileCount, 1, "test file should be deduplicated")
 }
 
 func TestMapSyscallToOperation(t *testing.T) {
@@ -264,13 +265,15 @@ func TestMapSyscallToOperation(t *testing.T) {
 
 // TestMonitor_UnresolvedRelativePath tests that relative paths in strace output
 // are logged with UNKNOWN result and unresolved-relative-path rule.
-// Uses synthetic strace data because triggering unresolved relative paths in real
-// strace requires older strace versions (< 5.2) that don't resolve AT_FDCWD with -y.
+// Bare-path syscalls (e.g., access, readlink) don't have an fd argument, so strace
+// cannot annotate them with a directory path. When no cwd has been tracked for the
+// pid, these relative paths remain unresolved. AT_FDCWD without annotation (older
+// strace) is another source but less common on modern systems.
 func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	cfg := new(config.Config)
 	mon, logger := createTestMonitor(t, cfg, nil)
 
-	// Synthetic strace output: openat with AT_FDCWD but no path resolution (older strace -y behavior).
+	// Synthetic strace output: openat with AT_FDCWD but no path resolution.
 	// The relative path "foo/bar.txt" cannot be resolved to an absolute path.
 	straceData := strings.NewReader(
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT (No such file or directory)` + "\n",
@@ -380,7 +383,7 @@ func TestBuildStraceArgs(t *testing.T) {
 	// Should contain strace flags and original command
 	assert.Contains(t, args, "-f")
 	assert.Contains(t, args, "-y")
-	assert.Contains(t, args, "trace=file")
+	assert.Contains(t, args, "trace=file,fchdir")
 	assert.Contains(t, args, "-qq")
 	assert.Contains(t, args, "/proc/self/fd/3")
 	assert.Contains(t, args, "echo")
@@ -642,4 +645,319 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, targetCount)
+}
+
+// formatEntries formats log entries as a string for assertions.
+func formatEntries(t *testing.T, entries []accesslog.Entry) string {
+	t.Helper()
+	var lines []string
+	for _, entry := range entries {
+		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
+		lines = append(lines, line)
+	}
+	logStr := strings.Join(lines, "\n")
+	t.Logf("Log content:\n%s", logStr)
+	return logStr
+}
+
+// TestMonitor_CwdTrackingResolvesBarePath tests that AT_FDCWD annotations
+// establish per-pid cwd, allowing subsequent bare-path relative syscalls
+// to be resolved to absolute paths.
+func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	gitDir := filepath.Join(tmpDir, ".git")
+	require.NoError(t, os.MkdirAll(gitDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// AT_FDCWD annotation establishes cwd for pid 12345
+		`12345 openat(AT_FDCWD<` + tmpDir + `>, "src/main.go", O_RDONLY) = 3`,
+		// Bare-path access from same pid — should resolve using tracked cwd
+		`12345 access(".git/config", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, ".git/config"), "OK", "fs:ro:"+tmpDir)
+}
+
+// TestMonitor_NoCwdForPidStillUnresolved tests that bare-path syscalls from
+// a pid with no prior AT_FDCWD/chdir/fchdir produce UNKNOWN entries.
+func TestMonitor_NoCwdForPidStillUnresolved(t *testing.T) {
+	cfg := new(config.Config)
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(
+		`12345 access("foo/bar.txt", R_OK) = -1 ENOENT` + "\n",
+	)
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
+}
+
+// TestMonitor_PerPidCwdIsolation tests that two pids with different cwds
+// resolve bare-path calls to different absolute paths.
+func TestMonitor_PerPidCwdIsolation(t *testing.T) {
+	tmpDir := t.TempDir()
+	dirA := filepath.Join(tmpDir, "project-a")
+	dirB := filepath.Join(tmpDir, "project-b")
+	require.NoError(t, os.MkdirAll(filepath.Join(dirA, ".git"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dirB, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dirA, ".git/config"), []byte("[core]"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".git/config"), []byte("[core]"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(dirA), roRule(dirB)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 openat(AT_FDCWD<` + dirA + `>, "src/main.go", O_RDONLY) = 3`,
+		`12346 openat(AT_FDCWD<` + dirB + `>, "src/main.go", O_RDONLY) = 3`,
+		`12345 access(".git/config", R_OK) = 0`,
+		`12346 access(".git/config", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(dirA, ".git/config"), "OK")
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(dirB, ".git/config"), "OK")
+}
+
+// TestMonitor_CwdNotTrackedDuringSetup tests that AT_FDCWD annotations during
+// bwrap setup don't populate cwdByPid. Only post-setup annotations are used.
+func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectDir := filepath.Join(tmpDir, "project")
+	require.NoError(t, os.MkdirAll(filepath.Join(projectDir, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(projectDir, ".git/config"), []byte("[core]"), 0o600))
+
+	hostDir := filepath.Join(tmpDir, "host")
+	require.NoError(t, os.MkdirAll(filepath.Join(hostDir, ".git"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(hostDir, ".git/config"), []byte("[core]"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(projectDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// Setup phase — AT_FDCWD annotation should NOT be tracked
+		`12345 execve("/usr/bin/bwrap", ""...) = 0`,
+		`12345 openat(AT_FDCWD<` + hostDir + `>, "something", O_RDONLY) = 3`,
+		// User command execve — ends setup phase
+		`12345 execve("/usr/bin/git", ""...) = 0`,
+		// Post-setup AT_FDCWD annotation — this IS tracked
+		`12345 openat(AT_FDCWD<` + projectDir + `>, "src/main.go", O_RDONLY) = 3`,
+		// Bare-path access should resolve using post-setup cwd
+		`12345 access(".git/config", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(projectDir, ".git/config"), "OK")
+	assert.NotContains(t, logStr, hostDir)
+}
+
+// TestMonitor_ChdirUpdatesTrackedCwd tests that chdir with an absolute path
+// updates cwdByPid and subsequent bare-path calls resolve correctly.
+func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 chdir("` + tmpDir + `") = 0`,
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+}
+
+// TestMonitor_RelativeChdirJoinedWithExistingCwd tests that a relative chdir
+// is joined with the existing tracked cwd.
+func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "file.txt"), []byte("data"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// Establish cwd via AT_FDCWD annotation
+		`12345 openat(AT_FDCWD<` + tmpDir + `>, "file", O_RDONLY) = 3`,
+		// Relative chdir joined with existing cwd
+		`12345 chdir("sub") = 0`,
+		// Bare-path access resolves against tmpDir/sub
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(subDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+}
+
+// TestMonitor_RelativeChdirWithNoPriorCwdIgnored tests that a relative chdir
+// from a pid with no tracked cwd is silently ignored.
+func TestMonitor_RelativeChdirWithNoPriorCwdIgnored(t *testing.T) {
+	cfg := new(config.Config)
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// Relative chdir with no prior cwd — silently skipped
+		`12345 chdir("sub") = 0`,
+		// Bare-path access still produces UNKNOWN
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", "file.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
+}
+
+// TestMonitor_FailedChdirDoesNotUpdateTrackedCwd tests that a failed chdir does not
+// corrupt the tracked cwd, so subsequent bare-path accesses still resolve
+// against the original cwd.
+func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// Establish cwd via AT_FDCWD annotation
+		`12345 openat(AT_FDCWD<` + tmpDir + `>, "file.txt", O_RDONLY) = 3`,
+		// Failed chdir — must not update tracked cwd
+		`12345 chdir("/nonexistent") = -1 ENOENT (No such file or directory)`,
+		// Bare-path access should still resolve against original cwd
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+}
+
+// TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd tests that a failed fchdir does not
+// corrupt the tracked cwd, so subsequent bare-path accesses still resolve
+// against the original cwd.
+func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// Establish cwd via AT_FDCWD annotation
+		`12345 openat(AT_FDCWD<` + tmpDir + `>, "file.txt", O_RDONLY) = 3`,
+		// Failed fchdir — must not update tracked cwd
+		`12345 fchdir(3</nonexistent>) = -1 EBADF (Bad file descriptor)`,
+		// Bare-path access should still resolve against original cwd
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+}
+
+// TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd tests that fchdir without
+// an fd path annotation (e.g., fchdir(3) instead of fchdir(3</path>)) does not
+// update cwdByPid. When strace can't resolve the fd, the fchdirRegex won't match,
+// so the line is silently skipped and subsequent bare-path calls remain UNKNOWN.
+func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
+	cfg := new(config.Config)
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// fchdir with no <path> annotation — strace couldn't resolve the fd
+		`12345 fchdir(3) = 0`,
+		// Subsequent bare-path access has no tracked cwd → UNKNOWN
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", "file.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
+}
+
+// TestMonitor_FchdirUpdatesTrackedCwd tests that fchdir with an fd-annotated
+// path updates cwdByPid and subsequent bare-path calls resolve correctly.
+func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
+
+	cfg := &config.Config{
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		ManagedPaths: nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+
+	straceData := strings.NewReader(strings.Join([]string{
+		`12345 fchdir(3<` + tmpDir + `>) = 0`,
+		`12345 access("file.txt", R_OK) = 0`,
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	logStr := formatEntries(t, logger.Entries())
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
 }

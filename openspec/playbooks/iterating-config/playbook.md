@@ -84,3 +84,27 @@ The user hovers over an access log entry to see which rule allowed or denied it.
 - **WHEN** the user hovers over that log entry
 - **THEN** the rule `fs:ro:/usr/lib` is highlighted in the rules pane
 - **AND** other rules are not highlighted
+
+### Use Case: Button states update in real-time
+
+The user sees button labels and disabled states update automatically as the run status changes, without refreshing the page.
+
+- **GIVEN** a config with rule `fs:ro:/home/user/data`
+- **AND** the user has started `execave --monitor=9876 -- long-running-command`
+- **AND** the process is running
+- **AND** the web UI shows a "Restart" button and an enabled "Stop" button
+- **WHEN** the process exits
+- **THEN** the "Restart" button label changes to "Start" without page refresh
+- **AND** the "Stop" button becomes disabled without page refresh
+
+### Use Case: Access log clears on new run session
+
+When a new run starts, the browser's access log table clears and shows entries from the new run, without a page refresh.
+
+- **GIVEN** a config with rule `fs:ro:/home/user/data`
+- **AND** the user has started `execave --monitor=9876 -- ls /home/user/data`
+- **AND** the initial run has exited
+- **AND** the access log table shows entries from the initial run
+- **WHEN** the user starts a new run
+- **THEN** the access log table in the browser is cleared without page refresh
+- **AND** entries from the new run appear in real-time

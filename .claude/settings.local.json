@@ -30,7 +30,10 @@
       "Bash(git log:*)",
       "Bash(test:*)",
       "WebSearch",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(curl:*)",
+      "Bash(strace:*)",
+      "Bash(gcc:*)"
     ]
   }
 }

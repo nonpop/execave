@@ -72,6 +72,12 @@ func failIfNoPython3(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func failIfNoGcc(t *testing.T) {
+	t.Helper()
+	_, err := exec.LookPath("gcc")
+	require.NoError(t, err)
+}
+
 // tomlConfig formats rules as a TOML config file.
 func tomlConfig(rules []string) []byte {
 	var sb strings.Builder
@@ -395,11 +401,53 @@ func readSSEEvents(resp *http.Response, n int) []sseEvent {
 		case line == "":
 			if current.event != "" || current.data != "" || current.id != "" {
 				events = append(events, current)
-				current = sseEvent{}
+				current = sseEvent{event: "", data: "", id: ""}
 			}
 		}
 	}
 	return events
+}
+
+// startMonitoredExecave starts execave with --monitor=0 and the given config,
+// running the specified command. It waits for the monitor URL to appear on
+// stderr and registers a cleanup that sends SIGINT to the process group.
+// Returns the monitor URL.
+func startMonitoredExecave(t *testing.T, configPath string, command ...string) string {
+	t.Helper()
+
+	args := append([]string{"--config", configPath, "--monitor=0", "--"}, command...)
+	//nolint:gosec // G204: test uses controlled input from test fixtures
+	cmd := exec.CommandContext(context.Background(), binaryPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stderrPipe, err := cmd.StderrPipe()
+	require.NoError(t, err)
+	cmd.Stdout = os.Stdout
+
+	require.NoError(t, cmd.Start())
+
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+		_ = cmd.Wait()
+	})
+
+	var monitorURL string
+	var once sync.Once
+	ready := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		for scanner.Scan() {
+			if after, ok := strings.CutPrefix(scanner.Text(), "execave: monitor running at "); ok {
+				monitorURL = after
+				once.Do(func() { close(ready) })
+			}
+		}
+		once.Do(func() { close(ready) })
+	}()
+	<-ready
+	require.NotEmpty(t, monitorURL)
+
+	return monitorURL
 }
 
 // systemPaths returns rules for basic command execution.

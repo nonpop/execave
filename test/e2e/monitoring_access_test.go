@@ -365,11 +365,11 @@ func TestE2E_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+targetPathRel, "OK", "fs:ro:"+mountDir)
 }
 
-// TestE2E_MonitoringAccess_FilesystemEnforcementDecisionsAccuratelyLogged tests that
+// TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyLogged tests that
 // sandbox enforcement and monitor logging work correctly together. This is
 // the core integration test: when both --monitor and sandbox are active,
 // enforcement decisions must be accurately logged.
-func TestE2E_MonitoringAccess_FilesystemEnforcementDecisionsAccuratelyLogged(t *testing.T) {
+func TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyLogged(t *testing.T) {
 	env := newMonitorTest(t)
 
 	allowedFile := filepath.Join(env.TmpDir, "allowed.txt")
@@ -399,11 +399,11 @@ func TestE2E_MonitoringAccess_FilesystemEnforcementDecisionsAccuratelyLogged(t *
 	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+deniedFileRel, "DENY", "fs:none:"+deniedFile)
 }
 
-// TestE2E_MonitoringAccess_NetworkEnforcementDecisionsAccuratelyLogged tests that
+// TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged tests that
 // network enforcement and monitor logging work correctly together: allowed
 // endpoints show OK with the matching rule and denied endpoints show DENY with
 // the explicit deny rule.
-func TestE2E_MonitoringAccess_NetworkEnforcementDecisionsAccuratelyLogged(t *testing.T) {
+func TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged(t *testing.T) {
 	env := newMonitorTest(t)
 	failIfNoCurl(t)
 
@@ -427,10 +427,10 @@ func TestE2E_MonitoringAccess_NetworkEnforcementDecisionsAccuratelyLogged(t *tes
 		fmt.Sprintf("net:none:%s:%s", deniedHost, deniedPort))
 }
 
-// TestE2E_MonitoringAccess_FilesystemRulePrecedenceReflectedCorrectly tests that most-specific rule
+// TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly tests that most-specific rule
 // precedence is correctly enforced and logged. This ensures both rule
 // resolution systems (sandbox and monitor) agree on which rule applies.
-func TestE2E_MonitoringAccess_FilesystemRulePrecedenceReflectedCorrectly(t *testing.T) {
+func TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly(t *testing.T) {
 	env := newMonitorTest(t)
 
 	projectDir := filepath.Join(env.TmpDir, "project")
@@ -472,11 +472,11 @@ func TestE2E_MonitoringAccess_FilesystemRulePrecedenceReflectedCorrectly(t *test
 	assertWebUIHasEntry(t, result.WebUI, "WRITE", "~/"+gitFileRel, "DENY", "fs:ro:"+gitDir)
 }
 
-// TestE2E_MonitoringAccess_NetworkRulePrecedenceReflectedCorrectly tests that
+// TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly tests that
 // network rule specificity is correctly enforced and logged. A longer CIDR prefix
 // deny rule must override a shorter CIDR prefix allow rule, and the monitor must
 // show the more-specific rule — not the broad one.
-func TestE2E_MonitoringAccess_NetworkRulePrecedenceReflectedCorrectly(t *testing.T) {
+func TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly(t *testing.T) {
 	env := newMonitorTest(t)
 	failIfNoCurl(t)
 
@@ -502,4 +502,88 @@ func TestE2E_MonitoringAccess_NetworkRulePrecedenceReflectedCorrectly(t *testing
 	// Denied port: specific /32 deny overrides broad /8 allow
 	assertWebUIHasEntry(t, result.WebUI, "HTTP", "127.0.0.1:"+deniedPort, "DENY",
 		"net:none:127.0.0.1/32:"+deniedPort)
+}
+
+// TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog tests that bare-path
+// syscalls (e.g., access()) with relative paths are resolved to absolute paths
+// using tracked per-pid cwd, producing proper rule matching instead of UNKNOWN.
+func TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog(t *testing.T) {
+	env := newMonitorTest(t)
+	failIfNoGcc(t)
+
+	// Create project dir with .git/config (target of the bare-path access call)
+	projectDir := filepath.Join(env.TmpDir, "project")
+	createFile(t, filepath.Join(projectDir, ".git", "config"), "[core]")
+
+	// Compile a C program that calls access(".git/config", R_OK).
+	// On Linux/glibc/x86_64, access() maps to the access syscall directly
+	// (not faccessat), producing a bare-path line in strace output.
+	cSource := filepath.Join(env.TmpDir, "access_test.c")
+	cBinary := filepath.Join(env.TmpDir, "access_test")
+	createFile(t, cSource, "#include <unistd.h>\nint main(void) { access(\".git/config\", R_OK); return 0; }\n")
+
+	//nolint:gosec // G204: test code with controlled args
+	cmd := exec.CommandContext(context.Background(), "gcc", "-o", cBinary, cSource)
+	require.NoError(t, cmd.Run())
+
+	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+
+	// Run the C program with cwd set to projectDir.
+	// sh inherits cwd from bwrap, then cd changes it. The C program inherits
+	// sh's cwd. The dynamic linker emits AT_FDCWD-annotated openat calls,
+	// establishing the cwd for the pid. Then access(".git/config") resolves
+	// against the tracked cwd.
+	result := env.runMonitored(t, rules,
+		"sh", "-c", "cd "+projectDir+" && "+cBinary)
+	assertExitCode(t, result.execaveResult, 0)
+
+	// The bare-path access should be resolved to absolute path with rule matching
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	gitConfigRel, err := filepath.Rel(homeDir, filepath.Join(projectDir, ".git", "config"))
+	require.NoError(t, err)
+	assertWebUIHasEntry(t, result.WebUI, "READ",
+		"~/"+gitConfigRel, "OK", "fs:ro:"+env.TmpDir)
+}
+
+// TestE2E_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked tests that bare-path
+// syscalls from a pid with no tracked cwd produce UNKNOWN entries.
+// This uses a minimal binary compiled with -nostdlib -static to avoid any
+// AT_FDCWD-annotated calls (no dynamic linker, no runtime initialization).
+func TestE2E_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked(t *testing.T) {
+	env := newMonitorTest(t)
+	failIfNoGcc(t)
+
+	// Build a minimal static binary that calls the access syscall with a relative
+	// path and then exits. No libc/runtime means no AT_FDCWD-annotated calls,
+	// so the monitor has no tracked cwd for this pid.
+	cSource := filepath.Join(env.TmpDir, "bare_access.c")
+	cBinary := filepath.Join(env.TmpDir, "bare_access")
+	createFile(t, cSource, `
+long sys_access(const char *path, int mode) {
+	long ret;
+	__asm__ volatile("syscall" : "=a"(ret) : "0"(21), "D"(path), "S"(mode) : "rcx", "r11", "memory");
+	return ret;
+}
+void sys_exit(int code) {
+	__asm__ volatile("syscall" :: "a"(231), "D"(code));
+	__builtin_unreachable();
+}
+void _start(void) {
+	sys_access("untracked-relative/file.txt", 0);
+	sys_exit(0);
+}
+`)
+	//nolint:gosec // G204: test code with controlled args
+	cmd := exec.CommandContext(context.Background(), "gcc", "-nostdlib", "-static", "-o", cBinary, cSource)
+	require.NoError(t, cmd.Run())
+
+	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+
+	result := env.runMonitored(t, rules, cBinary)
+	assertExitCode(t, result.execaveResult, 0)
+
+	// The relative path should appear as UNKNOWN since no cwd was tracked
+	assertWebUIHasEntry(t, result.WebUI, "READ",
+		"untracked-relative/file.txt", "UNKNOWN", "unresolved-relative-path")
 }
