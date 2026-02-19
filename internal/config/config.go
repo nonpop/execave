@@ -50,26 +50,51 @@ func Load(path string, managedPaths []string) (*Config, error) {
 	}
 	configDir := filepath.Dir(absPath)
 
-	fsRules, netRules, err := parseRules(raw.Rules, configDir)
+	cfg, err := ParseRules(raw.Rules, configDir, absPath, managedPaths)
 	if err != nil {
-		return nil, fmt.Errorf("parse rules in %s: %w", path, err)
-	}
-
-	if err := fsrules.Validate(fsRules, absPath, managedPaths); err != nil {
-		return nil, fmt.Errorf("validate config %s: %w", path, err)
-	}
-
-	if err := netrules.Validate(netRules); err != nil {
-		return nil, fmt.Errorf("validate config %s: %w", path, err)
-	}
-
-	cfg := &Config{
-		FSRules:      fsRules,
-		NetRules:     netRules,
-		ManagedPaths: managedPaths,
+		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
 
 	return cfg, nil
+}
+
+// ParseRules parses and validates raw rule strings, returning a *Config.
+//
+// rawRules are strings in the format "resource:..."; configDir is used to resolve
+// relative and tilde-prefixed paths in fs rules; configPath must be an absolute path
+// — it is used only for the "config not writable" validation check and no I/O is
+// performed, but a relative path would silently bypass that check; managedPaths lists
+// path prefixes that rules may not target (e.g., sandbox.ManagedDirs).
+//
+// ParseRules panics if configPath is not absolute.
+//
+// ParseRules applies the same validation as Load: duplicate path detection, config
+// writability, managed path rejection, and net rule identity and port-pattern checks.
+// Use Load when reading from a file; use ParseRules when the rule strings are
+// already in memory (e.g., user-edited draft in the web UI).
+func ParseRules(rawRules []string, configDir, configPath string, managedPaths []string) (*Config, error) {
+	if !filepath.IsAbs(configPath) {
+		panic(fmt.Sprintf("ParseRules: configPath must be absolute, got %q", configPath))
+	}
+
+	fsRules, netRules, err := parseRules(rawRules, configDir)
+	if err != nil {
+		return nil, fmt.Errorf("parse rules: %w", err)
+	}
+
+	if err := fsrules.Validate(fsRules, configPath, managedPaths); err != nil {
+		return nil, fmt.Errorf("validate rules: %w", err)
+	}
+
+	if err := netrules.Validate(netRules); err != nil {
+		return nil, fmt.Errorf("validate rules: %w", err)
+	}
+
+	return &Config{
+		FSRules:      fsRules,
+		NetRules:     netRules,
+		ManagedPaths: managedPaths,
+	}, nil
 }
 
 // parseRules routes each raw rule string to the appropriate parser based on resource prefix.

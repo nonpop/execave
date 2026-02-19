@@ -139,6 +139,91 @@ func TestDuplicatePaths_TrailingSlash_Rejected(t *testing.T) {
 	assert.ErrorContains(t, err, "/foo")
 }
 
+// --- ParseRules tests ---
+
+func TestParseRules_ValidFsAndNetRules(t *testing.T) {
+	cfg, err := config.ParseRules(
+		[]string{"fs:ro:/usr/bin", "net:https:api.example.com:443"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Len(t, cfg.NetRules, 1)
+}
+
+func TestParseRules_EmptyRules(t *testing.T) {
+	cfg, err := config.ParseRules([]string{}, "/some/dir", "/some/dir/execave.toml", nil)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.FSRules)
+	assert.Empty(t, cfg.NetRules)
+}
+
+func TestParseRules_TildeExpansion(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	cfg, err := config.ParseRules(
+		[]string{"fs:rw:~/projects"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, cfg.FSRules, 1)
+	assert.Equal(t, filepath.Join(homeDir, "projects"), cfg.FSRules[0].Path)
+}
+
+func TestParseRules_RelativePathResolvedAgainstConfigDir(t *testing.T) {
+	cfg, err := config.ParseRules(
+		[]string{"fs:ro:data"},
+		"/home/user/myproject", "/home/user/myproject/execave.toml", nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, cfg.FSRules, 1)
+	assert.Equal(t, "/home/user/myproject/data", cfg.FSRules[0].Path)
+}
+
+func TestParseRules_InvalidRuleRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"badprefix:something"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+	assert.ErrorContains(t, err, "unknown resource type")
+}
+
+func TestParseRules_DuplicatePathsRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"fs:ro:/usr/bin", "fs:rw:/usr/bin"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+	assert.ErrorContains(t, err, "duplicate path")
+}
+
+func TestParseRules_ManagedPathRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"fs:ro:/dev"},
+		"/some/dir", "/some/dir/execave.toml", []string{"/dev"},
+	)
+	assert.ErrorContains(t, err, "managed path")
+}
+
+func TestParseRules_ConfigWritabilityRejected(t *testing.T) {
+	// The check fires when a rule names the config file path exactly as rw.
+	_, err := config.ParseRules(
+		[]string{"fs:rw:/home/user/execave.toml"},
+		"/home/user", "/home/user/execave.toml", nil,
+	)
+	assert.ErrorContains(t, err, "config file must not be writable")
+}
+
+func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
+	managedPaths := []string{"/proc", "/dev"}
+	cfg, err := config.ParseRules(
+		[]string{"fs:ro:/usr/bin"},
+		"/some/dir", "/some/dir/execave.toml", managedPaths,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, managedPaths, cfg.ManagedPaths)
+}
+
 func TestPermission_Strictness(t *testing.T) {
 	assert.Greater(t, fsrules.PermissionNone, fsrules.PermissionReadOnly)
 	assert.Greater(t, fsrules.PermissionReadOnly, fsrules.PermissionReadWrite)
