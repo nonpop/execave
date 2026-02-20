@@ -76,7 +76,7 @@ Manages lifecycle of monitored sandbox executions with start/stop control, statu
 
 ### Web UI (`internal/webui/`)
 
-Localhost web server (`127.0.0.1:PORT`) for real-time access log viewing and run control. Serves server-rendered HTML with SSE streaming for live updates. Filesystem target paths are displayed in shortened form: relative to the config directory if the path is under it, otherwise `~/...` form if the path is under the home directory, otherwise absolute. Network targets (HTTPS/HTTP) are shown verbatim. Provides start/stop controls that delegate to runner. Survives sandbox exit for log review; active when `--monitor=PORT` is specified.
+Localhost web server (OS-assigned port, bound to `127.0.0.1`) for real-time access log viewing, config editing, and run control. Serves server-rendered HTML with SSE streaming for live updates. Filesystem target paths are displayed in shortened form: relative to the config directory if the path is under it, otherwise `~/...` form if the path is under the home directory, otherwise absolute. Network targets (HTTPS/HTTP) are shown verbatim. Provides start/stop/save/revert controls that delegate to runner and config. The URL includes a random access token for authentication. Survives sandbox exit for log review; active when `--monitor` is specified.
 
 ### Sandbox (`internal/sandbox/`)
 
@@ -108,11 +108,11 @@ TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, 
 
 ### Monitor (`internal/monitor/`)
 
-Optional filesystem access tracer (`--monitor=PORT`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
+Optional filesystem access tracer (`--monitor`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
 
 ## Data Flow
 
-**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates runner (if `--monitor=PORT`) → starts web UI server with runner (if `--monitor=PORT`) → starts proxy (if net rules or monitoring) → calls `runner.Start()` for initial run (if monitoring) or executes `bwrap` directly (if not monitoring)
+**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates runner (if `--monitor`) → starts web UI server with runner (if `--monitor`) → starts proxy (if net rules or monitoring) → calls `runner.Start()` for initial run (if monitoring) or executes `bwrap` directly (if not monitoring)
 
 **Runtime (without net rules, no monitoring):** Kernel enforces namespace isolation (mount, PID, IPC, network). No network access. No proxy.
 

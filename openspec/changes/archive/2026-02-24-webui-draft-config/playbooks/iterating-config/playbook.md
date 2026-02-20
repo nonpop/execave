@@ -1,10 +1,6 @@
-# Iterating Config — Editing and testing sandbox configs via the web UI
+# Iterating Config — Delta
 
-## Purpose
-
-The user starts a monitored run via the web UI, observes the access log, edits the TOML config in the textarea, and restarts the process to re-observe with updated rules. This is the interactive config editing loop.
-
-## Use Cases
+## ADDED Use Cases
 
 ### Use Case: Edit config alongside the access log
 
@@ -91,6 +87,8 @@ When the user starts execave with `--monitor`, the browser is automatically open
 - **THEN** the server prints the full URL (with token) to stderr
 - **AND** the default browser is opened to that URL
 
+## MODIFIED Use Cases
+
 ### Use Case: Start a run from the web UI
 
 The user starts a monitored sandbox run from the web UI after the initial CLI-launched run has exited. The run uses the config currently in the textarea.
@@ -152,3 +150,21 @@ When a new run starts, the browser's access log table clears and shows entries f
 - **WHEN** the user starts a new run
 - **THEN** the access log table in the browser is cleared without page refresh
 - **AND** entries from the new run appear in real-time
+
+## REMOVED Use Cases
+
+### Use Case: View rules alongside the access log
+**Reason**: The read-only rules pane is replaced by an editable textarea containing the raw TOML config file. The new "Edit config alongside the access log" use case covers this.
+**Migration**: See ADDED "Edit config alongside the access log".
+
+### Use Case: Rules update after restarting execave with a new config
+**Reason**: With random port assignment, restarting the execave CLI process binds to a different port, so the browser tab cannot automatically reconnect. Config editing now happens within the same session via the textarea. SSE reconnect within a session is covered by "Config editor syncs on SSE reconnect".
+**Migration**: Edit config in the web UI textarea instead of editing the file and restarting execave.
+
+### Use Case: Hover a rule to see matching log entries
+**Reason**: The structured rules pane (with individual rule elements) is replaced by a plain textarea. Bidirectional hover highlighting is incompatible with textarea. The matched rule for each log entry remains visible as a tooltip on the log row.
+**Migration**: Hover a log entry row to see its matched rule in the tooltip.
+
+### Use Case: Hover a log entry to see its matched rule
+**Reason**: The structured rules pane is replaced by a plain textarea. Highlighting a specific rule in the textarea is not feasible. The matched rule for each log entry remains visible as a tooltip on the log row.
+**Migration**: The matched rule is shown as a tooltip on each log entry row (no interaction required).

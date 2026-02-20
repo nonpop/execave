@@ -2,13 +2,15 @@ package webui
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
-	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,16 +118,63 @@ func TestParseLastEventID_ZeroIndex(t *testing.T) {
 	assert.Equal(t, 0, index)
 }
 
+// --- Token authentication unit tests ---
+
+func TestToken_MissingToken_Returns403(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	// Request without token
+	resp, err := http.Get("http://" + srv.addr + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestToken_WrongToken_Returns403(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	resp, err := http.Get("http://" + srv.addr + "/?token=wrongtoken")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestToken_ValidToken_Succeeds(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	resp, err := http.Get(srv.EndpointURL("/"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestToken_RequiredOnAllEndpoints(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+	base := "http://" + srv.addr
+
+	endpoints := []string{"/", "/events", "/api/start", "/api/stop", "/api/save", "/api/revert"}
+	for _, path := range endpoints {
+		resp, err := http.Get(base + path)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	}
+}
+
 // --- SSE integration tests ---
 
 func TestSSE_SessionEventSentFirst(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := StartServer(t, logger)
 
-	sessionID := GetSessionID(t, srv.URL())
+	sessionID := GetSessionID(t, srv.EndpointURL("/"))
 
-	// Connect to SSE
-	resp, err := http.Get(srv.URL() + "/events")
+	// Connect to SSE endpoint
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
@@ -147,13 +196,13 @@ func TestSSE_EntryEventIDFormat(t *testing.T) {
 	}))
 
 	srv := StartServer(t, logger)
-	sessionID := GetSessionID(t, srv.URL())
+	sessionID := GetSessionID(t, srv.EndpointURL("/"))
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules + 1 entry
+	// session + status + config + 1 entry
 	events := ReadSSEEvents(t, resp, 4)
 	require.GreaterOrEqual(t, len(events), 4)
 
@@ -174,10 +223,10 @@ func TestSSE_SameSessionReconnect(t *testing.T) {
 	}
 
 	srv := StartServer(t, logger)
-	sessionID := GetSessionID(t, srv.URL())
+	sessionID := GetSessionID(t, srv.EndpointURL("/"))
 
 	// Reconnect with Last-Event-ID from same session at index 1
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", sessionID+":1")
 
@@ -185,12 +234,12 @@ func TestSSE_SameSessionReconnect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should get: session + status + rules + entry at index 2 only
+	// Should get: session + status + config + entry at index 2 only
 	events := ReadSSEEvents(t, resp, 4)
 	require.GreaterOrEqual(t, len(events), 4)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, "status", events[1].Event)
-	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "config", events[2].Event)
 	assert.Equal(t, "entry", events[3].Event)
 	assert.Equal(t, sessionID+":2", events[3].ID)
 }
@@ -207,10 +256,10 @@ func TestSSE_CrossSessionReconnect(t *testing.T) {
 	}
 
 	srv := StartServer(t, logger)
-	sessionID := GetSessionID(t, srv.URL())
+	sessionID := GetSessionID(t, srv.EndpointURL("/"))
 
 	// Reconnect with Last-Event-ID from a different session
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", "oldsession:50")
 
@@ -218,12 +267,12 @@ func TestSSE_CrossSessionReconnect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should replay from 0: session + status + rules + 2 entries
+	// Should replay from 0: session + status + config + 2 entries
 	events := ReadSSEEvents(t, resp, 5)
 	require.GreaterOrEqual(t, len(events), 5)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, sessionID, events[0].Data)
-	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "config", events[2].Event)
 	assert.Equal(t, "entry", events[3].Event)
 	assert.Equal(t, sessionID+":0", events[3].ID)
 	assert.Equal(t, "entry", events[4].Event)
@@ -247,9 +296,9 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 	}
 	srv1 := StartServer(t, logger1)
 
-	resp1, err := http.Get(srv1.URL() + "/events?from=3")
+	resp1, err := http.Get(srv1.EndpointURL("/events?from=3"))
 	require.NoError(t, err)
-	events1 := ReadSSEEvents(t, resp1, 3) // session + status + rules only
+	events1 := ReadSSEEvents(t, resp1, 3) // session + status + config only
 	resp1.Body.Close()                    //nolint:errcheck,gosec // best-effort close in test
 	require.Len(t, events1, 3)
 	sessionEventID := events1[0].ID
@@ -266,9 +315,9 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 		}))
 	}
 	srv2 := StartServer(t, logger2)
-	srv2SessionID := GetSessionID(t, srv2.URL())
+	srv2SessionID := GetSessionID(t, srv2.EndpointURL("/"))
 
-	req, err := http.NewRequest(http.MethodGet, srv2.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv2.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", sessionEventID)
 
@@ -276,12 +325,12 @@ func TestSSE_SessionEventIDEnablesCrossSessionDetection(t *testing.T) {
 	require.NoError(t, err)
 	defer resp2.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should detect cross-session and replay from 0: session + status + rules + 2 entries
+	// Should detect cross-session and replay from 0: session + status + config + 2 entries
 	events2 := ReadSSEEvents(t, resp2, 5)
 	require.Len(t, events2, 5)
 	assert.Equal(t, "session", events2[0].Event)
 	assert.Equal(t, srv2SessionID, events2[0].Data)
-	assert.Equal(t, "rules", events2[2].Event)
+	assert.Equal(t, "config", events2[2].Event)
 	assert.Equal(t, "entry", events2[3].Event)
 	assert.Equal(t, srv2SessionID+":0", events2[3].ID)
 	assert.Equal(t, "entry", events2[4].Event)
@@ -298,10 +347,10 @@ func TestSSE_MalformedLastEventID(t *testing.T) {
 	}))
 
 	srv := StartServer(t, logger)
-	sessionID := GetSessionID(t, srv.URL())
+	sessionID := GetSessionID(t, srv.EndpointURL("/"))
 
 	// Reconnect with malformed Last-Event-ID (old numeric format)
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", "42")
 
@@ -309,12 +358,12 @@ func TestSSE_MalformedLastEventID(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Should replay from 0: session + status + rules + 1 entry
+	// Should replay from 0: session + status + config + 1 entry
 	events := ReadSSEEvents(t, resp, 4)
 	require.GreaterOrEqual(t, len(events), 4)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, sessionID, events[0].Data)
-	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "config", events[2].Event)
 	assert.Equal(t, "entry", events[3].Event)
 	assert.Equal(t, sessionID+":0", events[3].ID)
 }
@@ -323,7 +372,7 @@ func TestIndex_SessionIDInHTML(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/")
+	resp, err := http.Get(srv.EndpointURL("/"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
@@ -342,7 +391,7 @@ func TestIndex_CommandInHTML(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/")
+	resp, err := http.Get(srv.EndpointURL("/"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
@@ -361,7 +410,7 @@ func TestSSE_CommandInStatusEvent(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
@@ -372,60 +421,205 @@ func TestSSE_CommandInStatusEvent(t *testing.T) {
 	assert.Contains(t, events[1].Data, `"command":"echo hello"`)
 }
 
-func TestSSE_RulesEventSentOnConnect(t *testing.T) {
+func TestSSE_ConfigEventSentOnConnect(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules
+	// session + status + config
 	events := ReadSSEEvents(t, resp, 3)
 	require.Len(t, events, 3)
 	assert.Equal(t, "session", events[0].Event)
 	assert.Equal(t, "status", events[1].Event)
-	assert.Equal(t, "rules", events[2].Event)
+	assert.Equal(t, "config", events[2].Event)
 }
 
-func TestSSE_RulesEventContainsConfigRules(t *testing.T) {
-	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
-	require.NoError(t, err)
-	fsRule1.RawRule = "fs:ro:/usr/lib"
-	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
-	require.NoError(t, err)
-	fsRule2.RawRule = "fs:rw:/tmp"
-
-	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
-		NetRules:     nil,
-		ManagedPaths: nil,
-	}
-
+func TestSSE_ConfigEventContainsDraftAndSavedFields(t *testing.T) {
 	logger := accesslog.New(nil)
-	r := newTestRunnerWithLogger(logger)
-	srv := New(r, cfg, []string{"true"}, "0", "", "")
-	require.NoError(t, srv.Start(t.Context()))
-	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	srv := StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/events")
+	// Set a non-empty config content
+	srv.savedContent = `rules = ["fs:ro:/usr/bin"]`
+	srv.draftContent = srv.savedContent
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules
+	// session + status + config
 	events := ReadSSEEvents(t, resp, 3)
 	require.Len(t, events, 3)
 
-	rulesEvent := events[2]
-	assert.Equal(t, "rules", rulesEvent.Event)
-	assert.Contains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
-	assert.Contains(t, rulesEvent.Data, `"fs:rw:/tmp"`)
+	configEvent := events[2]
+	assert.Equal(t, "config", configEvent.Event)
+
+	var payload struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(configEvent.Data), &payload))
+	assert.Equal(t, `rules = ["fs:ro:/usr/bin"]`, payload.Draft)
+	assert.Equal(t, `rules = ["fs:ro:/usr/bin"]`, payload.Saved)
+}
+
+func TestSSE_ConfigEventDraftDiffersFromSavedAfterStartWithEditedConfig(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	savedTOML := `rules = ["fs:ro:/usr/bin"]`
+	srv.savedContent = savedTOML
+	srv.draftContent = savedTOML
+
+	// Simulate handleStart updating draftContent (with invalid TOML to avoid runner.Start)
+	editedTOML := `rules = ["fs:ro:/tmp"]`
+	srv.mu.Lock()
+	srv.draftContent = editedTOML
+	srv.mu.Unlock()
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	events := ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+
+	configEvent := events[2]
+	assert.Equal(t, "config", configEvent.Event)
+
+	var payload struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(configEvent.Data), &payload))
+	assert.Equal(t, editedTOML, payload.Draft)
+	assert.Equal(t, savedTOML, payload.Saved)
+}
+
+// --- handleStart/handleSave/handleRevert unit tests ---
+
+func TestHandleStart_ValidBody_Returns200(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	// Valid TOML with an absolute configPath for ParseTOML
+	body := `rules = ["fs:ro:/usr/bin"]`
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestHandleStart_InvalidBody_Returns400(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	body := "invalid toml [[["
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestHandleStart_InvalidBody_UpdatesDraft(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	body := "invalid toml [[["
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(body))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+
+	// Draft is updated even on invalid TOML
+	srv.mu.Lock()
+	draft := srv.draftContent
+	srv.mu.Unlock()
+	assert.Equal(t, body, draft)
+}
+
+func TestHandleSave_ValidBody_WritesFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/execave.toml"
+	require.NoError(t, os.WriteFile(tmpFile, []byte(`rules = []`), 0o600))
+
+	logger := accesslog.New(nil)
+	r := newTestRunnerWithLogger(logger)
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, `rules = []`, nil)
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	newContent := `rules = ["fs:ro:/usr/bin"]`
+	resp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader(newContent))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	written, err := os.ReadFile(tmpFile) // #nosec G304 -- tmpFile is a known temp path from t.TempDir
+	require.NoError(t, err)
+	assert.Equal(t, newContent, string(written))
+}
+
+func TestHandleSave_InvalidBody_Returns400AndFileUnchanged(t *testing.T) {
+	tmpFile := t.TempDir() + "/execave.toml"
+	original := `rules = []`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(original), 0o600))
+
+	logger := accesslog.New(nil)
+	r := newTestRunnerWithLogger(logger)
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := "invalid toml [[["
+	resp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	// File must be unchanged
+	written, err := os.ReadFile(tmpFile) // #nosec G304 -- tmpFile is a known temp path from t.TempDir
+	require.NoError(t, err)
+	assert.Equal(t, original, string(written))
+}
+
+func TestHandleRevert_ReturnsSavedContent(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := StartServer(t, logger)
+
+	savedTOML := `rules = ["fs:ro:/usr/bin"]`
+	srv.savedContent = savedTOML
+	srv.draftContent = `rules = ["fs:ro:/tmp"]` // different draft
+
+	resp, err := http.Post(srv.EndpointURL("/api/revert"), "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := readAll(resp)
+	require.NoError(t, err)
+	assert.Equal(t, savedTOML, body)
+
+	// Draft is updated to saved
+	srv.mu.Lock()
+	draft := srv.draftContent
+	srv.mu.Unlock()
+	assert.Equal(t, savedTOML, draft)
+}
+
+// readAll reads the response body as a string.
+func readAll(resp *http.Response) (string, error) {
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read response body: %w", err)
+	}
+	return string(b), nil
 }
 
 // --- helpers ---
 
 // StartServer creates and starts a Server on an OS-assigned port, returning it.
-// Use srv.URL() to get the actual bound address.
+// Use srv.EndpointURL(path) to construct URLs with the access token.
 // If logger is nil, the runner will have no logger (nil Logger() return value).
 // Path shortening is disabled (empty homeDir and configDir).
 func StartServer(t *testing.T, logger *accesslog.Logger) *Server {
@@ -438,9 +632,8 @@ func StartServer(t *testing.T, logger *accesslog.Logger) *Server {
 func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, configDir string) *Server {
 	t.Helper()
 	r := newTestRunnerWithLogger(logger)
-	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
 	command := []string{"true"}
-	srv := New(r, cfg, command, "0", homeDir, configDir)
+	srv := New(r, command, homeDir, configDir, "/tmp/test-execave.toml", "", nil)
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
@@ -451,9 +644,7 @@ func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, confi
 // Path shortening is disabled (empty homeDir and configDir).
 func StartServerWithRunner(t *testing.T, r *runner.Runner) *Server {
 	t.Helper()
-	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
-	command := []string{"true"}
-	srv := New(r, cfg, command, "0", "", "")
+	srv := New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil)
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
@@ -498,9 +689,10 @@ func ReadSSEEvents(t *testing.T, resp *http.Response, n int) []SSEEvent {
 }
 
 // GetSessionID extracts the session ID from the index HTML page.
-func GetSessionID(t *testing.T, baseURL string) string {
+// url must include the access token (use srv.EndpointURL("/")).
+func GetSessionID(t *testing.T, url string) string {
 	t.Helper()
-	resp, err := http.Get(baseURL + "/")
+	resp, err := http.Get(url) //nolint:gosec // G107: test-controlled URL
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 

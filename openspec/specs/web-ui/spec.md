@@ -8,21 +8,13 @@ The web-ui capability provides a localhost web interface for viewing access log 
 
 ### Requirement: Web server binding
 
-The web UI server SHALL bind to `127.0.0.1` on the specified port. Start() SHALL return an error if the port is invalid or already in use.
+The web UI server SHALL bind to `127.0.0.1` on an OS-assigned random port. Start() SHALL return an error if binding fails. URL() SHALL return the full URL including the access token as a query parameter.
 
 #### Scenario: Server starts and serves HTTP
-- **WHEN** Server is started on port 0 (OS-assigned)
-- **THEN** HTTP requests to the bound address are served
-- **AND** URL() returns the bound address
 
-#### Scenario: Invalid port rejected
-- **WHEN** Server is started with port `"notaport"`
-- **THEN** Start() returns an error indicating the port is invalid
-
-#### Scenario: Port already in use
-- **WHEN** another listener occupies the specified port
-- **AND** Server is started on that port
-- **THEN** Start() returns an error indicating the port is unavailable
+- **WHEN** Server is started
+- **THEN** HTTP requests to the bound address with a valid token are served
+- **AND** URL() returns the bound address with the access token (e.g., `http://127.0.0.1:54321?token=abc123...`)
 
 ### Requirement: Access log page
 
@@ -174,28 +166,46 @@ GET / SHALL display the current run status: the sandboxed command, whether the p
 
 ### Requirement: Run control endpoints
 
-The web UI SHALL expose POST /api/start to start a new monitored run and POST /api/stop to stop the active run. POST /api/start SHALL return 200 on success and 500 with an error message on failure. POST /api/stop SHALL return 200 always.
+The web UI SHALL expose POST /api/start to start a new monitored run, POST /api/stop to stop the active run, POST /api/save to save config to disk, and POST /api/revert to reset the draft config. POST /api/start SHALL accept raw TOML config text as the request body. The server SHALL parse and validate the config via `config.ParseTOML`. If valid, the server SHALL call `OnConfigChange` with the parsed config, then start the run. If the TOML is invalid, the server SHALL respond with 400 and an error message without starting a run. The draft content SHALL be updated to the submitted body regardless of validation success. POST /api/stop SHALL return 200 always.
 
-#### Scenario: Start endpoint triggers a new run
-- **WHEN** POST /api/start is called
+#### Scenario: Start endpoint triggers a new run with config
+
+- **WHEN** POST /api/start is called with valid TOML config in the body
 - **AND** no run is active
 - **THEN** response status is 200
-- **AND** a new monitored run starts
+- **AND** a new monitored run starts using the submitted config
 
 #### Scenario: Start endpoint restarts an active run
-- **WHEN** POST /api/start is called
+
+- **WHEN** POST /api/start is called with valid TOML config in the body
 - **AND** a run is active
 - **THEN** response status is 200
 - **AND** the previous run is stopped
-- **AND** a new run starts with a fresh access log
+- **AND** a new run starts with a fresh access log using the submitted config
+
+#### Scenario: Start with invalid config rejected
+
+- **WHEN** POST /api/start is called with TOML containing `rules = ["badprefix:something"]`
+- **THEN** response status is 400
+- **AND** the response body contains an error message
+- **AND** no run is started
+- **AND** the server's draft content is updated to the submitted body
+
+#### Scenario: Start calls OnConfigChange before starting run
+
+- **WHEN** POST /api/start is called with valid TOML config
+- **AND** OnConfigChange is set
+- **THEN** OnConfigChange is called with the parsed config before the run starts
 
 #### Scenario: Stop endpoint terminates active run
+
 - **WHEN** POST /api/stop is called
 - **AND** a run is active
 - **THEN** response status is 200
 - **AND** the run is terminated
 
 #### Scenario: Stop endpoint when idle
+
 - **WHEN** POST /api/stop is called
 - **AND** no run is active
 - **THEN** response status is 200
@@ -216,85 +226,114 @@ GET / SHALL display start and stop buttons in the status bar. The start button S
 - **THEN** the page displays a "Restart" button
 - **AND** the page displays an enabled "Stop" button
 
-### Requirement: Rules pane
+### Requirement: Config editor textarea
 
-GET / SHALL display all config rules in a rules pane to the left of the access log table. Rules SHALL be listed in config order (filesystem rules followed by network rules). Each rule SHALL display its raw rule string (e.g. `fs:ro:/usr/lib`). The rules pane SHALL be read-only.
+GET / SHALL display an editable textarea containing the raw TOML config file (verbatim, including comments) in the left pane where the rules pane previously appeared. The textarea content SHALL be initialized from the server's current draft content.
 
-#### Scenario: Rules displayed on page load
+#### Scenario: Config textarea displayed on page load
 
-- **WHEN** the server is constructed with a config containing rules `fs:ro:/usr/lib` and `fs:rw:/tmp`
+- **WHEN** the server is constructed with config content `rules = ["fs:ro:/usr/lib"]`
 - **AND** GET / is requested
-- **THEN** the response contains a rules pane with `fs:ro:/usr/lib` and `fs:rw:/tmp` in that order
+- **THEN** the response contains a textarea with the text `rules = ["fs:ro:/usr/lib"]`
 
-#### Scenario: Empty rules displayed
+#### Scenario: Config textarea preserves comments
 
-- **WHEN** the server is constructed with a config containing no rules
+- **WHEN** the server is constructed with config content containing TOML comments
 - **AND** GET / is requested
-- **THEN** the rules pane is present but contains no rule entries
+- **THEN** the textarea contains the comments verbatim
 
-#### Scenario: Both fs and net rules displayed
+### Requirement: Config SSE event
 
-- **WHEN** the server is constructed with a config containing `fs:ro:/usr/lib` and `net:allow:example.com:443`
-- **AND** GET / is requested
-- **THEN** the response contains both rules in the rules pane
+The SSE stream SHALL include a `config` event containing a JSON object with `draft` and `saved` fields, both containing the full TOML config text. This event SHALL be sent at the start of each SSE connection (in the initial burst: session, status, config, entries). The `draft` field contains the current server-side draft content; the `saved` field contains the last-saved content. Clients use these to populate the textarea and determine whether the config has been modified.
 
-### Requirement: Rules refreshed on SSE reconnect
-
-The SSE stream SHALL include a `rules` event containing the current config rules as a JSON array of raw rule strings. This event SHALL be sent at the start of each SSE connection (alongside the `session` and `status` events). When the client receives a `rules` event, it SHALL replace the rules pane content with the received rules.
-
-#### Scenario: Rules event sent on SSE connect
+#### Scenario: Config event sent on SSE connect
 
 - **WHEN** a client connects to `/events`
-- **THEN** the SSE stream includes a `rules` event with the current config rules as a JSON array
+- **THEN** the SSE stream includes a `config` event with JSON `{"draft": "...", "saved": "..."}`
 
-#### Scenario: Rules pane updated on cross-session reconnect
+#### Scenario: Config event reflects draft and saved state
 
-- **WHEN** the server is constructed with rules `fs:ro:/usr/lib` and `fs:rw:/tmp`
-- **AND** a client is connected to `/events`
-- **AND** the SSE connection drops and reconnects to a server with rules `fs:ro:/opt` and `net:allow:example.com:443`
-- **THEN** the rules pane displays `fs:ro:/opt` and `net:allow:example.com:443`
-- **AND** the previously displayed rules are no longer shown
+- **WHEN** the server's draft content differs from the saved content (e.g., after a Start with edited config)
+- **AND** a client connects to `/events`
+- **THEN** the `config` event's `draft` field contains the current draft content
+- **AND** the `config` event's `saved` field contains the last-saved content
+- **AND** `draft` and `saved` are different
 
-#### Scenario: Hover listeners work after rules refresh
+#### Scenario: Config event after save shows matching draft and saved
 
-- **WHEN** the rules pane has been updated via a `rules` SSE event
-- **AND** the user hovers over a rule in the refreshed pane
-- **THEN** matching log entries are highlighted
+- **WHEN** the server's draft has been saved (via POST /api/save)
+- **AND** a client connects to `/events`
+- **THEN** the `config` event's `draft` and `saved` fields are equal
 
-### Requirement: Hover rule highlights matching log entries
+### Requirement: Save endpoint
 
-When a rule in the rules pane is hovered, the access log entries whose matched rule equals that rule string SHALL be visually highlighted. Log entries matched by other rules or with no matched rule SHALL NOT be highlighted. The highlighting SHALL apply to entries already in the DOM and entries added via SSE while the hover is active.
+POST /api/save SHALL accept raw TOML config text as the request body. It SHALL parse and validate the content via `config.ParseTOML`. If valid, it SHALL write the content to the config file path and update both the server's saved and draft content, then respond with 200. If the TOML is invalid or contains invalid rules, it SHALL respond with 400 and an error message without writing to disk.
 
-#### Scenario: Hovering a rule highlights its entries
+#### Scenario: Save valid config writes to file
 
-- **WHEN** the rules pane contains rule `fs:ro:/usr/lib`
-- **AND** the access log contains entries with matched rule `fs:ro:/usr/lib` and entries with matched rule `fs:rw:/tmp`
-- **AND** the user hovers over the rule `fs:ro:/usr/lib`
-- **THEN** entries with matched rule `fs:ro:/usr/lib` are highlighted
-- **AND** entries with matched rule `fs:rw:/tmp` are not highlighted
+- **WHEN** POST /api/save is called with valid TOML content `rules = ["fs:ro:/usr/lib"]`
+- **THEN** response status is 200
+- **AND** the config file on disk contains the submitted content
+- **AND** the server's saved and draft content are both updated
 
-#### Scenario: Leaving a rule clears highlights
+#### Scenario: Save invalid config rejected
 
-- **WHEN** the user stops hovering over a rule
-- **THEN** all entry highlights are removed
+- **WHEN** POST /api/save is called with content `rules = ["badprefix:something"]`
+- **THEN** response status is 400
+- **AND** the response body contains an error message
+- **AND** the config file on disk is unchanged
 
-### Requirement: Hover log entry highlights matched rule
+#### Scenario: Save malformed TOML rejected
 
-When an access log entry is hovered, the rule in the rules pane whose raw rule string equals the entry's matched rule SHALL be visually highlighted. Other rules SHALL NOT be highlighted.
+- **WHEN** POST /api/save is called with content that is not valid TOML
+- **THEN** response status is 400
+- **AND** the config file on disk is unchanged
 
-#### Scenario: Hovering an entry highlights its rule
+### Requirement: Revert endpoint
 
-- **WHEN** the rules pane contains rules `fs:ro:/usr/lib` and `fs:rw:/tmp`
-- **AND** the user hovers over a log entry with matched rule `fs:ro:/usr/lib`
-- **THEN** the rule `fs:ro:/usr/lib` is highlighted in the rules pane
-- **AND** the rule `fs:rw:/tmp` is not highlighted
+POST /api/revert SHALL reset the server's draft content to the last-saved content. It SHALL respond with 200 and the saved content as `text/plain` in the response body.
 
-#### Scenario: Hovering an unmatched entry highlights nothing
+#### Scenario: Revert resets draft to saved
 
-- **WHEN** the user hovers over a log entry with an empty matched rule
-- **THEN** no rules are highlighted in the rules pane
+- **WHEN** the server's draft content differs from the saved content
+- **AND** POST /api/revert is called
+- **THEN** response status is 200
+- **AND** the response body contains the saved config content
+- **AND** the server's draft content equals the saved content
 
-#### Scenario: Leaving an entry clears rule highlights
+#### Scenario: Revert when not modified
 
-- **WHEN** the user stops hovering over a log entry
-- **THEN** all rule highlights are removed
+- **WHEN** the server's draft content equals the saved content
+- **AND** POST /api/revert is called
+- **THEN** response status is 200
+- **AND** the response body contains the saved config content
+
+### Requirement: Access token authentication
+
+The server SHALL generate a random access token at construction time. Every HTTP request (GET, POST, SSE) SHALL require a valid `?token=` query parameter matching the generated token. Requests without the token or with an incorrect token SHALL receive 403 Forbidden.
+
+#### Scenario: Request with valid token succeeds
+
+- **WHEN** GET / is requested with the correct `?token=` parameter
+- **THEN** the server responds normally (200)
+
+#### Scenario: Request without token rejected
+
+- **WHEN** GET / is requested without a `?token=` parameter
+- **THEN** the server responds with 403
+
+#### Scenario: Request with wrong token rejected
+
+- **WHEN** GET / is requested with an incorrect `?token=` parameter
+- **THEN** the server responds with 403
+
+#### Scenario: Token required on all endpoints
+
+- **WHEN** requests are made to `/`, `/events`, `/api/start`, `/api/stop`, `/api/save`, and `/api/revert` without a `?token=` parameter
+- **THEN** all respond with 403
+
+#### Scenario: SSE connection requires token
+
+- **WHEN** a client connects to `/events` with the correct `?token=` parameter
+- **THEN** SSE events are streamed normally
+- **AND** a client connecting without the token receives 403

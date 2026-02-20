@@ -60,7 +60,8 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"sh", "-c", "cat "+testFile+" && sleep 10")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -105,9 +106,7 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 }
 
 // TestE2E_MonitoringAccess_WebUISurvivesSandboxExit tests that the web UI remains
-// accessible after the sandboxed command exits, and the post-exit message is printed.
-//
-//nolint:funlen
+// accessible after the sandboxed command exits.
 func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 	env := newMonitorTest(t)
 
@@ -120,7 +119,8 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"cat", dataFile)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -133,30 +133,26 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 
 	require.NoError(t, cmd.Start())
 
-	// Read stderr, extract monitor URL, wait for "Press Ctrl-C" (sandbox exited, server still running)
+	// Read stderr, extract monitor URL, signal readiness when URL appears
 	var monitorURL string
 	var stderrOnce sync.Once
 	stderrReady := make(chan struct{})
-	stderrDone := make(chan string, 1)
 	go func() {
-		var sb strings.Builder
 		scanner := bufio.NewScanner(stderrPipe)
 		for scanner.Scan() {
-			line := scanner.Text()
-			sb.WriteString(line + "\n")
-			if after, ok := strings.CutPrefix(line, "execave: monitor running at "); ok {
+			if after, ok := strings.CutPrefix(scanner.Text(), "execave: monitor running at "); ok {
 				monitorURL = after
-			}
-			if strings.Contains(line, "Press Ctrl-C") {
 				stderrOnce.Do(func() { close(stderrReady) })
 			}
 		}
 		stderrOnce.Do(func() { close(stderrReady) })
-		stderrDone <- sb.String()
 	}()
 
 	<-stderrReady
 	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
+
+	// Wait for the sandbox command to finish
+	time.Sleep(500 * time.Millisecond)
 
 	// Web UI is still accessible after sandbox exit
 	webUI := fetchWebUI(t, monitorURL)
@@ -169,11 +165,6 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 	// Clean up: send SIGINT to stop the server
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 	_ = cmd.Wait()
-	stderrStr := <-stderrDone
-
-	// Stderr contains the post-exit message
-	assert.Contains(t, stderrStr, "Press Ctrl-C")
-	assert.Contains(t, stderrStr, "process stopped")
 }
 
 // TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI tests that sending
@@ -189,7 +180,7 @@ func TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI(t *testing.T) {
 
 	// After SIGINT stopped the server, the web UI should no longer be accessible
 	client := &http.Client{Timeout: 1 * time.Second}
-	resp, err := client.Get(result.MonitorURL + "/")
+	resp, err := client.Get(result.MonitorURL)
 	if resp != nil {
 		resp.Body.Close() //nolint:errcheck,gosec // G104: best-effort close in test
 	}

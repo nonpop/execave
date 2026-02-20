@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"syscall"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -36,7 +36,8 @@ func main() {
 
 func newRootCommand() *cobra.Command {
 	var configPath string
-	var monitorPort string
+	var monitor bool
+	var noOpen bool
 
 	cmd := &cobra.Command{
 		Use:   "execave [flags] [--] <command>",
@@ -45,7 +46,7 @@ func newRootCommand() *cobra.Command {
 
 Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		Example: `  execave python
-  execave --monitor=9876 -- bash -c 'ls /etc'`,
+  execave --monitor -- bash -c 'ls /etc'`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			// Check if -- was used
 			argsLenAtDash := cmd.ArgsLenAtDash()
@@ -65,12 +66,13 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitorPort)
+			return runCommand(c, args, configPath, monitor, noOpen)
 		},
 	}
 
 	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
-	cmd.Flags().StringVar(&monitorPort, "monitor", "", "Enable access monitoring with web UI on specified port (e.g., --monitor=9876)")
+	cmd.Flags().BoolVar(&monitor, "monitor", false, "Enable access monitoring with web UI (opens browser automatically)")
+	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Do not open the browser when --monitor is enabled")
 
 	cmd.AddCommand(newNetworkTunnelCommand())
 
@@ -111,8 +113,8 @@ func newNetworkTunnelCommand() *cobra.Command {
 	}
 }
 
-func runCommand(cmd *cobra.Command, args []string, configPath, monitorPort string) error {
-	exitCode, err := runSandboxed(cmd, args, configPath, monitorPort)
+func runCommand(cmd *cobra.Command, args []string, configPath string, monitor, noOpen bool) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitor, noOpen)
 	if err != nil {
 		return err
 	}
@@ -120,29 +122,12 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitorPort strin
 	return nil
 }
 
-// validateMonitorPort validates the monitor port flag when monitoring is enabled.
-func validateMonitorPort(cmd *cobra.Command, port string) error {
-	if !cmd.Flags().Changed("monitor") {
-		return nil
-	}
-	if port == "" {
-		return errors.New("--monitor requires a port number (e.g., --monitor=9876)")
-	}
-	return validatePort(port)
-}
-
-func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort string) (int, error) {
+func runSandboxed(cmd *cobra.Command, args []string, configPath string, monitor, noOpen bool) (int, error) {
 	command := extractCommand(cmd, args)
 
 	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
 	if err != nil {
 		return 0, fmt.Errorf("load config from %s: %w", configPath, err)
-	}
-
-	monitorEnabled := cmd.Flags().Changed("monitor")
-
-	if err := validateMonitorPort(cmd, monitorPort); err != nil {
-		return 0, fmt.Errorf("invalid port for --monitor: %w", err)
 	}
 
 	absConfigPath, err := filepath.Abs(configPath)
@@ -184,13 +169,13 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 
 	// When monitoring is enabled, the runner manages the logger lifecycle
 	// and updates the proxy via OnLoggerChange. Pass nil logger to the proxy.
-	logger := setupAccessLog(monitorEnabled)
+	logger := setupAccessLog(monitor)
 	proxyLogger := logger
-	if monitorEnabled {
+	if monitor {
 		proxyLogger = nil
 	}
 
-	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitorEnabled)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitor)
 	if err != nil {
 		return 0, err
 	}
@@ -200,8 +185,8 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitorPort str
 
 	sb := sandbox.New(cfg, absConfigPath, netPath)
 
-	if monitorEnabled {
-		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitorPort, sigCh)
+	if monitor {
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, noOpen, sigCh)
 	}
 
 	exitCode, err := sb.Run(ctx, command)
@@ -245,18 +230,6 @@ func setupAccessLog(monitorEnabled bool) *accesslog.Logger {
 	}
 	logger := accesslog.New(sandbox.ManagedDirs)
 	return logger
-}
-
-// validatePort validates that the given string is a valid port number (1-65535).
-func validatePort(port string) error {
-	portNum, err := strconv.Atoi(port)
-	if err != nil {
-		return fmt.Errorf("port must be a number: %w", err)
-	}
-	if portNum < 0 || portNum > 65535 {
-		return fmt.Errorf("port must be between 0 and 65535, got %d", portNum)
-	}
-	return nil
 }
 
 // setupNetworking initializes the proxy and network path if net rules are present
@@ -312,7 +285,7 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
 // access monitoring and web UI with run control.
-func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, port string, sigCh chan os.Signal) (int, error) {
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, noOpen bool, sigCh chan os.Signal) (int, error) {
 	// Create runner
 	rnr := runner.New(cfg, absConfigPath, netPath)
 
@@ -328,12 +301,31 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 	}
 	configDir := filepath.Dir(absConfigPath)
 
-	// Start web UI server with runner
-	server := webui.New(rnr, cfg, command, port, homeDir, configDir)
+	// Read raw config file content for the web UI editor
+	configContent, err := os.ReadFile(absConfigPath) // #nosec G304 -- absConfigPath is validated as absolute path
+	if err != nil {
+		return 0, fmt.Errorf("read config %s: %w", absConfigPath, err)
+	}
+
+	// Start web UI server
+	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs)
+
+	// Wire config changes to update the proxy's net rules resolver
+	server.OnConfigChange = func(newCfg *config.Config) {
+		if httpProxy != nil {
+			httpProxy.SetResolver(netrules.NewResolver(newCfg.NetRules))
+		}
+	}
+
 	if err := server.Start(ctx); err != nil {
 		return 0, fmt.Errorf("start web UI server: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "execave: monitor running at %s\n", server.URL())
+	url := server.URL()
+	fmt.Fprintf(os.Stderr, "execave: monitor running at %s\n", url)
+	if !noOpen {
+		// Ignore errors: xdg-open may not be available on all systems
+		_ = exec.CommandContext(ctx, "xdg-open", url).Start() // #nosec G204 -- url is constructed from server address and token
+	}
 
 	// Start initial run
 	if err := rnr.Start(ctx, cfg, command); err != nil {

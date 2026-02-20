@@ -25,6 +25,30 @@ func (c *Config) HasNetRules() bool {
 	return len(c.NetRules) > 0
 }
 
+// ParseTOML parses a TOML config from raw bytes.
+// configDir is used to resolve relative and tilde-prefixed paths in fs rules;
+// configPath must be an absolute path — same contract as ParseRules.
+// ParseTOML panics if configPath is not absolute.
+func ParseTOML(data []byte, configDir, configPath string, managedPaths []string) (*Config, error) {
+	if !filepath.IsAbs(configPath) {
+		panic(fmt.Sprintf("ParseTOML: configPath must be absolute, got %q", configPath))
+	}
+
+	var raw struct {
+		Rules []string `toml:"rules"`
+	}
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	cfg, err := ParseRules(raw.Rules, configDir, configPath, managedPaths)
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
 // Load reads and parses a configuration file.
 // It routes rules by resource prefix: "fs:" rules go to fsrules, "net:" rules go to netrules.
 // managedPaths are path prefixes that fs rules cannot target (e.g., /proc, /dev).
@@ -37,20 +61,13 @@ func Load(path string, managedPaths []string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 
-	var raw struct {
-		Rules []string `toml:"rules"`
-	}
-	if err := toml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
-	}
-
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("resolve absolute path for config %s: %w", path, err)
 	}
 	configDir := filepath.Dir(absPath)
 
-	cfg, err := ParseRules(raw.Rules, configDir, absPath, managedPaths)
+	cfg, err := ParseTOML(data, configDir, absPath, managedPaths)
 	if err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}

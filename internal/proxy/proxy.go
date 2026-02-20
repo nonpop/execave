@@ -35,7 +35,7 @@ const (
 
 // Proxy is a forward HTTP proxy that listens on a UDS and enforces net rules.
 type Proxy struct {
-	resolver  *netrules.Resolver
+	resolver  atomic.Pointer[netrules.Resolver]
 	logger    atomic.Pointer[accesslog.Logger]
 	listener  net.Listener
 	udsPath   string
@@ -45,10 +45,14 @@ type Proxy struct {
 }
 
 // New creates a new Proxy with the given net rules resolver and access logger.
+// resolver must not be nil.
 // logger may be nil if access logging is not needed.
 func New(resolver *netrules.Resolver, logger *accesslog.Logger) *Proxy {
+	if resolver == nil {
+		panic("New: resolver must not be nil")
+	}
 	proxy := &Proxy{
-		resolver:  resolver,
+		resolver:  atomic.Pointer[netrules.Resolver]{},
 		logger:    atomic.Pointer[accesslog.Logger]{},
 		listener:  nil,
 		udsPath:   "",
@@ -56,10 +60,20 @@ func New(resolver *netrules.Resolver, logger *accesslog.Logger) *Proxy {
 		server:    nil,
 		transport: &http.Transport{},
 	}
+	proxy.resolver.Store(resolver)
 	if logger != nil {
 		proxy.logger.Store(logger)
 	}
 	return proxy
+}
+
+// SetResolver replaces the net rules resolver. Safe for concurrent use with request handlers.
+// resolver must not be nil.
+func (p *Proxy) SetResolver(resolver *netrules.Resolver) {
+	if resolver == nil {
+		panic("SetResolver: resolver must not be nil")
+	}
+	p.resolver.Store(resolver)
 }
 
 // SetLogger replaces the access logger. Safe for concurrent use with request handlers.
@@ -133,7 +147,7 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := p.resolver.Resolve(netrules.ProtocolHTTPS, host, port)
+	result := p.resolver.Load().Resolve(netrules.ProtocolHTTPS, host, port)
 	p.logAccess(accesslog.OperationHTTPS, r.Host, result)
 
 	if !result.Allowed {
@@ -183,7 +197,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostPort := net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
-	result := p.resolver.Resolve(netrules.ProtocolHTTP, host, port)
+	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
 	p.logAccess(accesslog.OperationHTTP, hostPort, result)
 
 	if !result.Allowed {

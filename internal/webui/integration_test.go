@@ -1,9 +1,10 @@
 package webui_test
 
 import (
+	"encoding/json"
 	"io"
-	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,8 +12,6 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
-	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/stretchr/testify/assert"
@@ -25,41 +24,73 @@ func TestIntegration_WebServerBinding_ServerStartsAndServesHTTP(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := webui.StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/")
+	resp, err := http.Get(srv.EndpointURL("/"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestIntegration_WebServerBinding_InvalidPortRejected(t *testing.T) {
-	logger := accesslog.New(nil)
-	rnr := runner.NewTestRunner()
-	rnr.SetTestLogger(logger)
-	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
-	command := []string{"true"}
-	srv := webui.New(rnr, cfg, command, "notaport", "", "")
+// --- Requirement: Access token authentication ---
 
-	err := srv.Start(t.Context())
-	assert.ErrorContains(t, err, "listen on port notaport")
+func TestIntegration_AccessTokenAuthentication_RequestWithValidTokenSucceeds(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	resp, err := http.Get(srv.EndpointURL("/"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestIntegration_WebServerBinding_PortAlreadyInUse(t *testing.T) {
-	// Occupy a port
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	defer ln.Close() //nolint:errcheck // best-effort close in test
-
-	port := strings.TrimPrefix(ln.Addr().String(), "127.0.0.1:")
-
+func TestIntegration_AccessTokenAuthentication_RequestWithoutTokenRejected(t *testing.T) {
 	logger := accesslog.New(nil)
-	rnr := runner.NewTestRunner()
-	rnr.SetTestLogger(logger)
-	cfg := &config.Config{FSRules: nil, NetRules: nil, ManagedPaths: nil}
-	command := []string{"true"}
-	srv := webui.New(rnr, cfg, command, port, "", "")
+	srv := webui.StartServer(t, logger)
 
-	err = srv.Start(t.Context())
-	assert.ErrorContains(t, err, "listen on port "+port)
+	resp, err := http.Get("http://" + srv.Addr() + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestIntegration_AccessTokenAuthentication_RequestWithWrongTokenRejected(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	resp, err := http.Get("http://" + srv.Addr() + "/?token=wrongtoken")
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestIntegration_AccessTokenAuthentication_TokenRequiredOnAllEndpoints(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+	base := "http://" + srv.Addr()
+
+	endpoints := []string{"/", "/events", "/api/start", "/api/stop", "/api/save", "/api/revert"}
+	for _, path := range endpoints {
+		resp, err := http.Get(base + path)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+func TestIntegration_AccessTokenAuthentication_SseConnectionRequiresToken(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	// With correct token: events stream normally
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Without token: 403
+	resp2, err := http.Get("http://" + srv.Addr() + "/events")
+	require.NoError(t, err)
+	defer resp2.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusForbidden, resp2.StatusCode)
 }
 
 // --- Requirement: Access log page ---
@@ -74,7 +105,7 @@ func TestIntegration_AccessLogPage_PageDisplaysEntries(t *testing.T) {
 	}))
 
 	srv := webui.StartServer(t, logger)
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
 	// Three columns present in a table row; matched rule visible as tooltip
 	assert.Contains(t, body, `<td class="operation">READ</td>`)
@@ -96,7 +127,7 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 	}
 
 	srv := webui.StartServer(t, logger)
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
 	assert.Contains(t, body, "READ")
 	assert.Contains(t, body, "WRITE")
@@ -115,8 +146,8 @@ func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) 
 
 	srv := webui.StartServer(t, logger)
 
-	first := fetchBody(t, srv.URL()+"/")
-	second := fetchBody(t, srv.URL()+"/")
+	first := fetchBody(t, srv.EndpointURL("/"))
+	second := fetchBody(t, srv.EndpointURL("/"))
 
 	assert.Contains(t, first, "/usr/bin/test")
 	assert.Contains(t, second, "/usr/bin/test")
@@ -139,7 +170,7 @@ func TestIntegration_PathShortening_FilesystemPathShortenedToRelativeForm(t *tes
 	}))
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
 	assert.Contains(t, body, `<td class="target">src/main.go</td>`)
 	// Rule shown verbatim in row attributes
@@ -156,7 +187,7 @@ func TestIntegration_PathShortening_FilesystemPathShortenedToTildeForm(t *testin
 	}))
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
 	assert.Contains(t, body, `<td class="target">~/.ssh/id_rsa</td>`)
 }
@@ -171,7 +202,7 @@ func TestIntegration_PathShortening_NonFilesystemTargetNotShortened(t *testing.T
 	}))
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
 	assert.Contains(t, body, `<td class="target">api.example.com:443</td>`)
 }
@@ -181,14 +212,14 @@ func TestIntegration_PathShortening_SseEntryEventUsesShortPath(t *testing.T) {
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
 	eventCh := readSSEEventsAsync(resp)
 	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status
-	readEventWithTimeout(t, eventCh) // rules
+	readEventWithTimeout(t, eventCh) // config
 
 	// Log entry after SSE connection is established
 	require.NoError(t, logger.Log(accesslog.Entry{
@@ -209,16 +240,16 @@ func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.
 	logger := accesslog.New(nil)
 	srv := webui.StartServer(t, logger)
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status + rules)
+	// Read initial events (session + status + config)
 	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status
-	readEventWithTimeout(t, eventCh) // rules
+	readEventWithTimeout(t, eventCh) // config
 
 	// Log a new entry after SSE connection is established
 	require.NoError(t, logger.Log(accesslog.Entry{
@@ -246,14 +277,14 @@ func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.URL())
+	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Connect with ?from=30
-	resp, err := http.Get(srv.URL() + "/events?from=30")
+	resp, err := http.Get(srv.EndpointURL("/events?from=30"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules + entries 30..49 = 23 events
+	// session + status + config + entries 30..49 = 23 events
 	events := webui.ReadSSEEvents(t, resp, 23)
 	require.Len(t, events, 23)
 
@@ -277,15 +308,15 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.URL())
+	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Simulate: page rendered with count 50, entries 50+51 arrive before SSE connects.
 	// Client connects to /events?from=50 and should receive entries 50 and 51.
-	resp, err := http.Get(srv.URL() + "/events?from=50")
+	resp, err := http.Get(srv.EndpointURL("/events?from=50"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules + 2 entries (50, 51)
+	// session + status + config + 2 entries (50, 51)
 	events := webui.ReadSSEEvents(t, resp, 5)
 	require.Len(t, events, 5)
 
@@ -307,10 +338,10 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.URL())
+	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Reconnect with Last-Event-ID from same session at index 75
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", sessionID+":75")
 
@@ -318,7 +349,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules + entries 76..79 = 7 events
+	// session + status + config + entries 76..79 = 7 events
 	events := webui.ReadSSEEvents(t, resp, 7)
 	require.Len(t, events, 7)
 
@@ -338,10 +369,10 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.URL())
+	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Connect with Last-Event-ID from a different session
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", "oldsession:99")
 
@@ -349,7 +380,7 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + rules + all 5 entries from 0
+	// session + status + config + all 5 entries from 0
 	events := webui.ReadSSEEvents(t, resp, 8)
 	require.Len(t, events, 8)
 
@@ -364,7 +395,7 @@ func TestIntegration_RunStatusDisplay_CommandShownInPage(t *testing.T) {
 	logger := accesslog.New(nil)
 	srv := webui.StartServer(t, logger) // command = "echo hello"
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, "echo hello")
 }
 
@@ -376,7 +407,7 @@ func TestIntegration_RunStatusDisplay_CrossSessionReconnectDeliversCurrentComman
 	srv := webui.StartServerWithRunner(t, rnr)
 
 	// Connect with Last-Event-ID from a different session
-	req, err := http.NewRequest(http.MethodGet, srv.URL()+"/events", nil)
+	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", "oldsession:10")
 
@@ -400,7 +431,7 @@ func TestIntegration_RunStatusDisplay_RunningStatusShown(t *testing.T) {
 	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, "Running")
 }
 
@@ -411,7 +442,7 @@ func TestIntegration_RunStatusDisplay_ExitStatusShown(t *testing.T) {
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, "Exited")
 	assert.Contains(t, body, "(code: 0)")
 }
@@ -423,7 +454,7 @@ func TestIntegration_RunStatusDisplay_NonZeroExitCodeShown(t *testing.T) {
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 1, Error: "", Command: "false"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, "Exited")
 	assert.Contains(t, body, "(code: 1)")
 }
@@ -435,16 +466,16 @@ func TestIntegration_RunStatusDisplay_StatusUpdatesStreamedViaSse(t *testing.T) 
 	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	resp, err := http.Get(srv.URL() + "/events")
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status + rules)
+	// Read initial events (session + status + config)
 	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status (Running)
-	readEventWithTimeout(t, eventCh) // rules
+	readEventWithTimeout(t, eventCh) // config
 
 	// Change status and notify
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "sleep 60"})
@@ -465,18 +496,12 @@ func TestIntegration_RunControlEndpoints_StartEndpointTriggersNewRun(t *testing.
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	// POST /api/start
-	resp, err := http.Post(srv.URL()+"/api/start", "text/plain", nil)
+	// POST /api/start with empty body (empty TOML is valid)
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
-	// Response is 200
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// Runner status transitions to running (we check that Start was called by verifying status change)
-	// Note: In a real test with a real command, the status would be "running"
-	// For this integration test, we just verify the endpoint returns 200
-	// The actual runner behavior is tested in runner integration tests
 }
 
 func TestIntegration_RunControlEndpoints_StartEndpointRestartsActiveRun(t *testing.T) {
@@ -487,14 +512,11 @@ func TestIntegration_RunControlEndpoints_StartEndpointRestartsActiveRun(t *testi
 	srv := webui.StartServerWithRunner(t, rnr)
 
 	// POST /api/start while running
-	resp, err := http.Post(srv.URL()+"/api/start", "text/plain", nil)
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
-	// Response is 200
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// The runner's Start method stops the active run first (tested in runner integration tests)
 }
 
 func TestIntegration_RunControlEndpoints_StopEndpointTerminatesActiveRun(t *testing.T) {
@@ -504,15 +526,11 @@ func TestIntegration_RunControlEndpoints_StopEndpointTerminatesActiveRun(t *test
 	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	// POST /api/stop while running
-	resp, err := http.Post(srv.URL()+"/api/stop", "text/plain", nil)
+	resp, err := http.Post(srv.EndpointURL("/api/stop"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
-	// Response is 200
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// The runner's Stop method terminates the run (tested in runner integration tests)
 }
 
 func TestIntegration_RunControlEndpoints_StopEndpointWhenIdle(t *testing.T) {
@@ -522,111 +540,11 @@ func TestIntegration_RunControlEndpoints_StopEndpointWhenIdle(t *testing.T) {
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	// POST /api/stop when not running
-	resp, err := http.Post(srv.URL()+"/api/stop", "text/plain", nil)
+	resp, err := http.Post(srv.EndpointURL("/api/stop"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
-	// Response is 200 (no-op)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-// --- Requirement: Rules pane ---
-
-func TestIntegration_RulesPane_RulesDisplayedOnPageLoad(t *testing.T) {
-	logger := accesslog.New(nil)
-	rnr := runner.NewTestRunner()
-	rnr.SetTestLogger(logger)
-	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-
-	// Create config with rules
-	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
-	require.NoError(t, err)
-	fsRule1.RawRule = "fs:ro:/usr/lib"
-	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
-	require.NoError(t, err)
-	fsRule2.RawRule = "fs:rw:/tmp"
-
-	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
-		NetRules:     nil,
-		ManagedPaths: nil,
-	}
-
-	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
-	require.NoError(t, srv.Start(t.Context()))
-	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
-
-	body := fetchBody(t, srv.URL()+"/")
-
-	// Verify rules are present in the HTML
-	assert.Contains(t, body, "fs:ro:/usr/lib")
-	assert.Contains(t, body, "fs:rw:/tmp")
-
-	// Verify rules appear in the expected order (fs rules first)
-	idxRule1 := strings.Index(body, "fs:ro:/usr/lib")
-	idxRule2 := strings.Index(body, "fs:rw:/tmp")
-	assert.Less(t, idxRule1, idxRule2, "fs:ro:/usr/lib should appear before fs:rw:/tmp")
-}
-
-func TestIntegration_RulesPane_EmptyRulesDisplayed(t *testing.T) {
-	logger := accesslog.New(nil)
-	rnr := runner.NewTestRunner()
-	rnr.SetTestLogger(logger)
-	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-
-	cfg := &config.Config{
-		FSRules:      nil,
-		NetRules:     nil,
-		ManagedPaths: nil,
-	}
-
-	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
-	require.NoError(t, srv.Start(t.Context()))
-	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
-
-	body := fetchBody(t, srv.URL()+"/")
-
-	// The page should still render successfully
-	assert.Contains(t, body, "Execave Access Monitor")
-}
-
-func TestIntegration_RulesPane_BothFsAndNetRulesDisplayed(t *testing.T) {
-	logger := accesslog.New(nil)
-	rnr := runner.NewTestRunner()
-	rnr.SetTestLogger(logger)
-	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-
-	// Create fs rule
-	fsRule, err := fsrules.Parse("ro:/usr/lib", "/")
-	require.NoError(t, err)
-	fsRule.RawRule = "fs:ro:/usr/lib"
-
-	// Create net rule
-	netRule, err := netrules.Parse("https:example.com:443")
-	require.NoError(t, err)
-	netRule.RawRule = "net:https:example.com:443"
-
-	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule},
-		NetRules:     []netrules.Rule{netRule},
-		ManagedPaths: nil,
-	}
-
-	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
-	require.NoError(t, srv.Start(t.Context()))
-	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
-
-	body := fetchBody(t, srv.URL()+"/")
-
-	// Verify both rules are present in the HTML
-	assert.Contains(t, body, "fs:ro:/usr/lib")
-	assert.Contains(t, body, "net:https:example.com:443")
-
-	// Verify fs rules appear before net rules
-	idxFsRule := strings.Index(body, "fs:ro:/usr/lib")
-	idxNetRule := strings.Index(body, "net:https:example.com:443")
-	assert.Less(t, idxFsRule, idxNetRule, "fs rules should appear before net rules")
 }
 
 // --- Requirement: Run control buttons ---
@@ -638,13 +556,10 @@ func TestIntegration_RunControlButtons_StartButtonAndDisabledStopShownWhenIdle(t
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "echo hello"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
-	// Page displays a "Start" button
 	assert.Contains(t, body, `id="start-btn"`)
 	assert.Contains(t, body, ">Start<")
-
-	// Page displays a disabled "Stop" button
 	assert.Contains(t, body, `id="stop-btn"`)
 	assert.Contains(t, body, "disabled")
 }
@@ -656,161 +571,314 @@ func TestIntegration_RunControlButtons_RestartButtonAndEnabledStopShownWhenRunni
 	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "sleep 60"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	body := fetchBody(t, srv.URL()+"/")
+	body := fetchBody(t, srv.EndpointURL("/"))
 
-	// Page displays a "Restart" button
 	assert.Contains(t, body, `id="start-btn"`)
 	assert.Contains(t, body, ">Restart<")
-
-	// Page displays an enabled "Stop" button (no "disabled" attribute when running)
 	assert.Contains(t, body, `id="stop-btn"`)
-	// Stop button should NOT have "disabled" attribute when running
-	// Check that the stop button line doesn't contain "disabled"
 	assert.NotContains(t, body, `id="stop-btn" class="stop" disabled`)
 	assert.Contains(t, body, `id="stop-btn" class="stop" >Stop<`)
 }
 
-// --- Requirement: Rules refreshed on SSE reconnect ---
+// --- Requirement: Config SSE event (replaces rules event) ---
 
-func TestIntegration_RulesRefreshedOnSseReconnect_RulesEventSentOnSseConnect(t *testing.T) {
-	fsRule, err := fsrules.Parse("ro:/usr/lib", "/")
+func TestIntegration_ConfigSseEvent_SentOnConnect(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
 	require.NoError(t, err)
-	fsRule.RawRule = "fs:ro:/usr/lib"
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule},
-		NetRules:     nil,
-		ManagedPaths: nil,
+	// session + status + config
+	events := webui.ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+	assert.Equal(t, "session", events[0].Event)
+	assert.Equal(t, "status", events[1].Event)
+	assert.Equal(t, "config", events[2].Event)
+}
+
+func TestIntegration_ConfigSseEvent_ContainsDraftAndSavedFields(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	events := webui.ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
+
+	configEvent := events[2]
+	assert.Equal(t, "config", configEvent.Event)
+
+	var payload struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
 	}
+	require.NoError(t, json.Unmarshal([]byte(configEvent.Data), &payload))
+	// Both draft and saved are present and initially equal
+	assert.Equal(t, payload.Draft, payload.Saved)
+}
 
+func TestIntegration_ConfigSseEvent_ReflectsDraftSavedStateAfterSave(t *testing.T) {
+	tmpFile := t.TempDir() + "/execave.toml"
+	original := `rules = []`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(original), 0o600))
+
+	logger := accesslog.New(nil)
+	r := runner.NewTestRunner()
+	r.SetTestLogger(logger)
+	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	newContent := `rules = ["fs:ro:/usr/bin"]`
+	saveResp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader(newContent))
+	require.NoError(t, err)
+	_ = saveResp.Body.Close()
+	require.Equal(t, http.StatusOK, saveResp.StatusCode)
+
+	// SSE config event now reflects the new saved content
+	eventsResp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer eventsResp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	events := webui.ReadSSEEvents(t, eventsResp, 3)
+	require.Len(t, events, 3)
+
+	configEvent := events[2]
+	assert.Equal(t, "config", configEvent.Event)
+
+	var payload struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(configEvent.Data), &payload))
+	assert.Equal(t, newContent, payload.Draft)
+	assert.Equal(t, newContent, payload.Saved)
+}
+
+func TestIntegration_ConfigSseEvent_ReflectsDraftAfterStartWithBody(t *testing.T) {
 	logger := accesslog.New(nil)
 	rnr := runner.NewTestRunner()
 	rnr.SetTestLogger(logger)
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv := webui.New(rnr, cfg, []string{"true"}, "0", "", "")
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	startBody := `rules = ["fs:ro:/usr/bin"]`
+	startResp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(startBody))
+	require.NoError(t, err)
+	_ = startResp.Body.Close()
+	require.Equal(t, http.StatusOK, startResp.StatusCode)
+
+	// SSE config event reflects the updated draft; saved content is unchanged
+	eventsResp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer eventsResp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	events := webui.ReadSSEEvents(t, eventsResp, 3)
+	require.Len(t, events, 3)
+
+	configEvent := events[2]
+	assert.Equal(t, "config", configEvent.Event)
+
+	var payload struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(configEvent.Data), &payload))
+	assert.Equal(t, startBody, payload.Draft)
+	// start does not write to file, so saved content remains empty
+	assert.Empty(t, payload.Saved)
+}
+
+// --- Requirement: Config save and revert ---
+
+// newConfigServer creates a Server backed by a temporary config file pre-populated with original.
+// The server is started and registered for cleanup. Returns the server and the config file path.
+func newConfigServer(t *testing.T, original string) (*webui.Server, string) {
+	t.Helper()
+	tmpFile := t.TempDir() + "/execave.toml"
+	require.NoError(t, os.WriteFile(tmpFile, []byte(original), 0o600))
+
+	logger := accesslog.New(nil)
+	r := runner.NewTestRunner()
+	r.SetTestLogger(logger)
+	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+	return srv, tmpFile
+}
+
+func TestIntegration_Save_WritesToConfigFile(t *testing.T) {
+	original := `rules = []`
+	srv, tmpFile := newConfigServer(t, original)
+
+	newContent := `rules = ["fs:ro:/usr/bin"]`
+	resp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader(newContent))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	written, err := os.ReadFile(tmpFile) // #nosec G304 -- tmpFile is a known temp path from t.TempDir
+	require.NoError(t, err)
+	assert.Equal(t, newContent, string(written))
+}
+
+func TestIntegration_Save_InvalidConfig_Returns400AndFileUnchanged(t *testing.T) {
+	original := `rules = []`
+	srv, tmpFile := newConfigServer(t, original)
+
+	resp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader("invalid toml [[["))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	written, err := os.ReadFile(tmpFile) // #nosec G304 -- tmpFile is a known temp path from t.TempDir
+	require.NoError(t, err)
+	assert.Equal(t, original, string(written))
+}
+
+func TestIntegration_Save_InvalidRulesRejected(t *testing.T) {
+	original := `rules = []`
+	srv, tmpFile := newConfigServer(t, original)
+
+	// Valid TOML but invalid rule prefix
+	resp, err := http.Post(srv.EndpointURL("/api/save"), "text/plain", strings.NewReader(`rules = ["badprefix:something"]`))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	written, err := os.ReadFile(tmpFile) // #nosec G304 -- tmpFile is a known temp path from t.TempDir
+	require.NoError(t, err)
+	assert.Equal(t, original, string(written))
+}
+
+func TestIntegration_Revert_ResetsDraftToSaved(t *testing.T) {
+	tmpFile := t.TempDir() + "/execave.toml"
+	savedContent := `rules = ["fs:ro:/usr/bin"]`
+	require.NoError(t, os.WriteFile(tmpFile, []byte(savedContent), 0o600))
+
+	logger := accesslog.New(nil)
+	r := runner.NewTestRunner()
+	r.SetTestLogger(logger)
+	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, savedContent, nil)
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
-	resp, err := http.Get(srv.URL() + "/events")
+	// Start with a different config to create a different draft
+	draftContent := `rules = ["fs:ro:/tmp"]`
+	startResp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(draftContent))
 	require.NoError(t, err)
-	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+	_ = startResp.Body.Close()
 
-	// session + status + rules
-	events := webui.ReadSSEEvents(t, resp, 3)
-	require.Len(t, events, 3)
+	// Revert should reset draft to saved and return saved content
+	resp, err := http.Post(srv.EndpointURL("/api/revert"), "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	rulesEvent := events[2]
-	assert.Equal(t, "rules", rulesEvent.Event)
-	assert.Contains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, savedContent, string(body))
 }
 
-func TestIntegration_RulesRefreshedOnSseReconnect_RulesPaneUpdatedOnCrossSessionReconnect(t *testing.T) {
-	fsRule1, err := fsrules.Parse("ro:/usr/lib", "/")
-	require.NoError(t, err)
-	fsRule1.RawRule = "fs:ro:/usr/lib"
-	fsRule2, err := fsrules.Parse("rw:/tmp", "/")
-	require.NoError(t, err)
-	fsRule2.RawRule = "fs:rw:/tmp"
+func TestIntegration_Revert_WhenNotModifiedReturnsSavedContent(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.StartServerWithRunner(t, rnr)
 
-	cfg1 := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule1, fsRule2},
-		NetRules:     nil,
-		ManagedPaths: nil,
+	// Draft and saved are identical at startup; revert should still succeed.
+	resp, err := http.Post(srv.EndpointURL("/api/revert"), "text/plain", nil)
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Empty(t, string(body)) // StartServerWithRunner initializes with empty content
+}
+
+func TestIntegration_StartWithBody_InvalidConfig_Returns400(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader("invalid toml [[["))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestIntegration_RunControlEndpoints_StartWithInvalidRulesRejected(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// Valid TOML but invalid rule prefix
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(`rules = ["badprefix:something"]`))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestIntegration_RunControlEndpoints_StartCallsOnConfigChangeBeforeRun(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	called := make(chan struct{}, 1)
+	srv.OnConfigChange = func(_ *config.Config) {
+		called <- struct{}{}
 	}
-	logger1 := accesslog.New(nil)
-	rnr1 := runner.NewTestRunner()
-	rnr1.SetTestLogger(logger1)
-	rnr1.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv1 := webui.New(rnr1, cfg1, []string{"true"}, "0", "", "")
-	require.NoError(t, srv1.Start(t.Context()))
-	sessionID1 := webui.GetSessionID(t, srv1.URL())
-	require.NoError(t, srv1.Shutdown(t.Context()))
 
-	// Server 2 with a different set of rules
-	fsRule3, err := fsrules.Parse("ro:/opt", "/")
+	resp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(`rules = []`))
 	require.NoError(t, err)
-	fsRule3.RawRule = "fs:ro:/opt"
+	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	cfg2 := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule3},
-		NetRules:     nil,
-		ManagedPaths: nil,
+	select {
+	case <-called:
+	default:
+		t.Fatal("OnConfigChange was not called")
 	}
-	logger2 := accesslog.New(nil)
-	rnr2 := runner.NewTestRunner()
-	rnr2.SetTestLogger(logger2)
-	rnr2.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv2 := webui.New(rnr2, cfg2, []string{"true"}, "0", "", "")
-	require.NoError(t, srv2.Start(t.Context()))
-	t.Cleanup(func() { _ = srv2.Shutdown(t.Context()) })
-
-	// Simulate browser reconnecting to new server with old session's Last-Event-ID
-	req, err := http.NewRequest(http.MethodGet, srv2.URL()+"/events", nil)
-	require.NoError(t, err)
-	req.Header.Set("Last-Event-ID", sessionID1+":0")
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
-
-	// session + status + rules
-	events := webui.ReadSSEEvents(t, resp, 3)
-	require.Len(t, events, 3)
-
-	rulesEvent := events[2]
-	assert.Equal(t, "rules", rulesEvent.Event)
-	// Server 2's rules are present
-	assert.Contains(t, rulesEvent.Data, `"fs:ro:/opt"`)
-	// Server 1's old rules are not present
-	assert.NotContains(t, rulesEvent.Data, `"fs:ro:/usr/lib"`)
-	assert.NotContains(t, rulesEvent.Data, `"fs:rw:/tmp"`)
 }
 
-// TestIntegration_RulesRefreshedOnSseReconnect_HoverListenersWorkAfterRulesRefresh is a
-// placeholder. After a rules SSE event the client replaces the rules pane DOM nodes and
-// re-attaches mouseenter/mouseleave listeners. Verifying that those listeners fire
-// correctly requires JavaScript execution in a browser.
-func TestIntegration_RulesRefreshedOnSseReconnect_HoverListenersWorkAfterRulesRefresh(t *testing.T) {
-	t.Skip("hover listener re-attachment after rules refresh requires JavaScript execution in a browser")
+// --- Requirement: Config textarea in page ---
+
+func TestIntegration_ConfigPane_TextareaRenderedOnPageLoad(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+	assert.Contains(t, body, `id="config-textarea"`)
 }
 
-// --- Requirement: Hover rule highlights matching log entries ---
+func TestIntegration_ConfigPane_TextareaContainsRawTomlContent(t *testing.T) {
+	logger := accesslog.New(nil)
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	// Use TOML content without characters that html/template encodes in text context
+	configContent := "# config comment\nrules = []"
+	srv := webui.New(rnr, []string{"true"}, "", "/tmp", "/tmp/test-execave.toml", configContent, nil)
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
-// TestIntegration_HoverRuleHighlightsMatchingLogEntries_HoveringARuleHighlightsItsEntries is a
-// placeholder. The highlight is applied by a JavaScript mouseenter handler that adds a CSS
-// class to matching log rows. Verifying this requires JavaScript execution in a browser.
-func TestIntegration_HoverRuleHighlightsMatchingLogEntries_HoveringARuleHighlightsItsEntries(t *testing.T) {
-	t.Skip("hover highlighting requires JavaScript execution in a browser")
-}
-
-// TestIntegration_HoverRuleHighlightsMatchingLogEntries_LeavingARuleClearsHighlights is a
-// placeholder. The highlight is cleared by a JavaScript mouseleave handler. Verifying this
-// requires JavaScript execution in a browser.
-func TestIntegration_HoverRuleHighlightsMatchingLogEntries_LeavingARuleClearsHighlights(t *testing.T) {
-	t.Skip("hover highlighting requires JavaScript execution in a browser")
-}
-
-// --- Requirement: Hover log entry highlights matched rule ---
-
-// TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnEntryHighlightsItsRule is a
-// placeholder. The rule highlight is applied by a JavaScript mouseenter handler on log rows.
-// Verifying this requires JavaScript execution in a browser.
-func TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnEntryHighlightsItsRule(t *testing.T) {
-	t.Skip("hover highlighting requires JavaScript execution in a browser")
-}
-
-// TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnUnmatchedEntryHighlightsNothing
-// is a placeholder. Verifying that no rule is highlighted when hovering an unmatched entry
-// requires JavaScript execution in a browser.
-func TestIntegration_HoverLogEntryHighlightsMatchedRule_HoveringAnUnmatchedEntryHighlightsNothing(t *testing.T) {
-	t.Skip("hover highlighting requires JavaScript execution in a browser")
-}
-
-// TestIntegration_HoverLogEntryHighlightsMatchedRule_LeavingAnEntryClearsRuleHighlights is a
-// placeholder. The rule highlight is cleared by a JavaScript mouseleave handler. Verifying
-// this requires JavaScript execution in a browser.
-func TestIntegration_HoverLogEntryHighlightsMatchedRule_LeavingAnEntryClearsRuleHighlights(t *testing.T) {
-	t.Skip("hover highlighting requires JavaScript execution in a browser")
+	body := fetchBody(t, srv.EndpointURL("/"))
+	assert.Contains(t, body, configContent)
 }
 
 // --- Integration test helpers ---
@@ -818,7 +886,7 @@ func TestIntegration_HoverLogEntryHighlightsMatchedRule_LeavingAnEntryClearsRule
 // fetchBody makes a GET request and returns the response body as a string.
 func fetchBody(t *testing.T, url string) string {
 	t.Helper()
-	resp, err := http.Get(url) //nolint:gosec // G107: test-controlled URL
+	resp, err := http.Get(url) // #nosec G107 -- test-controlled URL
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 	body, err := io.ReadAll(resp.Body)
@@ -881,7 +949,7 @@ func newSSEScanner(resp *http.Response) *sseScanner {
 					lines <- string(buf)
 					buf = buf[:0]
 				} else {
-					buf = append(buf, tmp[0]) //nolint:gosec // G602: n > 0 guarantees tmp[0] is safe
+					buf = append(buf, tmp[0]) // #nosec G602 -- n > 0 guarantees tmp[0] is safe
 				}
 			}
 		}

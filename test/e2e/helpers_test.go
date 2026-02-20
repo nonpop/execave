@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -205,8 +206,8 @@ func (env monitorTestEnv) runMonitored(t *testing.T, rules []string, args ...str
 	t.Helper()
 	configPath := writeConfig(t, rules)
 	configDir := filepath.Dir(configPath)
-	execArgs := make([]string, 0, 4+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor=0", "--")
+	execArgs := make([]string, 0, 5+len(args))
+	execArgs = append(execArgs, "--config", configPath, "--monitor", "--no-open", "--")
 	execArgs = append(execArgs, args...)
 	result := runExecaveMonitored(t, execArgs...)
 	result.ConfigDir = configDir
@@ -220,8 +221,8 @@ func (env monitorTestEnv) runMonitoredWithInterrupt(t *testing.T, rules []string
 	t.Helper()
 	configPath := writeConfig(t, rules)
 	configDir := filepath.Dir(configPath)
-	execArgs := make([]string, 0, 4+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor=0", "--")
+	execArgs := make([]string, 0, 5+len(args))
+	execArgs = append(execArgs, "--config", configPath, "--monitor", "--no-open", "--")
 	execArgs = append(execArgs, args...)
 	result := runMonitoredCmd(t, monitorRunOpts{
 		readyLine:     "execave: monitor running at ",
@@ -310,21 +311,34 @@ func runMonitoredCmd(t *testing.T, opts monitorRunOpts, args ...string) monitore
 }
 
 // runExecaveMonitored starts execave with monitoring in the background, waits for the
-// sandbox command to finish, fetches the web UI, sends SIGINT, and returns the result.
+// monitor URL to appear, fetches the web UI after a short delay, sends SIGINT, and
+// returns the result.
 func runExecaveMonitored(t *testing.T, args ...string) monitoredResult {
 	t.Helper()
-	return runMonitoredCmd(t, monitorRunOpts{readyLine: "Press Ctrl-C", preFetchDelay: 0}, args...)
+	return runMonitoredCmd(t, monitorRunOpts{readyLine: "execave: monitor running at ", preFetchDelay: 200 * time.Millisecond}, args...)
 }
 
-// fetchWebUI fetches the HTML content from the web UI at the given base URL.
-func fetchWebUI(t *testing.T, baseURL string) string {
+// fetchWebUI fetches the HTML content from the web UI at the given monitor URL.
+// monitorURL must be the full URL as returned by startMonitoredExecave (includes token).
+func fetchWebUI(t *testing.T, monitorURL string) string {
 	t.Helper()
-	resp, err := http.Get(baseURL + "/") // #nosec G107 -- test code with controlled URL
+	resp, err := http.Get(monitorURL) // #nosec G107 -- test code with controlled URL
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return string(body)
+}
+
+// monitorEndpoint constructs a token-bearing URL for the given path using the monitor
+// URL returned by startMonitoredExecave (form: http://host:port?token=TOKEN).
+func monitorEndpoint(monitorURL, path string) string {
+	u, err := url.Parse(monitorURL)
+	if err != nil {
+		panic("invalid monitor URL: " + err.Error())
+	}
+	u.Path = path
+	return u.String()
 }
 
 // assertWebUIHasEntry checks that the web UI HTML response contains a table row
@@ -415,7 +429,7 @@ func readSSEEvents(resp *http.Response, n int) []sseEvent {
 func startMonitoredExecave(t *testing.T, configPath string, command ...string) string {
 	t.Helper()
 
-	args := append([]string{"--config", configPath, "--monitor=0", "--"}, command...)
+	args := append([]string{"--config", configPath, "--monitor", "--no-open", "--"}, command...)
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

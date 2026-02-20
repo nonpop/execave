@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/proxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -291,6 +292,96 @@ func TestIntegration_ProxyLifecycle_ProxyStop(t *testing.T) {
 
 	_, err := net.Dial("unix", udsPath)
 	assert.Error(t, err)
+}
+
+// --- Requirement: SetResolver ---
+
+func TestIntegration_SetResolver_DenyToAllow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	host, port := hostPort(t, server.Listener.Addr().String())
+	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
+
+	// Start with deny-all (no rules)
+	prx := proxy.New(netrules.NewResolver(nil), nil)
+	require.NoError(t, prx.Start(udsPath))
+	defer func() { _ = prx.Stop() }()
+
+	client := httpClientViaUDS(udsPath, false)
+
+	// Initially denied
+	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// Update resolver to allow
+	prx.SetResolver(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)))
+
+	// Now allowed
+	resp, err = client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestIntegration_SetResolver_AllowToDeny(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	host, port := hostPort(t, server.Listener.Addr().String())
+	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
+
+	// Start with allow rule
+	prx := proxy.New(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)), nil)
+	require.NoError(t, prx.Start(udsPath))
+	defer func() { _ = prx.Stop() }()
+
+	client := httpClientViaUDS(udsPath, false)
+
+	// Initially allowed
+	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Update resolver to deny-all
+	prx.SetResolver(netrules.NewResolver(nil))
+
+	// Now denied
+	resp, err = client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+func TestIntegration_SetResolver_DenyAllToAllow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	host, port := hostPort(t, server.Listener.Addr().String())
+	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
+
+	// Start with deny-all resolver
+	p := proxy.New(netrules.NewResolver(nil), nil)
+	require.NoError(t, p.Start(udsPath))
+	defer func() { _ = p.Stop() }()
+
+	// Update to allow
+	p.SetResolver(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)))
+
+	client := httpClientViaUDS(udsPath, false)
+	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 // --- helpers ---

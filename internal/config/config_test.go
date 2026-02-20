@@ -224,6 +224,45 @@ func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
 	assert.Equal(t, managedPaths, cfg.ManagedPaths)
 }
 
+func TestParseTOML_ValidTOML(t *testing.T) {
+	content := `rules = ["fs:ro:/usr/bin", "net:https:api.example.com:443"]`
+	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Len(t, cfg.NetRules, 1)
+}
+
+func TestParseTOML_EmptyBytes(t *testing.T) {
+	cfg, err := config.ParseTOML([]byte{}, "/some/dir", "/some/dir/execave.toml", nil)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.FSRules)
+	assert.Empty(t, cfg.NetRules)
+}
+
+func TestParseTOML_InvalidTOML(t *testing.T) {
+	_, err := config.ParseTOML([]byte("invalid toml [[["), "/some/dir", "/some/dir/execave.toml", nil)
+	assert.ErrorContains(t, err, "parse config")
+}
+
+func TestParseTOML_InvalidRules(t *testing.T) {
+	content := `rules = ["badprefix:something"]`
+	_, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
+	assert.ErrorContains(t, err, "unknown resource type")
+}
+
+func TestParseTOML_CommentsPreservedThroughParsing(t *testing.T) {
+	content := "# Comment at top\nrules = [\n    # Another comment\n    \"fs:ro:/usr/bin\",\n]"
+	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+}
+
+func TestParseTOML_NonAbsoluteConfigPathPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		_, _ = config.ParseTOML([]byte{}, "/some/dir", "relative/execave.toml", nil)
+	})
+}
+
 func TestPermission_Strictness(t *testing.T) {
 	assert.Greater(t, fsrules.PermissionNone, fsrules.PermissionReadOnly)
 	assert.Greater(t, fsrules.PermissionReadOnly, fsrules.PermissionReadWrite)

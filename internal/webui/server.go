@@ -1,8 +1,13 @@
-// Package webui provides a localhost web server for viewing access log entries in real-time.
+// Package webui provides a localhost web server for viewing access log entries in real-time
+// and editing the sandbox configuration.
 //
-// The Server displays access log entries via:
-// - Server-rendered HTML page with initial entries (GET /)
+// The Server displays access log entries and provides a config editor via:
+// - Server-rendered HTML page with initial entries and config (GET /)
 // - Server-Sent Events for real-time updates (GET /events)
+// - Run control endpoints (POST /api/start, POST /api/stop)
+// - Config persistence endpoints (POST /api/save, POST /api/revert)
+//
+// All requests require a ?token= query parameter matching the server's access token.
 package webui
 
 import (
@@ -14,12 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -40,54 +47,77 @@ const (
 	sseKeepaliveInterval = 30 * time.Second
 )
 
-// Server serves a localhost web UI for viewing access log entries and run status.
+// Server serves a localhost web UI for viewing access log entries and editing config.
 type Server struct {
 	runner     *runner.Runner
-	cfg        *config.Config
 	command    []string
-	port       string
 	addr       string // actual bound address, set by Start
 	sessionID  string
 	httpServer *http.Server
 	runCtx     context.Context //nolint:containedctx // stored from Start for use in HTTP handlers
 	homeDir    string          // user home directory for path shortening; empty disables tilde form
 	configDir  string          // directory of the config file for relative path shortening
+
+	configPath   string // absolute path to the config file
+	managedPaths []string
+	mu           sync.Mutex // guards savedContent and draftContent
+	savedContent string     // file content at startup or after last Save
+	draftContent string     // updated by Start (from request body) and Revert
+
+	accessToken string // random hex, required on every HTTP request as ?token=TOKEN
+
+	// OnConfigChange is called with the newly parsed config on every successful Start.
+	// It is called before runner.Start so net rule changes take effect before the run begins.
+	// May be nil.
+	OnConfigChange func(*config.Config)
 }
 
 // New creates a new Server that displays entries from the given runner.
-// The server binds to 127.0.0.1:port when Start() is called.
-// cfg and command are stored for run control endpoints (start/restart).
+// configPath must be an absolute path to the config file.
+// configContent is the raw TOML content (used to initialize saved and draft state).
 // homeDir and configDir are used to shorten filesystem target paths for display;
 // pass empty strings to disable shortening.
-func New(rnr *runner.Runner, cfg *config.Config, command []string, port, homeDir, configDir string) *Server {
-	var buf [8]byte
-	if _, err := rand.Read(buf[:]); err != nil {
+func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, configContent string, managedPaths []string) *Server {
+	if !filepath.IsAbs(configPath) {
+		panic(fmt.Sprintf("New: configPath must be absolute, got %q", configPath))
+	}
+	var sessionBuf [8]byte
+	if _, err := rand.Read(sessionBuf[:]); err != nil {
 		panic(fmt.Sprintf("generate session ID: %v", err))
 	}
+	var tokenBuf [16]byte
+	if _, err := rand.Read(tokenBuf[:]); err != nil {
+		panic(fmt.Sprintf("generate access token: %v", err))
+	}
 	return &Server{
-		runner:     rnr,
-		cfg:        cfg,
-		command:    command,
-		port:       port,
-		addr:       "",
-		sessionID:  hex.EncodeToString(buf[:]),
-		httpServer: nil,
-		runCtx:     nil,
-		homeDir:    homeDir,
-		configDir:  configDir,
+		runner:         rnr,
+		command:        command,
+		addr:           "",
+		sessionID:      hex.EncodeToString(sessionBuf[:]),
+		httpServer:     nil,
+		runCtx:         nil,
+		homeDir:        homeDir,
+		configDir:      configDir,
+		configPath:     configPath,
+		managedPaths:   managedPaths,
+		mu:             sync.Mutex{},
+		savedContent:   configContent,
+		draftContent:   configContent,
+		accessToken:    hex.EncodeToString(tokenBuf[:]),
+		OnConfigChange: nil,
 	}
 }
 
-// Start starts the HTTP server on 127.0.0.1:port.
-// Returns an error if the port is already in use or invalid.
+// Start starts the HTTP server on 127.0.0.1:0 (OS-assigned port).
+// Returns an error if the port cannot be bound.
 // Start is non-blocking; the server runs in a background goroutine.
 func (s *Server) Start(ctx context.Context) error {
 	// Store context for runner operations
 	s.runCtx = ctx
 	lc := net.ListenConfig{}
-	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:"+s.port)
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return fmt.Errorf("listen on port %s: %w", s.port, err)
+		return fmt.Errorf("listen on port 0: %w", err)
 	}
 	s.addr = listener.Addr().String()
 
@@ -96,9 +126,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/events", s.handleEvents)
 	mux.HandleFunc("/api/start", s.handleStart)
 	mux.HandleFunc("/api/stop", s.handleStop)
+	mux.HandleFunc("/api/save", s.handleSave)
+	mux.HandleFunc("/api/revert", s.handleRevert)
 
 	s.httpServer = &http.Server{
-		Handler:           mux,
+		Handler:           s.tokenMiddleware(mux),
 		ReadHeaderTimeout: httpReadHeaderTimeout,
 	}
 
@@ -119,9 +151,42 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx) //nolint:wrapcheck
 }
 
-// URL returns the server's full URL. Must be called after Start.
+// Addr returns the server's bound address (host:port). Must be called after Start.
+func (s *Server) Addr() string {
+	return s.addr
+}
+
+// URL returns the server's URL including the access token for browser use.
+// Must be called after Start.
 func (s *Server) URL() string {
-	return "http://" + s.addr
+	return "http://" + s.addr + "?token=" + s.accessToken
+}
+
+// EndpointURL returns the URL for the given path with the access token appended.
+// path should start with '/'. If path already contains '?', token is appended with '&'.
+// Must be called after Start.
+func (s *Server) EndpointURL(path string) string {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return "http://" + s.addr + path + sep + "token=" + s.accessToken
+}
+
+// Token returns the server's access token. Required on all requests as ?token=TOKEN.
+func (s *Server) Token() string {
+	return s.accessToken
+}
+
+// tokenMiddleware returns a handler that rejects requests with a missing or incorrect token.
+func (s *Server) tokenMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != s.accessToken {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // parseLastEventID parses a "sessionID:index" formatted SSE event ID.
@@ -159,14 +224,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	// Extract raw rules from config
-	rules := make([]string, 0, len(s.cfg.FSRules)+len(s.cfg.NetRules))
-	for _, r := range s.cfg.FSRules {
-		rules = append(rules, r.RawRule)
-	}
-	for _, r := range s.cfg.NetRules {
-		rules = append(rules, r.RawRule)
-	}
+	s.mu.Lock()
+	draftContent := s.draftContent
+	s.mu.Unlock()
 
 	data := struct {
 		Entries    []accesslog.Entry
@@ -174,19 +234,19 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 		Status     runner.RunStatus
 		SessionID  string
 		Command    string
-		Rules      []string
+		Config     string
 	}{
 		Entries:    shortened,
 		EntryCount: len(shortened),
 		Status:     status,
 		SessionID:  s.sessionID,
 		Command:    status.Command,
-		Rules:      rules,
+		Config:     draftContent,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := indexTemplate.Execute(w, data); err != nil {
-		http.Error(w, "Failed to render template", http.StatusInternalServerError)
+		http.Error(w, "render template", http.StatusInternalServerError)
 	}
 }
 
@@ -279,10 +339,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		defer stream.logger.Unsubscribe(stream.entryCh)
 	}
 
-	// Send session event, initial status, rules, and initial entries from startIndex
+	// Send session event, initial status, config, and initial entries from startIndex
 	s.sendSessionEvent(w, startIndex)
 	s.sendStatusEvent(w, s.runner.Status())
-	s.sendRulesEvent(w)
+	s.sendConfigEvent(w)
 	if stream.logger != nil {
 		stream.entries = stream.logger.Entries()
 		for i := startIndex; i < len(stream.entries); i++ {
@@ -371,37 +431,64 @@ func (s *Server) sendStatusEvent(w http.ResponseWriter, status runner.RunStatus)
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-// sendRulesEvent sends the current config rules as an SSE event.
+// sendConfigEvent sends the current draft and saved config content as an SSE event.
 // Write errors are ignored: they only occur on client disconnect, which ctx.Done handles.
-func (s *Server) sendRulesEvent(w http.ResponseWriter) {
-	rules := make([]string, 0, len(s.cfg.FSRules)+len(s.cfg.NetRules))
-	for _, r := range s.cfg.FSRules {
-		rules = append(rules, r.RawRule)
-	}
-	for _, r := range s.cfg.NetRules {
-		rules = append(rules, r.RawRule)
+func (s *Server) sendConfigEvent(w http.ResponseWriter) {
+	s.mu.Lock()
+	draft := s.draftContent
+	saved := s.savedContent
+	s.mu.Unlock()
+
+	payload := struct {
+		Draft string `json:"draft"`
+		Saved string `json:"saved"`
+	}{
+		Draft: draft,
+		Saved: saved,
 	}
 
-	data, err := json.Marshal(rules)
+	data, err := json.Marshal(payload)
 	if err != nil {
-		panic(fmt.Sprintf("failed to marshal rules: %v", err))
+		panic(fmt.Sprintf("failed to marshal config event: %v", err))
 	}
-	_, _ = fmt.Fprintf(w, "event: rules\n")
+	_, _ = fmt.Fprintf(w, "event: config\n")
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
 // handleStart handles POST /api/start requests.
-// Starts (or restarts) the monitored sandbox run with the CLI-provided command.
+// Reads the request body as raw TOML, updates draftContent, parses the config,
+// and starts (or restarts) the monitored sandbox run.
+// Returns 400 if the config is invalid; 200 on success.
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Start the run (stops any active run first)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Update draft even if config is invalid — user sees what they last submitted on reconnect.
+	s.mu.Lock()
+	s.draftContent = string(body)
+	s.mu.Unlock()
+
+	cfg, err := config.ParseTOML(body, s.configDir, s.configPath, s.managedPaths)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if s.OnConfigChange != nil {
+		s.OnConfigChange(cfg)
+	}
+
 	// Use the server's context, not the request context (which gets canceled immediately)
-	if err := s.runner.Start(s.runCtx, s.cfg, s.command); err != nil { //nolint:contextcheck // intentionally use server ctx, not request ctx
-		http.Error(w, fmt.Sprintf("Failed to start run: %v", err), http.StatusInternalServerError)
+	if err := s.runner.Start(s.runCtx, cfg, s.command); err != nil { //nolint:contextcheck // intentionally use server ctx, not request ctx
+		http.Error(w, fmt.Sprintf("start run: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -422,4 +509,60 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("OK"))
+}
+
+// handleSave handles POST /api/save requests.
+// Validates the request body as TOML, writes it to configPath, and updates
+// savedContent and draftContent. Returns 400 if the config is invalid.
+func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("read body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	if _, err := config.ParseTOML(body, s.configDir, s.configPath, s.managedPaths); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	info, err := os.Stat(s.configPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("stat config: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(s.configPath, body, info.Mode().Perm()); err != nil {
+		http.Error(w, fmt.Sprintf("write config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	s.mu.Lock()
+	s.savedContent = string(body)
+	s.draftContent = string(body)
+	s.mu.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleRevert handles POST /api/revert requests.
+// Resets draftContent to savedContent and returns savedContent as text/plain.
+func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	s.draftContent = s.savedContent
+	content := s.savedContent
+	s.mu.Unlock()
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(content))
 }

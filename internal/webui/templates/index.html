@@ -108,6 +108,30 @@
             background-color: #faa9b4;
         }
 
+        #status button.save {
+            background-color: #0366d6;
+        }
+
+        #status button.save:hover:not(:disabled) {
+            background-color: #005cc5;
+        }
+
+        #status button.save:disabled {
+            background-color: #79b8ff;
+        }
+
+        #status button.revert {
+            background-color: #6a737d;
+        }
+
+        #status button.revert:hover:not(:disabled) {
+            background-color: #586069;
+        }
+
+        #status button.revert:disabled {
+            background-color: #b1bac4;
+        }
+
         .container {
             background-color: #fff;
             border: 1px solid #e1e4e8;
@@ -190,39 +214,45 @@
             gap: 20px;
         }
 
-        .rules-pane {
+        .config-pane {
             flex: 0 0 350px;
             background-color: #fff;
             border: 1px solid #e1e4e8;
             border-radius: 6px;
             padding: 16px;
-            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
             max-height: calc(100vh - 200px);
         }
 
-        .rules-pane h2 {
+        .config-pane h2 {
             font-size: 14px;
             font-weight: 600;
-            margin-bottom: 12px;
+            margin-bottom: 8px;
             color: #24292e;
         }
 
-        .rules-list {
-            list-style: none;
-        }
-
-        .rules-list li {
-            padding: 6px 8px;
-            margin-bottom: 4px;
-            border-radius: 3px;
+        #config-textarea {
+            flex: 1;
+            font-family: inherit;
             font-size: 12px;
-            color: #24292e;
-            background-color: #f6f8fa;
-            word-break: break-all;
+            border: 1px solid #e1e4e8;
+            border-radius: 3px;
+            padding: 8px;
+            resize: vertical;
+            min-height: 200px;
         }
 
-        .rules-list li:hover {
-            background-color: #eaecef;
+        #config-error {
+            display: none;
+            color: #d73a49;
+            font-size: 12px;
+            margin-top: 8px;
+            padding: 6px 8px;
+            background-color: #ffeef0;
+            border: 1px solid #ffa7b5;
+            border-radius: 3px;
+            white-space: pre-wrap;
         }
 
         .log-pane {
@@ -230,10 +260,6 @@
             min-width: 0;
             overflow-y: auto;
             max-height: calc(100vh - 200px);
-        }
-
-        .highlight {
-            background-color: #fff8c5 !important;
         }
     </style>
 </head>
@@ -250,6 +276,8 @@
                 <button id="start-btn">Start</button>
             {{end}}
             <button id="stop-btn" class="stop" {{if not .Status.Running}}disabled{{end}}>Stop</button>
+            <button id="save-btn" class="save" disabled>Save</button>
+            <button id="revert-btn" class="revert" disabled>Revert</button>
         </div>
         <span id="command" class="command">{{.Command}}</span>
         {{if .Status.Running}}
@@ -264,13 +292,10 @@
     </div>
 
     <div class="content">
-        <div class="rules-pane">
-            <h2>Rules</h2>
-            <ul class="rules-list">
-                {{range .Rules}}
-                <li data-rule="{{.}}">{{.}}</li>
-                {{end}}
-            </ul>
+        <div class="config-pane">
+            <h2>Config</h2>
+            <textarea id="config-textarea">{{.Config}}</textarea>
+            <div id="config-error"></div>
         </div>
 
         <div class="log-pane">
@@ -305,6 +330,13 @@
 
     <script>
         (function() {
+            // Extract token from URL for authenticated requests
+            const params = new URLSearchParams(window.location.search);
+            const token = params.get('token') || '';
+            function tokenURL(path) {
+                return path + (path.indexOf('?') >= 0 ? '&' : '?') + 'token=' + token;
+            }
+
             const table = document.getElementById('entries-table');
             const entryCount = parseInt(table.getAttribute('data-entry-count'), 10);
             let currentSessionID = table.getAttribute('data-session-id');
@@ -312,9 +344,23 @@
             const statusDiv = document.getElementById('status');
             const startBtn = document.getElementById('start-btn');
             const stopBtn = document.getElementById('stop-btn');
+            let saveBtn = document.getElementById('save-btn');
+            let revertBtn = document.getElementById('revert-btn');
+            const configTextarea = document.getElementById('config-textarea');
+            const configError = document.getElementById('config-error');
 
-            // Connect to SSE endpoint
-            const eventSource = new EventSource('/events?from=' + entryCount);
+            let savedConfig = configTextarea.value;
+
+            function updateModifiedIndicator() {
+                const modified = configTextarea.value !== savedConfig;
+                saveBtn.disabled = !modified;
+                revertBtn.disabled = !modified;
+            }
+
+            configTextarea.addEventListener('input', updateModifiedIndicator);
+
+            // Connect to SSE endpoint with token
+            const eventSource = new EventSource(tokenURL('/events?from=' + entryCount));
 
             eventSource.addEventListener('session', function(e) {
                 const serverSessionID = e.data;
@@ -325,6 +371,13 @@
                     }
                     currentSessionID = serverSessionID;
                 }
+            });
+
+            eventSource.addEventListener('config', function(e) {
+                const data = JSON.parse(e.data);
+                savedConfig = data.saved;
+                configTextarea.value = data.draft;
+                updateModifiedIndicator();
             });
 
             eventSource.addEventListener('entry', function(e) {
@@ -352,33 +405,11 @@
                 const resultCell = row.insertCell();
                 resultCell.className = 'result ' + getResultClass(entry.result);
                 resultCell.textContent = entry.result;
-
-                attachEntryHoverListener(row);
             });
 
             eventSource.addEventListener('status', function(e) {
                 const status = JSON.parse(e.data);
                 updateStatus(status);
-            });
-
-            eventSource.addEventListener('rules', function(e) {
-                const rules = JSON.parse(e.data);
-                const rulesList = document.querySelector('.rules-list');
-
-                // Clear existing rules
-                while (rulesList.firstChild) {
-                    rulesList.removeChild(rulesList.firstChild);
-                }
-
-                // Add new rules
-                rules.forEach(function(rule) {
-                    const li = document.createElement('li');
-                    li.dataset.rule = rule;
-                    li.textContent = rule;
-                    rulesList.appendChild(li);
-
-                    attachRuleHoverListener(li);
-                });
             });
 
             eventSource.onerror = function() {
@@ -391,12 +422,27 @@
                 return 'unknown';
             }
 
-            // Button click handler functions
+            function showConfigError(msg) {
+                configError.textContent = msg;
+                configError.style.display = 'block';
+            }
+
+            function clearConfigError() {
+                configError.textContent = '';
+                configError.style.display = 'none';
+            }
+
+            // Button click handlers
             function handleStartClick() {
-                fetch('/api/start', { method: 'POST' })
+                const body = configTextarea.value;
+                fetch(tokenURL('/api/start'), { method: 'POST', body: body })
                     .then(function(response) {
-                        if (!response.ok) {
-                            console.error('Start request failed:', response.status);
+                        if (response.ok) {
+                            clearConfigError();
+                        } else {
+                            return response.text().then(function(msg) {
+                                showConfigError(msg);
+                            });
                         }
                     })
                     .catch(function(error) {
@@ -405,7 +451,7 @@
             }
 
             function handleStopClick() {
-                fetch('/api/stop', { method: 'POST' })
+                fetch(tokenURL('/api/stop'), { method: 'POST' })
                     .then(function(response) {
                         if (!response.ok) {
                             console.error('Stop request failed:', response.status);
@@ -416,9 +462,46 @@
                     });
             }
 
-            // Attach initial event listeners
+            function handleSaveClick() {
+                const body = configTextarea.value;
+                fetch(tokenURL('/api/save'), { method: 'POST', body: body })
+                    .then(function(response) {
+                        if (response.ok) {
+                            clearConfigError();
+                            savedConfig = configTextarea.value;
+                            updateModifiedIndicator();
+                        } else {
+                            return response.text().then(function(msg) {
+                                showConfigError(msg);
+                            });
+                        }
+                    })
+                    .catch(function(error) {
+                        console.error('Save request error:', error);
+                    });
+            }
+
+            function handleRevertClick() {
+                fetch(tokenURL('/api/revert'), { method: 'POST' })
+                    .then(function(response) {
+                        if (response.ok) {
+                            return response.text().then(function(content) {
+                                configTextarea.value = content;
+                                savedConfig = content;
+                                updateModifiedIndicator();
+                                clearConfigError();
+                            });
+                        }
+                    })
+                    .catch(function(error) {
+                        console.error('Revert request error:', error);
+                    });
+            }
+
             startBtn.addEventListener('click', handleStartClick);
             stopBtn.addEventListener('click', handleStopClick);
+            saveBtn.addEventListener('click', handleSaveClick);
+            revertBtn.addEventListener('click', handleRevertClick);
 
             function updateStatus(status) {
                 // Clear existing content
@@ -444,7 +527,27 @@
                 newStopBtn.addEventListener('click', handleStopClick);
                 controlsDiv.appendChild(newStopBtn);
 
+                const newSaveBtn = document.createElement('button');
+                newSaveBtn.id = 'save-btn';
+                newSaveBtn.className = 'save';
+                newSaveBtn.textContent = 'Save';
+                newSaveBtn.disabled = saveBtn.disabled;
+                newSaveBtn.addEventListener('click', handleSaveClick);
+                controlsDiv.appendChild(newSaveBtn);
+
+                const newRevertBtn = document.createElement('button');
+                newRevertBtn.id = 'revert-btn';
+                newRevertBtn.className = 'revert';
+                newRevertBtn.textContent = 'Revert';
+                newRevertBtn.disabled = revertBtn.disabled;
+                newRevertBtn.addEventListener('click', handleRevertClick);
+                controlsDiv.appendChild(newRevertBtn);
+
                 statusDiv.appendChild(controlsDiv);
+
+                // Refresh references so updateModifiedIndicator targets the new elements.
+                saveBtn = newSaveBtn;
+                revertBtn = newRevertBtn;
 
                 // Build command display
                 const cmd = document.createElement('span');
@@ -473,56 +576,6 @@
                     }
                 }
             }
-
-            // Attach hover listener to a single rule element
-            function attachRuleHoverListener(ruleElement) {
-                ruleElement.addEventListener('mouseenter', function() {
-                    const rule = ruleElement.getAttribute('data-rule');
-                    const matchingRows = document.querySelectorAll('tbody tr[data-rule="' + CSS.escape(rule) + '"]');
-                    matchingRows.forEach(function(row) {
-                        row.classList.add('highlight');
-                    });
-                });
-
-                ruleElement.addEventListener('mouseleave', function() {
-                    const highlighted = document.querySelectorAll('.highlight');
-                    highlighted.forEach(function(el) {
-                        el.classList.remove('highlight');
-                    });
-                });
-            }
-
-            // Attach hover listeners to initial rules
-            const ruleElements = document.querySelectorAll('.rules-list li');
-            ruleElements.forEach(function(ruleElement) {
-                attachRuleHoverListener(ruleElement);
-            });
-
-            // Attach hover listener to a single entry row
-            function attachEntryHoverListener(row) {
-                row.addEventListener('mouseenter', function() {
-                    const rule = row.getAttribute('data-rule');
-                    if (rule) {
-                        const matchingRule = document.querySelector('.rules-list li[data-rule="' + CSS.escape(rule) + '"]');
-                        if (matchingRule) {
-                            matchingRule.classList.add('highlight');
-                        }
-                    }
-                });
-
-                row.addEventListener('mouseleave', function() {
-                    const highlighted = document.querySelectorAll('.highlight');
-                    highlighted.forEach(function(el) {
-                        el.classList.remove('highlight');
-                    });
-                });
-            }
-
-            // Attach listeners to initial rows
-            const initialRows = tbody.querySelectorAll('tr[data-rule]');
-            initialRows.forEach(function(row) {
-                attachEntryHoverListener(row);
-            });
         })();
     </script>
 </body>

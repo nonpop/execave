@@ -33,7 +33,8 @@ func TestE2E_IteratingConfig_StartRunFromWebUI(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"ls", dataDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -69,7 +70,7 @@ func TestE2E_IteratingConfig_StartRunFromWebUI(t *testing.T) {
 	assert.Contains(t, webUI, "Exited")
 
 	// POST /api/start to start a new run
-	resp, err := http.Post(monitorURL+"/api/start", "text/plain", nil)
+	resp, err := http.Post(monitorEndpoint(monitorURL, "/api/start"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
@@ -104,7 +105,8 @@ func TestE2E_IteratingConfig_StopRunningProcessFromWebUI(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"sh", "-c", "sleep 30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -140,7 +142,7 @@ func TestE2E_IteratingConfig_StopRunningProcessFromWebUI(t *testing.T) {
 	assert.Contains(t, webUI, "Running")
 
 	// POST /api/stop to stop the process
-	resp, err := http.Post(monitorURL+"/api/stop", "text/plain", nil)
+	resp, err := http.Post(monitorEndpoint(monitorURL, "/api/stop"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
@@ -184,7 +186,8 @@ func TestE2E_IteratingConfig_RestartReplacesActiveRun(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"sh", "-c", "cat "+file1+" && sleep 30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -221,7 +224,7 @@ func TestE2E_IteratingConfig_RestartReplacesActiveRun(t *testing.T) {
 	assert.Contains(t, webUI, file1)
 
 	// POST /api/start to restart (stops active run, starts new one)
-	resp, err := http.Post(monitorURL+"/api/start", "text/plain", nil)
+	resp, err := http.Post(monitorEndpoint(monitorURL, "/api/start"), "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // best-effort close in test
 
@@ -246,9 +249,9 @@ func TestE2E_IteratingConfig_RestartReplacesActiveRun(t *testing.T) {
 	_ = cmd.Wait()
 }
 
-// TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog tests that the web UI displays
-// config rules in a rules pane alongside the access log table.
-func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
+// TestE2E_IteratingConfig_ViewConfigAlongsideAccessLog tests that the web UI displays
+// a config textarea alongside the access log table.
+func TestE2E_IteratingConfig_ViewConfigAlongsideAccessLog(t *testing.T) {
 	env := newMonitorTest(t)
 
 	dataDir := filepath.Join(env.TmpDir, "data")
@@ -263,7 +266,8 @@ func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", configPath,
-		"--monitor=0",
+		"--monitor",
+		"--no-open",
 		"--",
 		"ls", dataDir)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -294,13 +298,13 @@ func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
 	// Wait for the run to complete
 	time.Sleep(500 * time.Millisecond)
 
-	// Fetch web UI and verify both rules pane and access log are present
+	// Fetch web UI and verify both config pane and access log are present
 	webUI := fetchWebUI(t, monitorURL)
 
-	// Verify rules pane is present
-	assert.Contains(t, webUI, "Rules")
+	// Verify config pane is present
+	assert.Contains(t, webUI, "Config")
 
-	// Verify both rules are displayed
+	// Verify config content is present (rules appear in the textarea)
 	assert.Contains(t, webUI, "fs:ro:"+dataDir)
 	assert.Contains(t, webUI, "fs:rw:"+tmpDir)
 
@@ -308,7 +312,6 @@ func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
 	assert.Contains(t, webUI, "Operation")
 	assert.Contains(t, webUI, "Target")
 	assert.Contains(t, webUI, "Result")
-	assert.Contains(t, webUI, "Rule")
 
 	// Verify at least one access log entry is present (from ls command)
 	assert.Contains(t, webUI, dataDir)
@@ -318,27 +321,26 @@ func TestE2E_IteratingConfig_ViewRulesAlongsideAccessLog(t *testing.T) {
 	_ = cmd.Wait()
 }
 
-// TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig tests that
-// after execave restarts with a new config, a reconnecting SSE client receives a
-// rules event containing the updated rules.
+// TestE2E_IteratingConfig_ConfigEventReflectsCurrentConfig tests that a connecting SSE
+// client receives a config event containing the current config content.
 //
-// The visual rules pane update in the browser requires JavaScript and is not tested here.
-func TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig(t *testing.T) {
+// The visual config textarea update in the browser requires JavaScript and is not tested here.
+func TestE2E_IteratingConfig_ConfigEventReflectsCurrentConfig(t *testing.T) {
 	env := newMonitorTest(t)
 
 	dataDir := filepath.Join(env.TmpDir, "data")
 	createFile(t, filepath.Join(dataDir, "file.txt"), "test data")
 
-	// New config with a distinctive net rule (simulating what was added after restart)
+	// Config with a distinctive net rule
 	newNetRule := "net:http:127.0.0.1:9999"
 	rules := append(systemPaths(), "fs:ro:"+dataDir, newNetRule)
 	configPath := writeConfig(t, rules)
 
 	monitorURL := startMonitoredExecave(t, configPath, "sleep", "60")
 
-	// Simulate browser reconnecting after execave restart: use a cross-session
-	// Last-Event-ID so the server replays from index 0 and emits fresh rules.
-	req, err := http.NewRequest(http.MethodGet, monitorURL+"/events", nil)
+	// Simulate browser reconnecting: use a cross-session Last-Event-ID so the server
+	// replays from index 0 and emits fresh events.
+	req, err := http.NewRequest(http.MethodGet, monitorEndpoint(monitorURL, "/events"), nil)
 	require.NoError(t, err)
 	req.Header.Set("Last-Event-ID", "old-session:0")
 
@@ -346,23 +348,23 @@ func TestE2E_IteratingConfig_RulesUpdateAfterRestartingExecaveWithNewConfig(t *t
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// Read initial events: session + status + rules
+	// Read initial events: session + status + config
 	events := readSSEEvents(resp, 3)
 	require.GreaterOrEqual(t, len(events), 3)
 
-	// Find the rules event
-	var rulesData string
+	// Find the config event
+	var configData string
 	for _, ev := range events {
-		if ev.event == "rules" {
-			rulesData = ev.data
+		if ev.event == "config" {
+			configData = ev.data
 			break
 		}
 	}
-	require.NotEmpty(t, rulesData, "rules event not found in SSE stream")
+	require.NotEmpty(t, configData, "config event not found in SSE stream")
 
-	// New config's rules are delivered to the reconnecting client
-	assert.Contains(t, rulesData, `"fs:ro:`+dataDir+`"`)
-	assert.Contains(t, rulesData, `"`+newNetRule+`"`)
+	// Config content is delivered to the connecting client
+	assert.Contains(t, configData, "fs:ro:"+dataDir)
+	assert.Contains(t, configData, newNetRule)
 }
 
 // TestE2E_IteratingConfig_HoverARuleToSeeMatchingLogEntries is a placeholder.

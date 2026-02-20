@@ -54,13 +54,13 @@ See `execave.toml.example` for a comprehensive config that supports most standar
 
 ### Building your config with --monitor
 
-You're not expected to know every path a command needs upfront. Use `--monitor=PORT` to trace filesystem and network access in real-time via a web UI:
+You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access in real-time via a web UI:
 
 ```bash
-execave --monitor=9876 -- your-command
+execave --monitor -- your-command
 ```
 
-Open browser at http://127.0.0.1:9876. It displays access log entries as they happen:
+The browser opens automatically. It displays access log entries as they happen:
 
 | Operation | Target | Result | Rule |
 |-----------|--------|--------|------|
@@ -72,7 +72,11 @@ Open browser at http://127.0.0.1:9876. It displays access log entries as they ha
 
 **Real-time updates:** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
 
-**Workflow:** Start with `execave.toml.example`, run with `--monitor=<port>`, check for DENY entries in the web UI (filesystem paths are shown in shortened form relative to the config directory or home), grant only what's necessary, repeat.
+**Config editor:** The web UI includes an editable TOML textarea. Edit the config and click Start to restart the sandbox with the new rules. Click Save to write the config to disk, or Revert to reset to the last saved version.
+
+**Authentication:** The monitor URL includes a random access token (`?token=...`). Only requests with the correct token are served.
+
+**Workflow:** Start with `execave.toml.example`, run with `--monitor`, check for DENY entries in the web UI (filesystem paths are shown in shortened form relative to the config directory or home), edit the config in-browser, grant only what's necessary, repeat. Use `--no-open` to suppress the automatic browser launch.
 
 ## Requirements
 

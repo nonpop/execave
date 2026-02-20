@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -133,6 +134,29 @@ func TestIntegration_ParseRules_NonAbsoluteConfigPathPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		_, _ = config.ParseRules([]string{}, "/some/dir", "relative/execave.toml", nil)
 	})
+}
+
+// --- Requirement: ParseTOML ---
+
+func TestIntegration_ParseTOML_ProducesIdenticalConfigToLoad(t *testing.T) {
+	content := `rules = ["fs:ro:/usr/bin", "net:https:api.example.com:443"]`
+	managedPaths := []string{"/proc", "/dev"}
+
+	configPath := writeTestConfig(t, content)
+	loadedCfg, err := config.Load(configPath, managedPaths)
+	require.NoError(t, err)
+
+	rawContent, err := os.ReadFile(configPath) // #nosec G304 -- configPath is a known temp path from writeTestConfig
+	require.NoError(t, err)
+	parsedCfg, err := config.ParseTOML(rawContent, filepath.Dir(configPath), configPath, managedPaths)
+	require.NoError(t, err)
+
+	require.Len(t, parsedCfg.FSRules, len(loadedCfg.FSRules))
+	require.Len(t, parsedCfg.NetRules, len(loadedCfg.NetRules))
+	assert.Equal(t, loadedCfg.FSRules[0].Path, parsedCfg.FSRules[0].Path)
+	assert.Equal(t, loadedCfg.FSRules[0].Permission, parsedCfg.FSRules[0].Permission)
+	assert.Equal(t, loadedCfg.FSRules[0].RawRule, parsedCfg.FSRules[0].RawRule)
+	assert.Equal(t, loadedCfg.ManagedPaths, parsedCfg.ManagedPaths)
 }
 
 // --- Requirement: Load delegates to ParseRules ---
