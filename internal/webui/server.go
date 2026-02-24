@@ -32,6 +32,7 @@ import (
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/logfilter"
 	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/runner"
 )
@@ -49,6 +50,14 @@ const (
 	sseKeepaliveInterval = 30 * time.Second
 )
 
+// FilterDefaults configures the initial state of the access log filter checkboxes.
+type FilterDefaults struct {
+	// ShowAllowed unchecks the "Denied only" checkbox when true.
+	ShowAllowed bool
+	// ShowNolog unchecks the "Apply nolog rules" checkbox when true.
+	ShowNolog bool
+}
+
 // Server serves a localhost web UI for viewing access log entries and editing config.
 type Server struct {
 	runner     *runner.Runner
@@ -59,11 +68,12 @@ type Server struct {
 	homeDir    string          // user home directory for path shortening; empty disables tilde form
 	configDir  string          // directory of the config file for relative path shortening
 
-	configPath   string // absolute path to the config file
-	managedPaths []string
-	mu           sync.Mutex // guards savedContent and draftContent
-	savedContent string     // file content at startup or after last Save
-	draftContent string     // updated by Start (from request body) and Revert
+	configPath     string // absolute path to the config file
+	managedPaths   []string
+	filterDefaults FilterDefaults
+	mu             sync.Mutex // guards savedContent and draftContent
+	savedContent   string     // file content at startup or after last Save
+	draftContent   string     // updated by Start (from request body) and Revert
 
 	accessToken string // random hex, required on every HTTP request as ?token=TOKEN
 
@@ -84,7 +94,8 @@ type Server struct {
 // configContent is the raw TOML content (used to initialize saved and draft state).
 // homeDir and configDir are used to shorten filesystem target paths for display;
 // pass empty strings to disable shortening.
-func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, configContent string, managedPaths []string) *Server {
+// defaults controls the initial state of the filter checkboxes.
+func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, configContent string, managedPaths []string, defaults FilterDefaults) *Server {
 	if !filepath.IsAbs(configPath) {
 		panic(fmt.Sprintf("New: configPath must be absolute, got %q", configPath))
 	}
@@ -102,6 +113,7 @@ func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, c
 		configDir:      configDir,
 		configPath:     configPath,
 		managedPaths:   managedPaths,
+		filterDefaults: defaults,
 		mu:             sync.Mutex{},
 		savedContent:   configContent,
 		draftContent:   configContent,
@@ -198,28 +210,7 @@ func (s *Server) isNolog(entry accesslog.Entry) bool {
 	netResolver := s.netLogResolver
 	s.mu.Unlock()
 
-	switch entry.Operation {
-	case accesslog.OperationRead, accesslog.OperationWrite:
-		if fsResolver == nil {
-			return false
-		}
-		return !fsResolver.Visible(entry.Target)
-	case accesslog.OperationHTTP:
-		if netResolver == nil {
-			return false
-		}
-		host, portStr, err := net.SplitHostPort(entry.Target)
-		if err != nil {
-			return false
-		}
-		portNum, err := strconv.ParseUint(portStr, 10, 16)
-		if err != nil {
-			return false
-		}
-		return !netResolver.Visible(host, uint16(portNum))
-	default:
-		panic(fmt.Sprintf("isNolog: unexpected operation type %q", entry.Operation))
-	}
+	return logfilter.IsNolog(entry, fsResolver, netResolver)
 }
 
 // tokenMiddleware returns a handler that rejects requests with a missing or incorrect token.
@@ -253,7 +244,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	for i, e := range entries {
 		nolog := s.isNolog(e)
 		if (e.Operation == accesslog.OperationRead || e.Operation == accesslog.OperationWrite) && filepath.IsAbs(e.Target) {
-			e.Target = shortenPath(e.Target, s.homeDir, s.configDir)
+			e.Target = logfilter.ShortenPath(e.Target, s.homeDir, s.configDir)
 		}
 		templateEntries[i] = templateEntry{Entry: e, Nolog: nolog}
 	}
@@ -263,17 +254,21 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 
 	data := struct {
-		Entries    []templateEntry
-		EntryCount int
-		Status     runner.RunStatus
-		Command    string
-		Config     string
+		Entries           []templateEntry
+		EntryCount        int
+		Status            runner.RunStatus
+		Command           string
+		Config            string
+		DeniedOnlyChecked bool
+		ApplyNologChecked bool
 	}{
-		Entries:    templateEntries,
-		EntryCount: len(templateEntries),
-		Status:     status,
-		Command:    status.Command,
-		Config:     draftContent,
+		Entries:           templateEntries,
+		EntryCount:        len(templateEntries),
+		Status:            status,
+		Command:           status.Command,
+		Config:            draftContent,
+		DeniedOnlyChecked: !s.filterDefaults.ShowAllowed,
+		ApplyNologChecked: !s.filterDefaults.ShowNolog,
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -414,7 +409,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sendEntryEvent(w http.ResponseWriter, entry accesslog.Entry, index int) {
 	target := entry.Target
 	if (entry.Operation == accesslog.OperationRead || entry.Operation == accesslog.OperationWrite) && filepath.IsAbs(target) {
-		target = shortenPath(target, s.homeDir, s.configDir)
+		target = logfilter.ShortenPath(target, s.homeDir, s.configDir)
 	}
 	entryDto := struct {
 		Operation accesslog.OperationType `json:"operation"`

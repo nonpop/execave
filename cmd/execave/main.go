@@ -2,9 +2,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,6 +20,7 @@ import (
 	"github.com/nonpop/execave/internal/proxy"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/textlog"
 	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/spf13/cobra"
@@ -37,8 +40,10 @@ func main() {
 
 func newRootCommand() *cobra.Command {
 	var configPath string
-	var monitor bool
+	var monitor string
 	var noOpen bool
+	var showAllowed bool
+	var showNolog bool
 
 	cmd := &cobra.Command{
 		Use:   "execave [flags] [--] <command>",
@@ -47,7 +52,8 @@ func newRootCommand() *cobra.Command {
 
 Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		Example: `  execave python
-  execave --monitor -- bash -c 'ls /etc'`,
+  execave --monitor -- bash -c 'ls /etc'
+  execave --monitor=access.log -- bash -c 'ls /etc'`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			// Check if -- was used
 			argsLenAtDash := cmd.ArgsLenAtDash()
@@ -67,13 +73,16 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitor, noOpen)
+			return runCommand(c, args, configPath, monitor, noOpen, showAllowed, showNolog)
 		},
 	}
 
 	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
-	cmd.Flags().BoolVar(&monitor, "monitor", false, "Enable access monitoring with web UI (opens browser automatically)")
+	cmd.Flags().StringVar(&monitor, "monitor", "", "Enable access monitoring. Without a value starts the web UI (opens browser). With a path writes text log to that file. With - writes text log to stderr after process exits.")
+	cmd.Flags().Lookup("monitor").NoOptDefVal = "web"
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Do not open the browser when --monitor is enabled")
+	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only). Also sets the initial 'Denied only' checkbox state in web UI mode.")
+	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden). Also sets the initial 'Apply nolog rules' checkbox state in web UI mode.")
 
 	cmd.AddCommand(newNetworkTunnelCommand())
 
@@ -114,8 +123,8 @@ func newNetworkTunnelCommand() *cobra.Command {
 	}
 }
 
-func runCommand(cmd *cobra.Command, args []string, configPath string, monitor, noOpen bool) error {
-	exitCode, err := runSandboxed(cmd, args, configPath, monitor, noOpen)
+func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, noOpen, showAllowed, showNolog bool) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitor, noOpen, showAllowed, showNolog)
 	if err != nil {
 		return err
 	}
@@ -123,7 +132,7 @@ func runCommand(cmd *cobra.Command, args []string, configPath string, monitor, n
 	return nil
 }
 
-func runSandboxed(cmd *cobra.Command, args []string, configPath string, monitor, noOpen bool) (int, error) {
+func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, noOpen, showAllowed, showNolog bool) (int, error) {
 	command := extractCommand(cmd, args)
 
 	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
@@ -170,13 +179,14 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath string, monitor,
 
 	// When monitoring is enabled, the runner manages the logger lifecycle
 	// and updates the proxy via OnLoggerChange. Pass nil logger to the proxy.
-	logger := setupAccessLog(monitor)
+	monitorEnabled := monitor != ""
+	logger := setupAccessLog(monitorEnabled)
 	proxyLogger := logger
-	if monitor {
+	if monitorEnabled {
 		proxyLogger = nil
 	}
 
-	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitor)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitorEnabled)
 	if err != nil {
 		return 0, err
 	}
@@ -186,8 +196,8 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath string, monitor,
 
 	sb := sandbox.New(cfg, absConfigPath, netPath)
 
-	if monitor {
-		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, noOpen, sigCh)
+	if monitorEnabled {
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, noOpen, showAllowed, showNolog, sigCh)
 	}
 
 	exitCode, err := sb.Run(ctx, command)
@@ -285,9 +295,9 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 }
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring and web UI with run control.
-func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, noOpen bool, sigCh chan os.Signal) (int, error) {
-	// Create runner
+// access monitoring, dispatching to web UI or text log mode.
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, noOpen, showAllowed, showNolog bool, sigCh chan os.Signal) (int, error) {
+	// Shared setup
 	rnr := runner.New(cfg, absConfigPath, netPath)
 
 	// Wire logger lifecycle: when the runner creates a fresh logger on each Start,
@@ -302,20 +312,25 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 	}
 	configDir := filepath.Dir(absConfigPath)
 
+	fsRes := fsrules.NewLogResolver(cfg.FSLogRules)
+	netRes := netrules.NewLogResolver(cfg.NetLogRules)
+
+	if monitorMode == "web" {
+		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, homeDir, configDir, command, noOpen, showAllowed, showNolog, fsRes, netRes, sigCh)
+	}
+	return runMonitoredText(ctx, cfg, rnr, homeDir, configDir, command, monitorMode, showAllowed, showNolog, fsRes, netRes)
+}
+
+// runMonitoredWeb runs the command under strace monitoring with a web UI.
+func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, homeDir, configDir string, command []string, noOpen, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, sigCh chan os.Signal) (int, error) {
 	// Read raw config file content for the web UI editor
 	configContent, err := os.ReadFile(absConfigPath) // #nosec G304 -- absConfigPath is validated as absolute path
 	if err != nil {
 		return 0, fmt.Errorf("read config %s: %w", absConfigPath, err)
 	}
 
-	// Start web UI server
-	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs)
-
-	// Set initial log resolvers from the loaded config.
-	server.SetLogResolvers(
-		fsrules.NewLogResolver(cfg.FSLogRules),
-		netrules.NewLogResolver(cfg.NetLogRules),
-	)
+	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
+	server.SetLogResolvers(fsRes, netRes)
 
 	// Wire config changes to update the proxy's net rules resolver
 	server.OnConfigChange = func(newCfg *config.Config) {
@@ -334,7 +349,6 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 		_ = exec.CommandContext(ctx, "xdg-open", url).Start() // #nosec G204 -- url is constructed from server address and token
 	}
 
-	// Start initial run
 	if err := rnr.Start(ctx, cfg, command); err != nil {
 		return 0, fmt.Errorf("start initial run: %w", err)
 	}
@@ -351,10 +365,72 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 	}
 	rnr.Unsubscribe(statusCh)
 
-	// Get final status
 	status := rnr.Status()
 	if status.Error != "" {
 		return status.ExitCode, fmt.Errorf("run monitor+sandbox: %s", status.Error)
 	}
 	return status.ExitCode, nil
+}
+
+// runMonitoredText runs the command under strace monitoring with text log output.
+// monitorPath is the output file path or "-" to buffer to stderr after process exit.
+func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) (exitCode int, err error) {
+	var out io.Writer
+	var buf *bytes.Buffer
+
+	if monitorPath == "-" {
+		buf = new(bytes.Buffer)
+		out = buf
+	} else {
+		f, createErr := os.Create(monitorPath) // #nosec G304 -- monitorPath is user-provided output path for text log
+		if createErr != nil {
+			return 0, fmt.Errorf("create text log file %s: %w", monitorPath, createErr)
+		}
+		defer func() {
+			if closeErr := f.Close(); closeErr != nil && err == nil {
+				err = fmt.Errorf("close text log file %s: %w", monitorPath, closeErr)
+			}
+		}()
+		out = f
+	}
+
+	w := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes)
+
+	if err := rnr.Start(ctx, cfg, command); err != nil {
+		return 0, fmt.Errorf("start initial run: %w", err)
+	}
+
+	logger := rnr.Logger()
+
+	writerCtx, writerCancel := context.WithCancel(ctx)
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- w.Run(writerCtx, logger)
+	}()
+
+	// Wait for the process to exit
+	statusCh := rnr.Subscribe()
+	for rnr.Status().Running {
+		<-statusCh
+	}
+	rnr.Unsubscribe(statusCh)
+
+	// Trigger final drain in the writer
+	writerCancel()
+	if writeErr := <-writerErr; writeErr != nil && err == nil {
+		err = fmt.Errorf("write text log: %w", writeErr)
+	}
+
+	// Flush buffered output for stderr mode after process exits
+	if buf != nil {
+		if _, copyErr := io.Copy(os.Stderr, buf); copyErr != nil && err == nil {
+			err = fmt.Errorf("flush text log to stderr: %w", copyErr)
+		}
+	}
+
+	status := rnr.Status()
+	if status.Error != "" {
+		return status.ExitCode, fmt.Errorf("run text log+sandbox: %s", status.Error)
+	}
+	return status.ExitCode, err
 }

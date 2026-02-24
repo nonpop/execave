@@ -1,13 +1,16 @@
 schema: use-case-driven
 
 context: |
-  Security-critical Linux filesystem and network sandbox (bubblewrap + strace). Bugs enable sandbox escapes or unintended access.
-  Tech: Go, Linux namespaces. Domain: Filesystem isolation, network isolation, mount namespaces, rule-based access control. See docs/security-model.md.
-  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, runner, sandbox, monitor, proxy, tunnel, webui.
+  Security-critical Linux filesystem and network sandbox (bubblewrap + strace). See docs/security-model.md.
+  Tech: Go, Linux namespaces.
+  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, runner, sandbox, monitor, proxy, tunnel, logfilter, webui, textlog.
   Config: TOML format. Default filename: execave.toml. FS rules support tilde expansion (~/... → home dir) and relative paths (resolved against config dir).
   Network: Default-deny (no NIC). When net rules present or monitoring enabled: forward proxy on UDS + TCP-to-UDS tunnel bridge. Proxy enforces allowlist (deny-all with no net rules).
-  Monitoring: --monitor=PORT starts localhost web UI with real-time access log via SSE and run control (start/stop/restart). Runner manages monitored sandbox lifecycle, creates fresh access log per run. Server survives sandbox exit for log review. Filesystem paths in web UI shortened to relative (vs config dir) or tilde form.
-  Log visibility rules: fs:log/fs:nolog and net:log/net:nolog control display filtering in the web UI (display-only, no security impact). fs log rules use longest-prefix-match. net log rules use single-dimension target specificity (same as access rules). Default (no matching log rule) = show entry. Two independent UI toggles: "Denied only" (default on, hides OK entries) and "Apply nolog rules" (default on, applies log/nolog filtering). All entries are stored in the Logger regardless of log rules.
+  Monitoring: --monitor modes: (default=web) localhost web UI with SSE access log and run control (start/stop/restart), survives sandbox exit; =<path> writes text log in real-time; =- buffers to stderr on exit. Runner creates fresh access log per run. Paths shortened via logfilter.ShortenPath (relative to config dir or tilde form).
+  Filter flags: --show-allowed includes OK entries (default: denied-only). --show-nolog includes nolog-rule entries (default: hidden). Apply to web UI (initial checkbox state) and text log (filter at startup).
+  Log visibility rules: fs:log/fs:nolog and net:log/net:nolog control display filtering (display-only, no security impact). Default (no match) = show. All entries stored in Logger regardless of log rules.
+  LogFilter package (internal/logfilter): shared ShortenPath and IsNolog logic used by webui and textlog.
+  TextLog package (internal/textlog): Writer subscribes to accesslog.Logger, filters entries, writes one line per entry. Drains remaining entries on context cancellation.
 
 rules:
   proposal:

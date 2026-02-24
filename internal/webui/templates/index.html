@@ -301,11 +301,11 @@
         <div class="log-pane">
             <div style="margin-bottom: 8px; display: flex; gap: 16px; align-items: center;">
                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                    <input type="checkbox" id="denied-only-checkbox" checked>
+                    <input type="checkbox" id="denied-only-checkbox" {{if .DeniedOnlyChecked}}checked{{end}}>
                     Denied only
                 </label>
                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                    <input type="checkbox" id="apply-nolog-checkbox" checked>
+                    <input type="checkbox" id="apply-nolog-checkbox" {{if .ApplyNologChecked}}checked{{end}}>
                     Apply nolog rules
                 </label>
             </div>

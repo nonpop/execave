@@ -59,13 +59,15 @@ See `execave.toml.example` for a comprehensive config that supports most standar
 
 ### Building your config with --monitor
 
-You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access in real-time via a web UI:
+You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access. Three output modes are available:
 
 ```bash
-execave --monitor -- your-command
+execave --monitor -- your-command            # web UI (opens browser)
+execave --monitor=access.log -- your-command # text log to file (real-time, tailable)
+execave --monitor=- -- your-command          # text log to stderr (buffered until exit)
 ```
 
-The browser opens automatically. It displays access log entries as they happen:
+**Web UI mode** (`--monitor` without a value) opens the browser automatically and streams entries in real-time:
 
 | Operation | Target | Result | Rule |
 |-----------|--------|--------|------|
@@ -75,9 +77,17 @@ The browser opens automatically. It displays access log entries as they happen:
 | HTTP | api.example.com:443 | OK | net:http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
-**Real-time updates:** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
+**Text log mode** writes one entry per line to a file or stderr. The file mode (`--monitor=<path>`) is real-time and tailable. The stderr mode (`--monitor=-`) buffers until the process exits, then writes to stderr.
 
-**Filtering:** By default the web UI shows only denied entries ("Denied only" is checked). Uncheck it to see all entries. If nolog rules are configured, matching entries are also hidden; uncheck "Apply nolog rules" to reveal them.
+**Filter flags** control which entries appear in the output (apply to both web UI and text modes):
+- `--show-allowed`: include OK (allowed) entries. Default: denied only.
+- `--show-nolog`: include entries matching `nolog` rules. Default: hidden.
+
+In web UI mode these flags set the initial checkbox state.
+
+**Real-time updates (web UI):** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
+
+**Filtering (web UI):** By default the web UI shows only denied entries ("Denied only" is checked). Uncheck it to see all entries. If nolog rules are configured, matching entries are also hidden; uncheck "Apply nolog rules" to reveal them.
 
 **Config editor:** The web UI includes an editable TOML textarea. Edit the config and click Start to restart the sandbox with the new rules. Click Save to write the config to disk, or Revert to reset to the last saved version.
 

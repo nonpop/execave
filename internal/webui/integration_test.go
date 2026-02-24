@@ -625,7 +625,7 @@ func TestIntegration_ConfigSseEvent_ReflectsDraftSavedStateAfterSave(t *testing.
 	r := runner.NewTestRunner()
 	r.SetTestLogger(logger)
 	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil, webui.FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -702,7 +702,7 @@ func newConfigServer(t *testing.T, original string) (*webui.Server, string) {
 	r := runner.NewTestRunner()
 	r.SetTestLogger(logger)
 	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil, webui.FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv, tmpFile
@@ -761,7 +761,7 @@ func TestIntegration_Revert_ResetsDraftToSaved(t *testing.T) {
 	r := runner.NewTestRunner()
 	r.SetTestLogger(logger)
 	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
-	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, savedContent, nil)
+	srv := webui.New(r, []string{"true"}, "", "/tmp", tmpFile, savedContent, nil, webui.FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -913,12 +913,54 @@ func TestIntegration_ConfigPane_TextareaContainsRawTomlContent(t *testing.T) {
 	rnr.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
 	// Use TOML content without characters that html/template encodes in text context
 	configContent := "# config comment\nrules = []"
-	srv := webui.New(rnr, []string{"true"}, "", "/tmp", "/tmp/test-execave.toml", configContent, nil)
+	srv := webui.New(rnr, []string{"true"}, "", "/tmp", "/tmp/test-execave.toml", configContent, nil, webui.FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
 	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, configContent)
+}
+
+// --- Requirement: Filter defaults ---
+
+func TestIntegration_FilterDefaults_DefaultStateKeepsCheckboxesChecked(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `id="denied-only-checkbox" checked`)
+	assert.Contains(t, body, `id="apply-nolog-checkbox" checked`)
+}
+
+func TestIntegration_FilterDefaults_ShowAllowedTrueUnchecksdeniedOnlyCheckbox(t *testing.T) {
+	logger := accesslog.New(nil)
+	r := runner.NewTestRunner()
+	r.SetTestLogger(logger)
+	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil, webui.FilterDefaults{ShowAllowed: true})
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.NotContains(t, body, `id="denied-only-checkbox" checked`)
+	assert.Contains(t, body, `id="apply-nolog-checkbox" checked`)
+}
+
+func TestIntegration_FilterDefaults_ShowNologTrueUnchecksApplyNologCheckbox(t *testing.T) {
+	logger := accesslog.New(nil)
+	r := runner.NewTestRunner()
+	r.SetTestLogger(logger)
+	r.SetTestStatus(runner.RunStatus{Running: false, ExitCode: 0, Error: "", Command: "true"})
+	srv := webui.New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil, webui.FilterDefaults{ShowNolog: true})
+	require.NoError(t, srv.Start(t.Context()))
+	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `id="denied-only-checkbox" checked`)
+	assert.NotContains(t, body, `id="apply-nolog-checkbox" checked`)
 }
 
 // --- Requirement: Denied-only filter ---

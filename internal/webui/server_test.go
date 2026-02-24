@@ -29,53 +29,6 @@ func newTestRunnerWithLogger(logger *accesslog.Logger) *runner.Runner {
 	return rnr
 }
 
-// --- shortenPath unit tests ---
-
-func TestShortenPath_PathUnderConfigDirShortenedToRelative(t *testing.T) {
-	result := shortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
-	assert.Equal(t, "src/main.go", result)
-}
-
-func TestShortenPath_PathUnderHomeDirButOutsideConfigDirShortenedToTilde(t *testing.T) {
-	result := shortenPath("/home/user/.ssh/id_rsa", "/home/user", "/home/user/project")
-	assert.Equal(t, "~/.ssh/id_rsa", result)
-}
-
-func TestShortenPath_PathUnderBothConfigDirTakesPriority(t *testing.T) {
-	result := shortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
-	assert.Equal(t, "src/main.go", result)
-}
-
-func TestShortenPath_PathOutsideHomeDirShownAsAbsolute(t *testing.T) {
-	result := shortenPath("/usr/lib/libc.so", "/home/user", "/home/user/project")
-	assert.Equal(t, "/usr/lib/libc.so", result)
-}
-
-func TestShortenPath_PathEqualToConfigDirShortenedToDot(t *testing.T) {
-	result := shortenPath("/home/user/project", "/home/user", "/home/user/project")
-	assert.Equal(t, ".", result)
-}
-
-func TestShortenPath_EmptyHomeDirDisablesTildeShortening(t *testing.T) {
-	result := shortenPath("/home/user/.ssh/id_rsa", "", "/home/user/project")
-	assert.Equal(t, "/home/user/.ssh/id_rsa", result)
-}
-
-func TestShortenPath_PathEqualToHomeDir(t *testing.T) {
-	result := shortenPath("/home/user", "/home/user", "/home/user/project")
-	assert.Equal(t, "~", result)
-}
-
-func TestShortenPath_EmptyConfigDirUsesAbsoluteOrTilde(t *testing.T) {
-	result := shortenPath("/home/user/project/src/main.go", "/home/user", "")
-	assert.Equal(t, "~/project/src/main.go", result)
-}
-
-func TestShortenPath_BothEmptyReturnsAbsolute(t *testing.T) {
-	result := shortenPath("/home/user/project/src/main.go", "", "")
-	assert.Equal(t, "/home/user/project/src/main.go", result)
-}
-
 // --- Token authentication unit tests ---
 
 func TestToken_MissingToken_Returns403(t *testing.T) {
@@ -399,7 +352,7 @@ func TestHandleSave_ValidBody_WritesFile(t *testing.T) {
 
 	logger := accesslog.New(nil)
 	r := newTestRunnerWithLogger(logger)
-	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, `rules = []`, nil)
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, `rules = []`, nil, FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -421,7 +374,7 @@ func TestHandleSave_InvalidBody_Returns400AndFileUnchanged(t *testing.T) {
 
 	logger := accesslog.New(nil)
 	r := newTestRunnerWithLogger(logger)
-	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil)
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil, FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -487,7 +440,7 @@ func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, confi
 	t.Helper()
 	r := newTestRunnerWithLogger(logger)
 	command := []string{"true"}
-	srv := New(r, command, homeDir, configDir, "/tmp/test-execave.toml", "", nil)
+	srv := New(r, command, homeDir, configDir, "/tmp/test-execave.toml", "", nil, FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
@@ -498,7 +451,7 @@ func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, confi
 // Path shortening is disabled (empty homeDir and configDir).
 func StartServerWithRunner(t *testing.T, r *runner.Runner) *Server {
 	t.Helper()
-	srv := New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil)
+	srv := New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil, FilterDefaults{})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
