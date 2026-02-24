@@ -11,7 +11,7 @@ import (
 // --- Parse: valid rules ---
 
 func TestParse_ValidHTTPSDomain(t *testing.T) {
-	rule, err := Parse("https:api.example.com:443")
+	rule, err := ParseAccessRule("https:api.example.com:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, ProtocolHTTPS, rule.protocol)
@@ -23,7 +23,7 @@ func TestParse_ValidHTTPSDomain(t *testing.T) {
 }
 
 func TestParse_ValidHTTPIP(t *testing.T) {
-	rule, err := Parse("http:192.168.1.50:3000")
+	rule, err := ParseAccessRule("http:192.168.1.50:3000")
 	require.NoError(t, err)
 
 	assert.Equal(t, ProtocolHTTP, rule.protocol)
@@ -33,7 +33,7 @@ func TestParse_ValidHTTPIP(t *testing.T) {
 }
 
 func TestParse_ValidCIDR(t *testing.T) {
-	rule, err := Parse("http:10.0.0.0/24:8080")
+	rule, err := ParseAccessRule("http:10.0.0.0/24:8080")
 	require.NoError(t, err)
 
 	assert.Equal(t, ProtocolHTTP, rule.protocol)
@@ -43,7 +43,7 @@ func TestParse_ValidCIDR(t *testing.T) {
 }
 
 func TestParse_ValidIPv6(t *testing.T) {
-	rule, err := Parse("https:[::1]:443")
+	rule, err := ParseAccessRule("https:[::1]:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, ProtocolHTTPS, rule.protocol)
@@ -53,7 +53,7 @@ func TestParse_ValidIPv6(t *testing.T) {
 }
 
 func TestParse_ValidIPv6CIDR(t *testing.T) {
-	rule, err := Parse("https:[2001:db8::]/32:443")
+	rule, err := ParseAccessRule("https:[2001:db8::]/32:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, ProtocolHTTPS, rule.protocol)
@@ -63,21 +63,21 @@ func TestParse_ValidIPv6CIDR(t *testing.T) {
 }
 
 func TestParse_ValidWildcardPort(t *testing.T) {
-	rule, err := Parse("https:example.com:*")
+	rule, err := ParseAccessRule("https:example.com:*")
 	require.NoError(t, err)
 
 	assert.True(t, rule.port.isWildcard)
 }
 
 func TestParse_ValidNoneProtocol(t *testing.T) {
-	rule, err := Parse("none:evil.com:443")
+	rule, err := ParseAccessRule("none:evil.com:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, protocolNone, rule.protocol)
 }
 
 func TestParse_ValidWildcardDomain(t *testing.T) {
-	rule, err := Parse("https:*.example.com:443")
+	rule, err := ParseAccessRule("https:*.example.com:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetDomain, rule.target.kind)
@@ -86,7 +86,7 @@ func TestParse_ValidWildcardDomain(t *testing.T) {
 }
 
 func TestParse_ValidSingleLabelDomain(t *testing.T) {
-	rule, err := Parse("http:localhost:3000")
+	rule, err := ParseAccessRule("http:localhost:3000")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetDomain, rule.target.kind)
@@ -94,7 +94,7 @@ func TestParse_ValidSingleLabelDomain(t *testing.T) {
 }
 
 func TestParse_DomainNormalizedToLowercase(t *testing.T) {
-	rule, err := Parse("https:API.Example.COM:443")
+	rule, err := ParseAccessRule("https:API.Example.COM:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, "api.example.com", rule.target.domain)
@@ -103,46 +103,46 @@ func TestParse_DomainNormalizedToLowercase(t *testing.T) {
 // --- Parse: invalid rules ---
 
 func TestParse_InvalidAction(t *testing.T) {
-	_, err := Parse("allow:example.com:443")
+	_, err := ParseAccessRule("allow:example.com:443")
 	assert.ErrorContains(t, err, "invalid action")
 }
 
 func TestParse_MissingPortField(t *testing.T) {
-	_, err := Parse("https:example.com")
+	_, err := ParseAccessRule("https:example.com")
 	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestParse_PortZero(t *testing.T) {
-	_, err := Parse("https:example.com:0")
+	_, err := ParseAccessRule("https:example.com:0")
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 func TestParse_PortAboveRange(t *testing.T) {
-	_, err := Parse("https:example.com:99999")
+	_, err := ParseAccessRule("https:example.com:99999")
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 func TestParse_PortNegative(t *testing.T) {
-	_, err := Parse("https:example.com:-1")
+	_, err := ParseAccessRule("https:example.com:-1")
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 func TestParse_PortNonNumeric(t *testing.T) {
-	_, err := Parse("https:example.com:abc")
+	_, err := ParseAccessRule("https:example.com:abc")
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 // --- Parse: target parsing order ---
 
 func TestParse_BracketedIPv6ParsedAsIPv6(t *testing.T) {
-	rule, err := Parse("https:[::1]:443")
+	rule, err := ParseAccessRule("https:[::1]:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetIP, rule.target.kind)
 }
 
 func TestParse_CIDRParsedBeforeIP(t *testing.T) {
-	rule, err := Parse("http:10.0.0.0/24:8080")
+	rule, err := ParseAccessRule("http:10.0.0.0/24:8080")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetIP, rule.target.kind)
@@ -150,7 +150,7 @@ func TestParse_CIDRParsedBeforeIP(t *testing.T) {
 }
 
 func TestParse_BareIPParsedAsExactIP(t *testing.T) {
-	rule, err := Parse("http:192.168.1.50:3000")
+	rule, err := ParseAccessRule("http:192.168.1.50:3000")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetIP, rule.target.kind)
@@ -158,7 +158,7 @@ func TestParse_BareIPParsedAsExactIP(t *testing.T) {
 }
 
 func TestParse_NonIPStringParsedAsDomain(t *testing.T) {
-	rule, err := Parse("https:api.example.com:443")
+	rule, err := ParseAccessRule("https:api.example.com:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetDomain, rule.target.kind)
@@ -167,84 +167,84 @@ func TestParse_NonIPStringParsedAsDomain(t *testing.T) {
 func TestParse_InvalidIPFallsThroughToDomainAndFails(t *testing.T) {
 	// 123.456.789.0 fails IP parsing, then fails domain validation
 	// (all-numeric last label)
-	_, err := Parse("https:123.456.789.0:443")
+	_, err := ParseAccessRule("https:123.456.789.0:443")
 	assert.ErrorContains(t, err, "invalid target")
 }
 
 // --- Domain pattern validation ---
 
 func TestParse_DomainValidExact(t *testing.T) {
-	_, err := Parse("https:api.example.com:443")
+	_, err := ParseAccessRule("https:api.example.com:443")
 	assert.NoError(t, err)
 }
 
 func TestParse_DomainValidWildcard(t *testing.T) {
-	_, err := Parse("https:*.example.com:443")
+	_, err := ParseAccessRule("https:*.example.com:443")
 	assert.NoError(t, err)
 }
 
 func TestParse_DomainValidSingleLabel(t *testing.T) {
-	_, err := Parse("http:localhost:3000")
+	_, err := ParseAccessRule("http:localhost:3000")
 	assert.NoError(t, err)
 }
 
 func TestParse_DomainAllNumericTLDRejected(t *testing.T) {
-	_, err := Parse("https:192.168.1.999:443")
+	_, err := ParseAccessRule("https:192.168.1.999:443")
 	assert.ErrorContains(t, err, "invalid target")
 }
 
 func TestParse_DomainBareWildcardRejected(t *testing.T) {
-	_, err := Parse("https:*:443")
+	_, err := ParseAccessRule("https:*:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainDeepWildcardRejected(t *testing.T) {
-	_, err := Parse("https:*.*.example.com:443")
+	_, err := ParseAccessRule("https:*.*.example.com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainNonLeftmostWildcardRejected(t *testing.T) {
-	_, err := Parse("https:sub.*.example.com:443")
+	_, err := ParseAccessRule("https:sub.*.example.com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainLabelStartingWithHyphenRejected(t *testing.T) {
-	_, err := Parse("https:-example.com:443")
+	_, err := ParseAccessRule("https:-example.com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainLabelEndingWithHyphenRejected(t *testing.T) {
-	_, err := Parse("https:example-.com:443")
+	_, err := ParseAccessRule("https:example-.com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainLabelTooLong(t *testing.T) {
 	long := strings.Repeat("a", 64)
-	_, err := Parse("https:" + long + ".com:443")
+	_, err := ParseAccessRule("https:" + long + ".com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 func TestParse_DomainEmptyLabel(t *testing.T) {
-	_, err := Parse("https:example..com:443")
+	_, err := ParseAccessRule("https:example..com:443")
 	assert.ErrorContains(t, err, "invalid domain")
 }
 
 // --- Port validation ---
 
 func TestParse_PortMin(t *testing.T) {
-	rule, err := Parse("https:example.com:1")
+	rule, err := ParseAccessRule("https:example.com:1")
 	require.NoError(t, err)
 	assert.Equal(t, uint16(1), rule.port.number)
 }
 
 func TestParse_PortMax(t *testing.T) {
-	rule, err := Parse("https:example.com:65535")
+	rule, err := ParseAccessRule("https:example.com:65535")
 	require.NoError(t, err)
 	assert.Equal(t, uint16(65535), rule.port.number)
 }
 
 func TestParse_PortWildcard(t *testing.T) {
-	rule, err := Parse("https:example.com:*")
+	rule, err := ParseAccessRule("https:example.com:*")
 	require.NoError(t, err)
 	assert.True(t, rule.port.isWildcard)
 }
@@ -252,68 +252,68 @@ func TestParse_PortWildcard(t *testing.T) {
 // --- Config validation ---
 
 func TestValidate_NoDuplicateIdentity(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:example.com:443"),
 		parseRule(t, "none:example.com:443"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.ErrorContains(t, err, "duplicate net rule")
 }
 
 func TestValidate_DuplicateCIDRIdentity(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:10.0.0.0/24:443"),
 		parseRule(t, "none:10.0.0.0/24:443"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.ErrorContains(t, err, "duplicate net rule")
 }
 
 func TestValidate_SameTargetDifferentPortsAllowed(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:example.com:443"),
 		parseRule(t, "http:example.com:80"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.NoError(t, err)
 }
 
 func TestValidate_MixedPortPatternsRejected(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:example.com:*"),
 		parseRule(t, "none:example.com:443"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.ErrorContains(t, err, "mixed port patterns")
 }
 
 func TestValidate_MixedPortPatternsCIDRRejected(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:10.0.0.0/24:*"),
 		parseRule(t, "none:10.0.0.0/24:443"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.ErrorContains(t, err, "mixed port patterns")
 }
 
 func TestValidate_DifferentTargetsDifferentPortStylesAllowed(t *testing.T) {
-	rules := []Rule{
+	rules := []AccessRule{
 		parseRule(t, "https:example.com:*"),
 		parseRule(t, "https:other.com:443"),
 	}
-	err := Validate(rules)
+	err := ValidateAccessRules(rules)
 	assert.NoError(t, err)
 }
 
 func TestValidate_Empty(t *testing.T) {
-	err := Validate(nil)
+	err := ValidateAccessRules(nil)
 	assert.NoError(t, err)
 }
 
 // --- IPv6 bracket parsing edge cases ---
 
 func TestParse_IPv6BracketedCIDR(t *testing.T) {
-	rule, err := Parse("https:[2001:db8::]/32:443")
+	rule, err := ParseAccessRule("https:[2001:db8::]/32:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetIP, rule.target.kind)
@@ -321,37 +321,37 @@ func TestParse_IPv6BracketedCIDR(t *testing.T) {
 }
 
 func TestParse_IPv6MissingClosingBracket(t *testing.T) {
-	_, err := Parse("https:[::1:443")
+	_, err := ParseAccessRule("https:[::1:443")
 	assert.Error(t, err)
 }
 
 func TestParse_IPv6InvalidAddress(t *testing.T) {
-	_, err := Parse("https:[not-an-ip]:443")
+	_, err := ParseAccessRule("https:[not-an-ip]:443")
 	assert.Error(t, err)
 }
 
 func TestParse_BracketedIPv4Rejected(t *testing.T) {
-	_, err := Parse("https:[127.0.0.1]:443")
+	_, err := ParseAccessRule("https:[127.0.0.1]:443")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedIPv4CIDRRejected(t *testing.T) {
-	_, err := Parse("http:[10.0.0.0]/24:8080")
+	_, err := ParseAccessRule("http:[10.0.0.0]/24:8080")
 	assert.ErrorContains(t, err, "invalid IPv6 CIDR")
 }
 
 func TestParse_EmptyBracketsRejected(t *testing.T) {
-	_, err := Parse("https:[]:443")
+	_, err := ParseAccessRule("https:[]:443")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedDomainRejected(t *testing.T) {
-	_, err := Parse("https:[example.com]:443")
+	_, err := ParseAccessRule("https:[example.com]:443")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedIPv4MappedIPv6Accepted(t *testing.T) {
-	rule, err := Parse("https:[::ffff:127.0.0.1]:443")
+	rule, err := ParseAccessRule("https:[::ffff:127.0.0.1]:443")
 	require.NoError(t, err)
 
 	assert.Equal(t, targetIP, rule.target.kind)
@@ -360,9 +360,9 @@ func TestParse_BracketedIPv4MappedIPv6Accepted(t *testing.T) {
 
 // --- helpers ---
 
-func parseRule(t *testing.T, ruleBody string) Rule {
+func parseRule(t *testing.T, ruleBody string) AccessRule {
 	t.Helper()
-	rule, err := Parse(ruleBody)
+	rule, err := ParseAccessRule(ruleBody)
 	require.NoError(t, err)
 	return rule
 }

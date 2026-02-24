@@ -13,14 +13,14 @@ type ResolveResult struct {
 	Rule string
 }
 
-// Resolver evaluates network requests against a set of net rules.
-type Resolver struct {
-	rules []Rule
+// AccessResolver evaluates network requests against a set of net access rules.
+type AccessResolver struct {
+	rules []AccessRule
 }
 
-// NewResolver creates a new Resolver from the given net rules.
-func NewResolver(rules []Rule) *Resolver {
-	return &Resolver{rules: rules}
+// NewAccessResolver creates a new AccessResolver from the given net rules.
+func NewAccessResolver(rules []AccessRule) *AccessResolver {
+	return &AccessResolver{rules: rules}
 }
 
 // Resolve evaluates a request against the rules and returns the result.
@@ -31,13 +31,13 @@ func NewResolver(rules []Rule) *Resolver {
 //   - Domains: exact match beats wildcard
 //   - IPs: longer CIDR prefix beats shorter
 //   - Default: deny
-func (r *Resolver) Resolve(protocol protocol, host string, port uint16) ResolveResult {
+func (r *AccessResolver) Resolve(protocol protocol, host string, port uint16) ResolveResult {
 	lowerHost := strings.ToLower(host)
 
 	// Try to parse the host as an IP address
 	parsedIP := net.ParseIP(lowerHost)
 
-	var bestRule *Rule
+	var bestRule *AccessRule
 	bestSpecificity := -1
 
 	for i := range r.rules {
@@ -92,7 +92,7 @@ func portMatches(rulePort port, requestPort uint16) bool {
 //
 // For domains: exact match returns label count + 1, wildcard returns label count.
 // For IPs: returns CIDR prefix length.
-func targetSpecificity(rule *Rule, lowerHost string, addr net.IP) int {
+func targetSpecificity(rule *AccessRule, lowerHost string, addr net.IP) int {
 	switch rule.target.kind {
 	case targetDomain:
 		if addr != nil {

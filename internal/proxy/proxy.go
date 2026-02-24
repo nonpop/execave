@@ -35,7 +35,7 @@ const (
 
 // Proxy is a forward HTTP proxy that listens on a UDS and enforces net rules.
 type Proxy struct {
-	resolver  atomic.Pointer[netrules.Resolver]
+	resolver  atomic.Pointer[netrules.AccessResolver]
 	logger    atomic.Pointer[accesslog.Logger]
 	listener  net.Listener
 	udsPath   string
@@ -47,12 +47,12 @@ type Proxy struct {
 // New creates a new Proxy with the given net rules resolver and access logger.
 // resolver must not be nil.
 // logger may be nil if access logging is not needed.
-func New(resolver *netrules.Resolver, logger *accesslog.Logger) *Proxy {
+func New(resolver *netrules.AccessResolver, logger *accesslog.Logger) *Proxy {
 	if resolver == nil {
 		panic("New: resolver must not be nil")
 	}
 	proxy := &Proxy{
-		resolver:  atomic.Pointer[netrules.Resolver]{},
+		resolver:  atomic.Pointer[netrules.AccessResolver]{},
 		logger:    atomic.Pointer[accesslog.Logger]{},
 		listener:  nil,
 		udsPath:   "",
@@ -69,7 +69,7 @@ func New(resolver *netrules.Resolver, logger *accesslog.Logger) *Proxy {
 
 // SetResolver replaces the net rules resolver. Safe for concurrent use with request handlers.
 // resolver must not be nil.
-func (p *Proxy) SetResolver(resolver *netrules.Resolver) {
+func (p *Proxy) SetResolver(resolver *netrules.AccessResolver) {
 	if resolver == nil {
 		panic("SetResolver: resolver must not be nil")
 	}

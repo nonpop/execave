@@ -12,6 +12,7 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/runner"
 	"github.com/nonpop/execave/internal/webui"
 	"github.com/stretchr/testify/assert"
@@ -217,7 +218,6 @@ func TestIntegration_PathShortening_SseEntryEventUsesShortPath(t *testing.T) {
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
 	eventCh := readSSEEventsAsync(resp)
-	readEventWithTimeout(t, eventCh) // session
 	readEventWithTimeout(t, eventCh) // status
 	readEventWithTimeout(t, eventCh) // config
 
@@ -246,8 +246,7 @@ func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status + config)
-	readEventWithTimeout(t, eventCh) // session
+	// Read initial events (status + config)
 	readEventWithTimeout(t, eventCh) // status
 	readEventWithTimeout(t, eventCh) // config
 
@@ -277,21 +276,20 @@ func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Connect with ?from=30
 	resp, err := http.Get(srv.EndpointURL("/events?from=30"))
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + config + entries 30..49 = 23 events
-	events := webui.ReadSSEEvents(t, resp, 23)
-	require.Len(t, events, 23)
+	// status + config + entries 30..49 = 22 events
+	events := webui.ReadSSEEvents(t, resp, 22)
+	require.Len(t, events, 22)
 
 	// First entry event should be index 30
-	assert.Equal(t, sessionID+":30", events[3].ID)
+	assert.Equal(t, "30", events[2].ID)
 	// Last entry event should be index 49
-	assert.Equal(t, sessionID+":49", events[22].ID)
+	assert.Equal(t, "49", events[21].ID)
 }
 
 // --- Requirement: No entries dropped between page load and SSE ---
@@ -308,7 +306,6 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
 	// Simulate: page rendered with count 50, entries 50+51 arrive before SSE connects.
 	// Client connects to /events?from=50 and should receive entries 50 and 51.
@@ -316,14 +313,14 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + config + 2 entries (50, 51)
-	events := webui.ReadSSEEvents(t, resp, 5)
-	require.Len(t, events, 5)
+	// status + config + 2 entries (50, 51)
+	events := webui.ReadSSEEvents(t, resp, 4)
+	require.Len(t, events, 4)
 
-	assert.Equal(t, sessionID+":50", events[3].ID)
-	assert.Contains(t, events[3].Data, "entry50")
-	assert.Equal(t, sessionID+":51", events[4].ID)
-	assert.Contains(t, events[4].Data, "entry51")
+	assert.Equal(t, "50", events[2].ID)
+	assert.Contains(t, events[2].Data, "entry50")
+	assert.Equal(t, "51", events[3].ID)
+	assert.Contains(t, events[3].Data, "entry51")
 }
 
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLastEventId(t *testing.T) {
@@ -338,26 +335,25 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
-	// Reconnect with Last-Event-ID from same session at index 75
+	// Reconnect with Last-Event-ID at index 75
 	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
-	req.Header.Set("Last-Event-ID", sessionID+":75")
+	req.Header.Set("Last-Event-ID", "75")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + config + entries 76..79 = 7 events
-	events := webui.ReadSSEEvents(t, resp, 7)
-	require.Len(t, events, 7)
+	// status + config + entries 76..79 = 6 events
+	events := webui.ReadSSEEvents(t, resp, 6)
+	require.Len(t, events, 6)
 
 	// First entry should be index 76 (resume from next after 75)
-	assert.Equal(t, sessionID+":76", events[3].ID)
+	assert.Equal(t, "76", events[2].ID)
 }
 
-func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnectReplaysFromStart(t *testing.T) {
+func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_StaleReconnectReplaysFromStart(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 5 {
 		require.NoError(t, logger.Log(accesslog.Entry{
@@ -369,24 +365,24 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_CrossSessionReconnect
 	}
 
 	srv := webui.StartServer(t, logger)
-	sessionID := webui.GetSessionID(t, srv.EndpointURL("/"))
 
-	// Connect with Last-Event-ID from a different session
+	// Connect with stale Last-Event-ID beyond current entry count
 	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
-	req.Header.Set("Last-Event-ID", "oldsession:99")
+	req.Header.Set("Last-Event-ID", "99")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + config + all 5 entries from 0
+	// clear + status + config + all 5 entries from 0 = 8 events
 	events := webui.ReadSSEEvents(t, resp, 8)
 	require.Len(t, events, 8)
 
+	assert.Equal(t, "clear", events[0].Event)
 	// Replayed from entry 0
-	assert.Equal(t, sessionID+":0", events[3].ID)
-	assert.Equal(t, sessionID+":4", events[7].ID)
+	assert.Equal(t, "0", events[3].ID)
+	assert.Equal(t, "4", events[7].ID)
 }
 
 // --- Requirement: Run status display ---
@@ -399,26 +395,27 @@ func TestIntegration_RunStatusDisplay_CommandShownInPage(t *testing.T) {
 	assert.Contains(t, body, "echo hello")
 }
 
-func TestIntegration_RunStatusDisplay_CrossSessionReconnectDeliversCurrentCommand(t *testing.T) {
+func TestIntegration_RunStatusDisplay_StaleReconnectDeliversCurrentCommand(t *testing.T) {
 	logger := accesslog.New(nil)
 	rnr := runner.NewTestRunner()
 	rnr.SetTestLogger(logger)
 	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "cat /etc/hosts"})
 	srv := webui.StartServerWithRunner(t, rnr)
 
-	// Connect with Last-Event-ID from a different session
+	// Connect with stale Last-Event-ID beyond current entry count
 	req, err := http.NewRequest(http.MethodGet, srv.EndpointURL("/events"), nil)
 	require.NoError(t, err)
-	req.Header.Set("Last-Event-ID", "oldsession:10")
+	req.Header.Set("Last-Event-ID", "10")
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status
-	events := webui.ReadSSEEvents(t, resp, 2)
-	require.Len(t, events, 2)
+	// clear + status + config = 3 events
+	events := webui.ReadSSEEvents(t, resp, 3)
+	require.Len(t, events, 3)
 
+	assert.Equal(t, "clear", events[0].Event)
 	// Status event contains the current command
 	assert.Equal(t, "status", events[1].Event)
 	assert.Contains(t, events[1].Data, `"command":"cat /etc/hosts"`)
@@ -472,8 +469,7 @@ func TestIntegration_RunStatusDisplay_StatusUpdatesStreamedViaSse(t *testing.T) 
 
 	eventCh := readSSEEventsAsync(resp)
 
-	// Read initial events (session + status + config)
-	readEventWithTimeout(t, eventCh) // session
+	// Read initial events (status + config)
 	readEventWithTimeout(t, eventCh) // status (Running)
 	readEventWithTimeout(t, eventCh) // config
 
@@ -590,12 +586,11 @@ func TestIntegration_ConfigSseEvent_SentOnConnect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	// session + status + config
-	events := webui.ReadSSEEvents(t, resp, 3)
-	require.Len(t, events, 3)
-	assert.Equal(t, "session", events[0].Event)
-	assert.Equal(t, "status", events[1].Event)
-	assert.Equal(t, "config", events[2].Event)
+	// status + config
+	events := webui.ReadSSEEvents(t, resp, 2)
+	require.Len(t, events, 2)
+	assert.Equal(t, "status", events[0].Event)
+	assert.Equal(t, "config", events[1].Event)
 }
 
 func TestIntegration_ConfigSseEvent_ContainsDraftAndSavedFields(t *testing.T) {
@@ -606,10 +601,10 @@ func TestIntegration_ConfigSseEvent_ContainsDraftAndSavedFields(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	events := webui.ReadSSEEvents(t, resp, 3)
-	require.Len(t, events, 3)
+	events := webui.ReadSSEEvents(t, resp, 2)
+	require.Len(t, events, 2)
 
-	configEvent := events[2]
+	configEvent := events[1]
 	assert.Equal(t, "config", configEvent.Event)
 
 	var payload struct {
@@ -645,10 +640,10 @@ func TestIntegration_ConfigSseEvent_ReflectsDraftSavedStateAfterSave(t *testing.
 	require.NoError(t, err)
 	defer eventsResp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	events := webui.ReadSSEEvents(t, eventsResp, 3)
-	require.Len(t, events, 3)
+	events := webui.ReadSSEEvents(t, eventsResp, 2)
+	require.Len(t, events, 2)
 
-	configEvent := events[2]
+	configEvent := events[1]
 	assert.Equal(t, "config", configEvent.Event)
 
 	var payload struct {
@@ -678,10 +673,10 @@ func TestIntegration_ConfigSseEvent_ReflectsDraftAfterStartWithBody(t *testing.T
 	require.NoError(t, err)
 	defer eventsResp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
 
-	events := webui.ReadSSEEvents(t, eventsResp, 3)
-	require.Len(t, events, 3)
+	events := webui.ReadSSEEvents(t, eventsResp, 2)
+	require.Len(t, events, 2)
 
-	configEvent := events[2]
+	configEvent := events[1]
 	assert.Equal(t, "config", configEvent.Event)
 
 	var payload struct {
@@ -856,6 +851,51 @@ func TestIntegration_RunControlEndpoints_StartCallsOnConfigChangeBeforeRun(t *te
 	}
 }
 
+// --- Requirement: Restart clears log entries ---
+
+func TestIntegration_RestartClearsLogEntries(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/usr/bin/test",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/usr",
+	}))
+
+	rnr := runner.NewTestRunner()
+	rnr.SetTestLogger(logger)
+	rnr.SetTestStatus(runner.RunStatus{Running: true, ExitCode: 0, Error: "", Command: "echo hello"})
+	srv := webui.StartServerWithRunner(t, rnr)
+
+	// Connect SSE stream
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	eventCh := readSSEEventsAsync(resp)
+
+	readEventWithTimeout(t, eventCh) // status
+	readEventWithTimeout(t, eventCh) // config
+	readEventWithTimeout(t, eventCh) // entry
+
+	// Trigger restart via POST /api/start
+	startResp, err := http.Post(srv.EndpointURL("/api/start"), "text/plain", strings.NewReader(`rules = []`))
+	require.NoError(t, err)
+	_ = startResp.Body.Close()
+	require.Equal(t, http.StatusOK, startResp.StatusCode)
+
+	// Read events until we get a clear event (status change triggers it)
+	var clearEvent webui.SSEEvent
+	for range 10 {
+		ev := readEventWithTimeout(t, eventCh)
+		if ev.Event == "clear" {
+			clearEvent = ev
+			break
+		}
+	}
+	require.Equal(t, "clear", clearEvent.Event)
+}
+
 // --- Requirement: Config textarea in page ---
 
 func TestIntegration_ConfigPane_TextareaRenderedOnPageLoad(t *testing.T) {
@@ -879,6 +919,169 @@ func TestIntegration_ConfigPane_TextareaContainsRawTomlContent(t *testing.T) {
 
 	body := fetchBody(t, srv.EndpointURL("/"))
 	assert.Contains(t, body, configContent)
+}
+
+// --- Requirement: Denied-only filter ---
+
+func TestIntegration_DeniedOnlyFilter_PageContainsDeniedOnlyCheckboxCheckedByDefault(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `id="denied-only-checkbox" checked`)
+}
+
+func TestIntegration_DeniedOnlyFilter_PageContainsApplyNologCheckboxCheckedByDefault(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `id="apply-nolog-checkbox" checked`)
+}
+
+func TestIntegration_DeniedOnlyFilter_OKEntriesHaveResultAttribute(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/usr/bin/test",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/usr",
+	}))
+
+	srv := webui.StartServer(t, logger)
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `data-result="OK"`)
+}
+
+func TestIntegration_DeniedOnlyFilter_DenyEntriesHaveResultAttribute(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/etc/secret",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	}))
+
+	srv := webui.StartServer(t, logger)
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `data-result="DENY"`)
+}
+
+// --- Requirement: Nolog filter ---
+
+func TestIntegration_NologFilter_NologEntryHasNologAttribute(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/project/cache/data",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	}))
+
+	srv := webui.StartServer(t, logger)
+	srv.SetLogResolvers(
+		fsrules.NewLogResolver([]fsrules.LogRule{{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"}}),
+		nil,
+	)
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `data-nolog="true"`)
+}
+
+func TestIntegration_NologFilter_LogOverrideEntryHasNologFalseAttribute(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/project/secret/key.pem",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	}))
+
+	srv := webui.StartServer(t, logger)
+	srv.SetLogResolvers(
+		fsrules.NewLogResolver([]fsrules.LogRule{
+			{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"},
+			{Visible: true, Path: "/home/user/project/secret", RawRule: "log:/home/user/project/secret"},
+		}),
+		nil,
+	)
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `data-nolog="false"`)
+}
+
+func TestIntegration_NologFilter_NoLogResolverMeansNologFalse(t *testing.T) {
+	logger := accesslog.New(nil)
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/usr/bin/test",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/usr",
+	}))
+
+	srv := webui.StartServer(t, logger)
+	// No resolvers set — all entries should have nolog=false
+	body := fetchBody(t, srv.EndpointURL("/"))
+
+	assert.Contains(t, body, `data-nolog="false"`)
+}
+
+// --- Requirement: SSE entry events include nolog metadata ---
+
+func TestIntegration_SseNologMetadata_SseEntryEventContainsNologTrue(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+	srv.SetLogResolvers(
+		fsrules.NewLogResolver([]fsrules.LogRule{{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"}}),
+		nil,
+	)
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	eventCh := readSSEEventsAsync(resp)
+	readEventWithTimeout(t, eventCh) // status
+	readEventWithTimeout(t, eventCh) // config
+
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/project/cache/data",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	}))
+
+	entryEvent := readEventWithTimeout(t, eventCh)
+	assert.Equal(t, "entry", entryEvent.Event)
+	assert.Contains(t, entryEvent.Data, `"nolog":true`)
+}
+
+func TestIntegration_SseNologMetadata_SseEntryEventContainsNologFalse(t *testing.T) {
+	logger := accesslog.New(nil)
+	srv := webui.StartServer(t, logger)
+
+	resp, err := http.Get(srv.EndpointURL("/events"))
+	require.NoError(t, err)
+	defer resp.Body.Close() //nolint:errcheck // SSE stream; best-effort close
+
+	eventCh := readSSEEventsAsync(resp)
+	readEventWithTimeout(t, eventCh) // status
+	readEventWithTimeout(t, eventCh) // config
+
+	require.NoError(t, logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/usr/lib/streamed.so",
+		Result:    accesslog.ResultOK,
+		Rule:      "fs:ro:/usr",
+	}))
+
+	entryEvent := readEventWithTimeout(t, eventCh)
+	assert.Equal(t, "entry", entryEvent.Event)
+	assert.Contains(t, entryEvent.Data, `"nolog":false`)
 }
 
 // --- Integration test helpers ---

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/proxy"
 	"github.com/nonpop/execave/internal/runner"
@@ -260,7 +261,7 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 
 	udsPath := filepath.Join(tmpDir, "proxy.sock")
 
-	netResolver := netrules.NewResolver(cfg.NetRules)
+	netResolver := netrules.NewAccessResolver(cfg.NetRules)
 	httpProxy := proxy.New(netResolver, logger)
 
 	if err := httpProxy.Start(udsPath); err != nil {
@@ -310,10 +311,16 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 	// Start web UI server
 	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs)
 
+	// Set initial log resolvers from the loaded config.
+	server.SetLogResolvers(
+		fsrules.NewLogResolver(cfg.FSLogRules),
+		netrules.NewLogResolver(cfg.NetLogRules),
+	)
+
 	// Wire config changes to update the proxy's net rules resolver
 	server.OnConfigChange = func(newCfg *config.Config) {
 		if httpProxy != nil {
-			httpProxy.SetResolver(netrules.NewResolver(newCfg.NetRules))
+			httpProxy.SetResolver(netrules.NewAccessResolver(newCfg.NetRules))
 		}
 	}
 

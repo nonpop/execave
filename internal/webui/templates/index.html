@@ -299,8 +299,18 @@
         </div>
 
         <div class="log-pane">
+            <div style="margin-bottom: 8px; display: flex; gap: 16px; align-items: center;">
+                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                    <input type="checkbox" id="denied-only-checkbox" checked>
+                    Denied only
+                </label>
+                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                    <input type="checkbox" id="apply-nolog-checkbox" checked>
+                    Apply nolog rules
+                </label>
+            </div>
             <div class="container">
-                <table id="entries-table" data-entry-count="{{.EntryCount}}" data-session-id="{{.SessionID}}">
+                <table id="entries-table" data-entry-count="{{.EntryCount}}">
                     <thead>
                         <tr>
                             <th>Operation</th>
@@ -310,12 +320,12 @@
                     </thead>
                     <tbody id="entries-body">
                         {{if eq .EntryCount 0}}
-                        <tr>
+                        <tr id="empty-state-row">
                             <td colspan="3" class="empty-state">No access log entries yet. Waiting for sandbox activity...</td>
                         </tr>
                         {{else}}
                         {{range .Entries}}
-                        <tr data-rule="{{.Rule}}" title="{{.Rule}}">
+                        <tr data-rule="{{.Rule}}" data-result="{{.Result}}" data-nolog="{{if .Nolog}}true{{else}}false{{end}}" title="{{.Rule}}">
                             <td class="operation">{{.Operation}}</td>
                             <td class="target">{{.Target}}</td>
                             <td class="result {{if eq .Result "OK"}}ok{{else if eq .Result "DENY"}}deny{{else}}unknown{{end}}">{{.Result}}</td>
@@ -339,7 +349,6 @@
 
             const table = document.getElementById('entries-table');
             const entryCount = parseInt(table.getAttribute('data-entry-count'), 10);
-            let currentSessionID = table.getAttribute('data-session-id');
             const tbody = document.getElementById('entries-body');
             const statusDiv = document.getElementById('status');
             const startBtn = document.getElementById('start-btn');
@@ -348,6 +357,29 @@
             let revertBtn = document.getElementById('revert-btn');
             const configTextarea = document.getElementById('config-textarea');
             const configError = document.getElementById('config-error');
+            const deniedOnlyCheckbox = document.getElementById('denied-only-checkbox');
+            const applyNologCheckbox = document.getElementById('apply-nolog-checkbox');
+
+            function rowVisible(row) {
+                const result = row.getAttribute('data-result');
+                const nolog = row.getAttribute('data-nolog') === 'true';
+                if (deniedOnlyCheckbox.checked && result === 'OK') return false;
+                if (applyNologCheckbox.checked && nolog) return false;
+                return true;
+            }
+
+            function applyFilters() {
+                const rows = tbody.querySelectorAll('tr[data-result]');
+                rows.forEach(function(row) {
+                    row.style.display = rowVisible(row) ? '' : 'none';
+                });
+            }
+
+            deniedOnlyCheckbox.addEventListener('change', applyFilters);
+            applyNologCheckbox.addEventListener('change', applyFilters);
+
+            // Apply filters on initial load to hide OK entries per defaults.
+            applyFilters();
 
             let savedConfig = configTextarea.value;
 
@@ -362,15 +394,11 @@
             // Connect to SSE endpoint with token
             const eventSource = new EventSource(tokenURL('/events?from=' + entryCount));
 
-            eventSource.addEventListener('session', function(e) {
-                const serverSessionID = e.data;
-                if (serverSessionID !== currentSessionID) {
-                    // New server session: clear stale entries
-                    while (tbody.firstChild) {
-                        tbody.removeChild(tbody.firstChild);
-                    }
-                    currentSessionID = serverSessionID;
+            eventSource.addEventListener('clear', function() {
+                while (tbody.firstChild) {
+                    tbody.removeChild(tbody.firstChild);
                 }
+                applyFilters();
             });
 
             eventSource.addEventListener('config', function(e) {
@@ -384,15 +412,18 @@
                 const entry = JSON.parse(e.data);
 
                 // Remove empty state if present
-                const emptyState = tbody.querySelector('.empty-state');
-                if (emptyState) {
-                    emptyState.parentElement.remove();
+                const emptyStateRow = document.getElementById('empty-state-row');
+                if (emptyStateRow) {
+                    emptyStateRow.remove();
                 }
 
                 // Append new entry row using safe DOM methods
                 const row = tbody.insertRow();
                 row.dataset.rule = entry.rule;
+                row.dataset.result = entry.result;
+                row.dataset.nolog = entry.nolog ? 'true' : 'false';
                 row.title = entry.rule;
+                row.style.display = rowVisible(row) ? '' : 'none';
 
                 const opCell = row.insertCell();
                 opCell.className = 'operation';

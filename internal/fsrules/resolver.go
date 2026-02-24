@@ -17,9 +17,9 @@ const (
 	OperationWrite Operation = "write"
 )
 
-// Resolver handles rule matching and access decisions.
-type Resolver struct {
-	rules        []Rule
+// AccessResolver handles access rule matching and access decisions.
+type AccessResolver struct {
+	rules        []AccessRule
 	managedPaths []string
 }
 
@@ -33,23 +33,23 @@ type SymlinkChain struct {
 
 // SymlinkHop represents one symlink in the resolution chain.
 type SymlinkHop struct {
-	Path    string // The symlink path (clean, absolute)
-	Allowed bool   // Was this hop readable?
-	Rule    *Rule  // Matching rule, or nil
+	Path    string      // The symlink path (clean, absolute)
+	Allowed bool        // Was this hop readable?
+	Rule    *AccessRule // Matching rule, or nil
 }
 
 // AccessResult represents the result of an access check.
 type AccessResult struct {
 	Allowed      bool
-	Rule         *Rule         // Matching rule, or nil if no match
+	Rule         *AccessRule   // Matching rule, or nil if no match
 	Symlink      *SymlinkChain // Non-nil if path contained symlinks that were resolved
 	Uncertain    bool          // True if result could not be determined (e.g., symlink through managed path)
 	PathNotFound bool          // True if the path (or a component) does not exist on the host filesystem
 }
 
-// NewResolver creates a new Resolver.
-func NewResolver(rules []Rule, managedPaths []string) *Resolver {
-	return &Resolver{
+// NewAccessResolver creates a new AccessResolver.
+func NewAccessResolver(rules []AccessRule, managedPaths []string) *AccessResolver {
+	return &AccessResolver{
 		rules:        rules,
 		managedPaths: managedPaths,
 	}
@@ -58,7 +58,7 @@ func NewResolver(rules []Rule, managedPaths []string) *Resolver {
 // CheckAccess determines if a path can be accessed with the given operation.
 // For symlinks, this resolves them component-by-component, recording each hop.
 // Symlinks at rule boundaries are not resolved (bwrap handles them at mount time).
-func (r *Resolver) CheckAccess(path string, operation Operation) AccessResult {
+func (r *AccessResolver) CheckAccess(path string, operation Operation) AccessResult {
 	cleanPath := filepath.Clean(path)
 
 	// Walk path component-by-component to resolve symlinks
@@ -127,7 +127,7 @@ func (r *Resolver) CheckAccess(path string, operation Operation) AccessResult {
 
 // PermissionFor returns the permission that would apply to the given path.
 // The path must be absolute and clean.
-func (r *Resolver) PermissionFor(path string) Permission {
+func (r *AccessResolver) PermissionFor(path string) Permission {
 	if !filepath.IsAbs(path) {
 		panic("internal error: path must be absolute: " + path)
 	}
@@ -142,8 +142,8 @@ func (r *Resolver) PermissionFor(path string) Permission {
 	return rule.Permission
 }
 
-func (r *Resolver) findMatchingRule(path string) *Rule {
-	var bestMatch *Rule
+func (r *AccessResolver) findMatchingRule(path string) *AccessRule {
+	var bestMatch *AccessRule
 	longestMatch := -1
 
 	for i := range r.rules {
@@ -175,7 +175,7 @@ func matchesPath(rulePath, targetPath string) bool {
 	return strings.HasPrefix(targetPath, rulePathWithSep)
 }
 
-func (r *Resolver) checkPermission(perm Permission, operation Operation) bool {
+func (r *AccessResolver) checkPermission(perm Permission, operation Operation) bool {
 	switch perm {
 	case PermissionNone:
 		return false
@@ -194,7 +194,7 @@ func (r *Resolver) checkPermission(perm Permission, operation Operation) bool {
 // Symlinks at rule boundaries are not resolved.
 //
 //nolint:gocognit,cyclop,funlen // Reads better as one function
-func (r *Resolver) resolvePathComponents(path string) (string, *SymlinkChain, bool, error) {
+func (r *AccessResolver) resolvePathComponents(path string) (string, *SymlinkChain, bool, error) {
 	const maxSymlinks = 40 // Linux kernel's MAXSYMLINKS
 
 	if !filepath.IsAbs(path) {
@@ -340,7 +340,7 @@ func (r *Resolver) resolvePathComponents(path string) (string, *SymlinkChain, bo
 
 // isUnresolvablePath returns true if the path is under a managed path where
 // host-side symlink resolution is unreliable (e.g., sandbox tmpfs).
-func (r *Resolver) isUnresolvablePath(path string) bool {
+func (r *AccessResolver) isUnresolvablePath(path string) bool {
 	for _, managed := range r.managedPaths {
 		if path == managed || strings.HasPrefix(path, managed+string(filepath.Separator)) {
 			return true
@@ -351,7 +351,7 @@ func (r *Resolver) isUnresolvablePath(path string) bool {
 
 // isRuleBoundary returns true if the path exactly matches a rule path.
 // These symlinks are resolved by bwrap at mount time, not at access time.
-func (r *Resolver) isRuleBoundary(path string) bool {
+func (r *AccessResolver) isRuleBoundary(path string) bool {
 	for i := range r.rules {
 		if r.rules[i].Path == path {
 			return true

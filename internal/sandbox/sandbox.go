@@ -147,7 +147,7 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 
 	writableConfig := false
 	if s.configPath != "" {
-		resolver := fsrules.NewResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
+		resolver := fsrules.NewAccessResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
 		accessLevel := resolver.PermissionFor(s.configPath)
 		if accessLevel <= fsrules.PermissionReadWrite {
 			writableConfig = true
@@ -181,7 +181,7 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 	rules := s.getSortedRules()
 
 	if writableConfig {
-		syntheticRule := fsrules.Rule{
+		syntheticRule := fsrules.AccessRule{
 			Permission: fsrules.PermissionReadOnly,
 			Path:       s.configPath,
 			RawRule:    "fs:ro:" + s.configPath,
@@ -223,8 +223,8 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 	return args
 }
 
-func (s *Sandbox) getSortedRules() []fsrules.Rule {
-	sorted := make([]fsrules.Rule, len(s.cfg.FSRules))
+func (s *Sandbox) getSortedRules() []fsrules.AccessRule {
+	sorted := make([]fsrules.AccessRule, len(s.cfg.FSRules))
 	copy(sorted, s.cfg.FSRules)
 	// Sort by shortest path first (parents before children).
 	// In bwrap, later mounts overlay earlier ones, so children with
@@ -234,7 +234,7 @@ func (s *Sandbox) getSortedRules() []fsrules.Rule {
 }
 
 // hasChildRules reports whether any rule's path is a strict descendant of parentPath.
-func hasChildRules(rules []fsrules.Rule, parentPath string) bool {
+func hasChildRules(rules []fsrules.AccessRule, parentPath string) bool {
 	prefix := parentPath + "/"
 	for _, r := range rules {
 		if strings.HasPrefix(r.Path, prefix) {
@@ -245,7 +245,7 @@ func hasChildRules(rules []fsrules.Rule, parentPath string) bool {
 }
 
 // appendMountArgs adds bwrap arguments for a single rule.
-func appendMountArgs(args []string, rule fsrules.Rule, info os.FileInfo) []string {
+func appendMountArgs(args []string, rule fsrules.AccessRule, info os.FileInfo) []string {
 	path := rule.Path
 
 	switch rule.Permission {

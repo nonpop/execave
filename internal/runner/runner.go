@@ -167,7 +167,7 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 
 	// Create fresh logger and resolver
 	logger := accesslog.New(cfg.ManagedPaths)
-	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	// Notify external components (e.g., network proxy) about the new logger
 	if r.OnLoggerChange != nil {

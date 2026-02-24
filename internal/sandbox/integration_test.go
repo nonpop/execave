@@ -16,7 +16,7 @@ import (
 
 func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -33,7 +33,7 @@ func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 
 func TestIntegration_DefaultDenyFilesystem_AllowedPathAccessible(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -52,7 +52,7 @@ func TestIntegration_ReadOnlyAccess_ReadAllowed(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,
@@ -69,7 +69,7 @@ func TestIntegration_ReadOnlyAccess_WriteDeniedOnReadOnlyPath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,
@@ -90,7 +90,7 @@ func TestIntegration_ReadWriteAccess_ReadAllowedOnReadWritePath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
@@ -107,7 +107,7 @@ func TestIntegration_ReadWriteAccess_WriteAllowedOnReadWritePath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
@@ -128,7 +128,7 @@ func TestIntegration_NoAccessRule_ReadDeniedByNoneRule(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
@@ -148,7 +148,7 @@ func TestIntegration_NoAccessRule_WriteDeniedByNoneRule(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
@@ -168,7 +168,7 @@ func TestIntegration_NoAccessRule_NoneDirectoryInaccessible(t *testing.T) {
 	require.NoError(t, os.Mkdir(blockedDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, blockedDir),
 		},
@@ -190,7 +190,7 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 	require.NoError(t, os.MkdirAll(childDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, parentDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
@@ -213,7 +213,7 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 
 func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -229,7 +229,7 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 
 func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -247,7 +247,7 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 
 func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -269,7 +269,7 @@ func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *tes
 
 func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -288,7 +288,7 @@ func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *test
 
 func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -309,7 +309,7 @@ func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *te
 
 func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFails(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -330,7 +330,7 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFai
 
 func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -351,7 +351,7 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing
 
 func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -368,7 +368,7 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *test
 
 func TestIntegration_CLICommandExecution_CommandExecutionWithNetRules(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -398,7 +398,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *t
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
@@ -419,7 +419,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblin
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
@@ -443,7 +443,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, workDir),
 		},
 		NetRules:     nil,
@@ -464,7 +464,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,

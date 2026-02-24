@@ -31,7 +31,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 	cfg := setupConfig(tmpDir)
 
 	logger := accesslog.New(cfg.ManagedPaths)
-	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	mon := monitor.New(logger, resolver, nil, false)
 
 	return &monitorTestEnv{
@@ -60,16 +60,16 @@ func (e *monitorTestEnv) readLog() string {
 	return logStr
 }
 
-func roRule(path string) fsrules.Rule {
-	return fsrules.Rule{
+func roRule(path string) fsrules.AccessRule {
+	return fsrules.AccessRule{
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
 	}
 }
 
-func rwRule(path string) fsrules.Rule {
-	return fsrules.Rule{
+func rwRule(path string) fsrules.AccessRule {
+	return fsrules.AccessRule{
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,

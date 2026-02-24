@@ -378,14 +378,14 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 	require.NoError(t, os.WriteFile(testFile, nil, 0o600))
 
 	// Build rules for paths that exist on this system
-	var rules []fsrules.Rule
+	var rules []fsrules.AccessRule
 	paths := []string{"/usr", "/lib", "/lib64", "/bin", "/sbin"}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
-			rules = append(rules, fsrules.Rule{Permission: fsrules.PermissionReadOnly, Path: p, RawRule: "fs:ro:" + p})
+			rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: p, RawRule: "fs:ro:" + p})
 		}
 	}
-	rules = append(rules, fsrules.Rule{Permission: fsrules.PermissionReadOnly, Path: tmpDir, RawRule: "fs:ro:" + tmpDir})
+	rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: tmpDir, RawRule: "fs:ro:" + tmpDir})
 
 	cfg := &config.Config{
 		FSRules:      rules,

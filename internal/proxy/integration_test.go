@@ -306,7 +306,7 @@ func TestIntegration_SetResolver_DenyToAllow(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
 	// Start with deny-all (no rules)
-	prx := proxy.New(netrules.NewResolver(nil), nil)
+	prx := proxy.New(netrules.NewAccessResolver(nil), nil)
 	require.NoError(t, prx.Start(udsPath))
 	defer func() { _ = prx.Stop() }()
 
@@ -351,7 +351,7 @@ func TestIntegration_SetResolver_AllowToDeny(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Update resolver to deny-all
-	prx.SetResolver(netrules.NewResolver(nil))
+	prx.SetResolver(netrules.NewAccessResolver(nil))
 
 	// Now denied
 	resp, err = client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
@@ -370,7 +370,7 @@ func TestIntegration_SetResolver_DenyAllToAllow(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
 	// Start with deny-all resolver
-	p := proxy.New(netrules.NewResolver(nil), nil)
+	p := proxy.New(netrules.NewAccessResolver(nil), nil)
 	require.NoError(t, p.Start(udsPath))
 	defer func() { _ = p.Stop() }()
 

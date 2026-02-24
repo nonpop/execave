@@ -297,14 +297,14 @@ func TestResolve_WorkedExampleExactIPPort(t *testing.T) {
 
 // --- helpers ---
 
-func newResolver(t *testing.T, ruleBodies ...string) *netrules.Resolver {
+func newResolver(t *testing.T, ruleBodies ...string) *netrules.AccessResolver {
 	t.Helper()
-	rules := make([]netrules.Rule, 0, len(ruleBodies))
+	rules := make([]netrules.AccessRule, 0, len(ruleBodies))
 	for _, body := range ruleBodies {
-		rule, err := netrules.Parse(body)
+		rule, err := netrules.ParseAccessRule(body)
 		require.NoError(t, err)
 		rule.RawRule = "net:" + body
 		rules = append(rules, rule)
 	}
-	return netrules.NewResolver(rules)
+	return netrules.NewAccessResolver(rules)
 }

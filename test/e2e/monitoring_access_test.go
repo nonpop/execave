@@ -578,3 +578,77 @@ void _start(void) {
 	assertWebUIHasEntry(t, result.WebUI, "READ",
 		"untracked-relative/file.txt", "UNKNOWN", "unresolved-relative-path")
 }
+
+// TestE2E_MonitoringAccess_DeniedOnlyDefaultView tests that the web UI shows
+// the "Denied only" checkbox as checked by default, and that OK and DENY entries
+// carry the correct data-result attributes for client-side filtering.
+func TestE2E_MonitoringAccess_DeniedOnlyDefaultView(t *testing.T) {
+	env := newMonitorTest(t)
+
+	dataDir := filepath.Join(env.TmpDir, "data")
+	createFile(t, filepath.Join(dataDir, "file.txt"), "test data")
+
+	rules := append(systemPaths(), "fs:ro:"+dataDir)
+	result := env.runMonitored(t, rules, "cat", filepath.Join(dataDir, "file.txt"))
+	assertExitCode(t, result.execaveResult, 0)
+
+	// Denied-only checkbox is present and checked by default
+	assert.Contains(t, result.WebUI, `id="denied-only-checkbox" checked`)
+	// Apply-nolog checkbox is also present and checked by default
+	assert.Contains(t, result.WebUI, `id="apply-nolog-checkbox" checked`)
+}
+
+// TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries tests that fs:nolog rules
+// mark matching entries with data-nolog="true" in the web UI HTML, enabling
+// client-side nolog filtering.
+func TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries(t *testing.T) {
+	env := newMonitorTest(t)
+
+	cacheDir := filepath.Join(env.TmpDir, "project", "cache")
+	cacheFile := filepath.Join(cacheDir, "data.bin")
+	createFile(t, cacheFile, "cache data")
+
+	projectDir := filepath.Join(env.TmpDir, "project")
+
+	rules := append(systemPaths(),
+		"fs:ro:"+projectDir,
+		"fs:nolog:"+cacheDir,
+	)
+	result := env.runMonitored(t, rules, "cat", cacheFile)
+	assertExitCode(t, result.execaveResult, 0)
+
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	cacheFileRel, err := filepath.Rel(homeDir, cacheFile)
+	require.NoError(t, err)
+
+	// Entry is present in HTML but with data-nolog="true"
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+cacheFileRel, "data-nolog=\"true\"")
+}
+
+// TestE2E_MonitoringAccess_FsLogOverridesNolog tests that a more specific fs:log
+// rule overrides a broader fs:nolog rule, marking the entry with data-nolog="false".
+func TestE2E_MonitoringAccess_FsLogOverridesNolog(t *testing.T) {
+	env := newMonitorTest(t)
+
+	projectDir := filepath.Join(env.TmpDir, "project")
+	secretDir := filepath.Join(projectDir, "secret")
+	secretFile := filepath.Join(secretDir, "key.pem")
+	createFile(t, secretFile, "secret")
+
+	rules := append(systemPaths(),
+		"fs:ro:"+projectDir,
+		"fs:nolog:"+projectDir,
+		"fs:log:"+secretDir,
+	)
+	result := env.runMonitored(t, rules, "cat", secretFile)
+	assertExitCode(t, result.execaveResult, 0)
+
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	secretFileRel, err := filepath.Rel(homeDir, secretFile)
+	require.NoError(t, err)
+
+	// Entry is present with data-nolog="false" because log rule overrides nolog
+	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+secretFileRel, "data-nolog=\"false\"")
+}

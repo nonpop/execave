@@ -35,7 +35,7 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(dataDir)},
+			FSRules:      []fsrules.AccessRule{roRule(dataDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -93,7 +93,7 @@ func TestIntegration_OperationTypeMapping_QueryingFileMetadataLoggedAsRead(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -126,7 +126,7 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -171,7 +171,7 @@ func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -230,7 +230,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkLog
 	// bwrap resolves these at mount time.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(linkDir)},
+			FSRules:      []fsrules.AccessRule{roRule(linkDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -284,7 +284,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInI
 	// The resolver skips the symlink; the kernel follows it transparently.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(linkDir)},
+			FSRules:      []fsrules.AccessRule{roRule(linkDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -335,7 +335,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountReso
 	// so the resolver walks the host FS and resolves it.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -388,7 +388,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinM
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -442,7 +442,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -495,7 +495,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPoin
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -547,7 +547,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -602,7 +602,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtD
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(ruledDir)},
+			FSRules:      []fsrules.AccessRule{roRule(ruledDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -659,7 +659,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediateP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -711,7 +711,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughS
 	// rw rule — both hop READ and target WRITE are allowed
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -763,7 +763,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToR
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(rwDir), roRule(roDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(rwDir), roRule(roDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -814,7 +814,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySy
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
+			FSRules:      []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -864,7 +864,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExcee
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -908,7 +908,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -945,7 +945,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_NonExistentPathNotReso
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -983,7 +983,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: []string{managedDir},
 		}
@@ -1019,7 +1019,7 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentReadFilteredFro
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -1049,7 +1049,7 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *
 	// ro rule — monitor resolves this write as DENY
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -1094,7 +1094,7 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -1130,7 +1130,7 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -1223,7 +1223,7 @@ func roRuleEnv(t *testing.T, absTestDir string) *monitorTestEnv {
 	t.Helper()
 	return newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -1277,7 +1277,7 @@ func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}

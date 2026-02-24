@@ -15,9 +15,11 @@ import (
 
 // Config represents the parsed configuration file.
 type Config struct {
-	FSRules      []fsrules.Rule
-	NetRules     []netrules.Rule
-	ManagedPaths []string // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
+	FSRules      []fsrules.AccessRule  // Access rules for filesystem paths.
+	NetRules     []netrules.AccessRule // Access rules for network targets.
+	FSLogRules   []fsrules.LogRule     // Log visibility rules for filesystem paths.
+	NetLogRules  []netrules.LogRule    // Log visibility rules for network targets.
+	ManagedPaths []string              // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
 }
 
 // HasNetRules reports whether the configuration contains any network rules.
@@ -86,7 +88,9 @@ func Load(path string, managedPaths []string) (*Config, error) {
 // ParseRules panics if configPath is not absolute.
 //
 // ParseRules applies the same validation as Load: duplicate path detection, config
-// writability, managed path rejection, and net rule identity and port-pattern checks.
+// writability, managed path rejection, net rule identity and port-pattern checks,
+// and log rule validation (duplicate paths for fs, duplicate identity and mixed port
+// patterns for net).
 // Use Load when reading from a file; use ParseRules when the rule strings are
 // already in memory (e.g., user-edited draft in the web UI).
 func ParseRules(rawRules []string, configDir, configPath string, managedPaths []string) (*Config, error) {
@@ -94,36 +98,50 @@ func ParseRules(rawRules []string, configDir, configPath string, managedPaths []
 		panic(fmt.Sprintf("ParseRules: configPath must be absolute, got %q", configPath))
 	}
 
-	fsRules, netRules, err := parseRules(rawRules, configDir)
+	fsRules, netRules, fsLogRules, netLogRules, err := parseRules(rawRules, configDir)
 	if err != nil {
 		return nil, fmt.Errorf("parse rules: %w", err)
 	}
 
-	if err := fsrules.Validate(fsRules, configPath, managedPaths); err != nil {
+	if err := fsrules.ValidateAccessRules(fsRules, configPath, managedPaths); err != nil {
 		return nil, fmt.Errorf("validate rules: %w", err)
 	}
 
-	if err := netrules.Validate(netRules); err != nil {
+	if err := netrules.ValidateAccessRules(netRules); err != nil {
+		return nil, fmt.Errorf("validate rules: %w", err)
+	}
+
+	if err := fsrules.ValidateLogRules(fsLogRules); err != nil {
+		return nil, fmt.Errorf("validate rules: %w", err)
+	}
+
+	if err := netrules.ValidateLogRules(netLogRules); err != nil {
 		return nil, fmt.Errorf("validate rules: %w", err)
 	}
 
 	return &Config{
 		FSRules:      fsRules,
 		NetRules:     netRules,
+		FSLogRules:   fsLogRules,
+		NetLogRules:  netLogRules,
 		ManagedPaths: managedPaths,
 	}, nil
 }
 
 // parseRules routes each raw rule string to the appropriate parser based on resource prefix.
-func parseRules(rawRules []string, configDir string) ([]fsrules.Rule, []netrules.Rule, error) {
-	fsRules := make([]fsrules.Rule, 0)
-	netRules := make([]netrules.Rule, 0)
+// FS log rules (fs:log:, fs:nolog:) and net log rules (net:log:, net:nolog:) are routed
+// to their respective log rule parsers; access rules go to the standard parsers.
+func parseRules(rawRules []string, configDir string) ([]fsrules.AccessRule, []netrules.AccessRule, []fsrules.LogRule, []netrules.LogRule, error) {
+	fsAccessRules := make([]fsrules.AccessRule, 0)
+	netAccessRules := make([]netrules.AccessRule, 0)
+	fsLogRules := make([]fsrules.LogRule, 0)
+	netLogRules := make([]netrules.LogRule, 0)
 
 	for i, rawRule := range rawRules {
 		// Split on first colon to get resource prefix
 		before, after, ok := strings.Cut(rawRule, ":")
 		if !ok {
-			return nil, nil, fmt.Errorf("rule %d: malformed rule %q (expected format: resource:...)", i, rawRule)
+			return nil, nil, nil, nil, fmt.Errorf("rule %d: malformed rule %q (expected format: resource:...)", i, rawRule)
 		}
 
 		resourcePrefix := before
@@ -131,23 +149,43 @@ func parseRules(rawRules []string, configDir string) ([]fsrules.Rule, []netrules
 
 		switch resourcePrefix {
 		case "fs":
-			rule, err := fsrules.Parse(ruleBody, configDir)
-			if err != nil {
-				return nil, nil, fmt.Errorf("rule %d: %w", i, err)
+			action, _, _ := strings.Cut(ruleBody, ":")
+			if action == "log" || action == "nolog" {
+				rule, err := fsrules.ParseLogRule(ruleBody, configDir)
+				if err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
+				}
+				rule.RawRule = rawRule
+				fsLogRules = append(fsLogRules, rule)
+			} else {
+				rule, err := fsrules.ParseAccessRule(ruleBody, configDir)
+				if err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
+				}
+				rule.RawRule = rawRule
+				fsAccessRules = append(fsAccessRules, rule)
 			}
-			rule.RawRule = rawRule
-			fsRules = append(fsRules, rule)
 		case "net":
-			rule, err := netrules.Parse(ruleBody)
-			if err != nil {
-				return nil, nil, fmt.Errorf("rule %d: %w", i, err)
+			action, _, _ := strings.Cut(ruleBody, ":")
+			if action == "log" || action == "nolog" {
+				rule, err := netrules.ParseLogRule(ruleBody)
+				if err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
+				}
+				rule.RawRule = rawRule
+				netLogRules = append(netLogRules, rule)
+			} else {
+				rule, err := netrules.ParseAccessRule(ruleBody)
+				if err != nil {
+					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
+				}
+				rule.RawRule = rawRule
+				netAccessRules = append(netAccessRules, rule)
 			}
-			rule.RawRule = rawRule
-			netRules = append(netRules, rule)
 		default:
-			return nil, nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs' or 'net')", i, resourcePrefix)
+			return nil, nil, nil, nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs' or 'net')", i, resourcePrefix)
 		}
 	}
 
-	return fsRules, netRules, nil
+	return fsAccessRules, netAccessRules, fsLogRules, netLogRules, nil
 }

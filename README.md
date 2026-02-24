@@ -26,6 +26,8 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 **Network rules:** `net:<protocol>:<target>:<port>` where protocol is `https`, `http`, or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
+**Log visibility rules:** Control which entries appear in the monitor web UI. `fs:log:<path>` / `fs:nolog:<path>` show/hide filesystem entries; `net:log:<target>:<port>` / `net:nolog:<target>:<port>` show/hide network entries. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
+
 ```toml
 rules = [
   "fs:ro:/usr",
@@ -39,6 +41,9 @@ rules = [
   "net:https:api.example.com:443",
   "net:http:*.internal.corp:*",
   "net:none:evil.example.com:443",
+
+  "fs:nolog:/etc/fonts",            # hide known-harmless denied reads in monitor
+  "net:nolog:telemetry.example.com:*",
 ]
 ```
 
@@ -71,6 +76,8 @@ The browser opens automatically. It displays access log entries as they happen:
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
 **Real-time updates:** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
+
+**Filtering:** By default the web UI shows only denied entries ("Denied only" is checked). Uncheck it to see all entries. If nolog rules are configured, matching entries are also hidden; uncheck "Apply nolog rules" to reveal them.
 
 **Config editor:** The web UI includes an editable TOML textarea. Edit the config and click Start to restart the sandbox with the new rules. Click Save to write the config to disk, or Revert to reset to the last saved version.
 

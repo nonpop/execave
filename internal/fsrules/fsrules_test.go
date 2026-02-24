@@ -23,7 +23,7 @@ func TestParseRule_Valid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, err := Parse(tt.rule, "/tmp")
+			rule, err := ParseAccessRule(tt.rule, "/tmp")
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expectedPerm, rule.Permission)
@@ -44,14 +44,14 @@ func TestParseRule_InvalidFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse(tt.rule, "/tmp")
+			_, err := ParseAccessRule(tt.rule, "/tmp")
 			assert.ErrorContains(t, err, "malformed rule")
 		})
 	}
 }
 
 func TestParseRule_InvalidPermission(t *testing.T) {
-	_, err := Parse("readonly:/path", "/tmp")
+	_, err := ParseAccessRule("readonly:/path", "/tmp")
 	assert.ErrorContains(t, err, "invalid permission type")
 }
 

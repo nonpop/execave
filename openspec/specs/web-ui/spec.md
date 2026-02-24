@@ -18,24 +18,28 @@ The web UI server SHALL bind to `127.0.0.1` on an OS-assigned random port. Start
 
 ### Requirement: Access log page
 
-GET / SHALL return an HTML page displaying all access log entries in a table with columns: operation type, target, result, and matched rule. The page SHALL include all entries from the Logger at the time of the request. Filesystem target paths SHALL be displayed in shortened form (relative to config directory if under it, otherwise `~/...` form if under home directory, otherwise absolute). Rule strings SHALL be shown verbatim as stored in `Entry.Rule`.
+GET / SHALL return an HTML page displaying access log entries in a table with columns: operation type, target, result, and matched rule. The page SHALL include all entries from the Logger at the time of the request. Filesystem target paths SHALL be displayed in shortened form (relative to config directory if under it, otherwise `~/...` form if under home directory, otherwise absolute). Rule strings SHALL be shown verbatim as stored in `Entry.Rule`. By default, only DENY and UNKNOWN entries are visible; OK entries are hidden by the "Denied only" filter. Entries matching nolog rules are hidden by the "Apply nolog rules" filter. The page SHALL include checkboxes to toggle both filters.
 
 #### Scenario: Page displays entries
+
 - **WHEN** Logger contains entry (READ, `/tmp/data/file.txt`, OK, `fs:ro:/tmp/data`)
 - **AND** GET / is requested
 - **THEN** response contains a table row with operation `READ`, target `/tmp/data/file.txt`, result `OK`, and rule `fs:ro:/tmp/data`
 
 #### Scenario: Page displays all entry types
+
 - **WHEN** Logger contains READ, WRITE, HTTPS, and DENY entries
 - **AND** GET / is requested
-- **THEN** all entry types are visible in the response
+- **THEN** all entry types are present in the response (some may be hidden by default filters)
 
 #### Scenario: Page refresh shows current entries
+
 - **WHEN** Logger contains entries
 - **AND** GET / is requested twice
 - **THEN** both responses contain all entries
 
 #### Scenario: Filesystem target path shortened to relative form
+
 - **WHEN** config is at `/home/user/project/execave.toml`
 - **AND** Logger contains entry (READ, `/home/user/project/src/main.go`, OK, `fs:rw:~/project`)
 - **AND** GET / is requested
@@ -43,15 +47,107 @@ GET / SHALL return an HTML page displaying all access log entries in a table wit
 - **AND** the rule column displays `fs:rw:~/project`
 
 #### Scenario: Filesystem target path shortened to tilde form
+
 - **WHEN** config is at `/home/user/project/execave.toml`
 - **AND** Logger contains entry (READ, `/home/user/.ssh/id_rsa`, DENY, `no-matching-rule`)
 - **AND** GET / is requested
 - **THEN** the target column displays `~/.ssh/id_rsa`
 
 #### Scenario: Non-filesystem target paths not shortened
+
 - **WHEN** Logger contains entry (HTTPS, `api.example.com:443`, OK, `net:https:api.example.com:443`)
 - **AND** GET / is requested
 - **THEN** the target column displays `api.example.com:443` unchanged
+
+#### Scenario: Filter checkboxes displayed
+
+- **WHEN** GET / is requested
+- **THEN** the page contains a "Denied only" checkbox (checked by default) and an "Apply nolog rules" checkbox (checked by default)
+
+### Requirement: Denied-only filter
+
+The web UI SHALL display only DENY and UNKNOWN entries by default. A "Denied only" checkbox (default: checked) SHALL control this filter. When unchecked, OK entries are also displayed. The filter SHALL apply to both the initial page render and dynamically streamed SSE entries.
+
+#### Scenario: Default view hides OK entries
+
+- **WHEN** Logger contains entries with results OK, DENY, and UNKNOWN
+- **AND** GET / is requested
+- **THEN** only DENY and UNKNOWN entries are visible in the rendered page
+
+#### Scenario: Unchecking denied-only reveals OK entries
+
+- **WHEN** the client unchecks the "Denied only" checkbox
+- **THEN** OK entries become visible without page reload
+
+#### Scenario: Re-checking denied-only hides OK entries
+
+- **WHEN** the client re-checks the "Denied only" checkbox
+- **THEN** OK entries are hidden again without page reload
+
+### Requirement: Nolog filter
+
+The web UI SHALL apply log rule resolution to determine entry visibility. A "Apply nolog rules" checkbox (default: checked) SHALL control this filter. When checked, entries whose target matches a `nolog` rule (and is not overridden by a more specific `log` rule) are hidden. When unchecked, all entries are shown regardless of log rules. The filter SHALL apply to both the initial page render and dynamically streamed SSE entries.
+
+#### Scenario: Nolog rule hides matching entries
+
+- **WHEN** config contains `fs:nolog:/home/user/project`
+- **AND** Logger contains a DENY entry for `/home/user/project/cache/data`
+- **AND** GET / is requested with "Apply nolog rules" checked
+- **THEN** the entry is not visible
+
+#### Scenario: Unchecking nolog filter reveals suppressed entries
+
+- **WHEN** config contains `fs:nolog:/home/user/project`
+- **AND** Logger contains entries for paths under `/home/user/project`
+- **AND** the client unchecks the "Apply nolog rules" checkbox
+- **THEN** suppressed entries become visible without page reload
+
+#### Scenario: Log rule override makes entry visible despite nolog
+
+- **WHEN** config contains `fs:nolog:/home/user/project` and `fs:log:/home/user/project/secret`
+- **AND** Logger contains a DENY entry for `/home/user/project/secret/key.pem`
+- **AND** GET / is requested with "Apply nolog rules" checked
+- **THEN** the entry is visible (log rule overrides nolog)
+
+### Requirement: Independent filter axes
+
+The denied-only filter and nolog filter SHALL operate independently. An entry must pass both filters to be displayed. Neither filter overrides the other.
+
+#### Scenario: OK entry hidden even when nolog says visible
+
+- **WHEN** "Denied only" is checked and "Apply nolog rules" is checked
+- **AND** Logger contains an OK entry for a path not matching any nolog rule
+- **THEN** the entry is hidden (blocked by mode filter, even though nolog filter passes)
+
+#### Scenario: Nolog entry hidden even when mode says visible
+
+- **WHEN** "Denied only" is unchecked (show all) and "Apply nolog rules" is checked
+- **AND** Logger contains an OK entry matching a nolog rule
+- **THEN** the entry is hidden (blocked by nolog filter, even though mode filter passes)
+
+#### Scenario: Entry visible only when both filters pass
+
+- **WHEN** "Denied only" is unchecked and "Apply nolog rules" is unchecked
+- **AND** Logger contains entries of all result types including nolog matches
+- **THEN** all entries are visible
+
+### Requirement: SSE entry events include nolog metadata
+
+SSE entry events SHALL include a `nolog` boolean field indicating whether the entry matches a nolog rule (as resolved by the log rule resolvers). The client uses this field to apply or skip nolog filtering without re-resolving rules.
+
+#### Scenario: SSE entry event with nolog=true
+
+- **WHEN** config contains `fs:nolog:/home/user/project`
+- **AND** a new entry for `/home/user/project/cache/data` is logged
+- **AND** a client is connected to GET /events
+- **THEN** the SSE entry event contains `"nolog":true`
+
+#### Scenario: SSE entry event with nolog=false
+
+- **WHEN** no log rule matches the entry's target
+- **AND** a new entry is logged
+- **AND** a client is connected to GET /events
+- **THEN** the SSE entry event contains `"nolog":false`
 
 ### Requirement: Path shortening for display
 
@@ -98,7 +194,7 @@ SSE entry events dispatched via GET /events SHALL include the target path in sho
 
 ### Requirement: Real-time entry streaming
 
-New access log entries SHALL be streamed to connected clients via Server-Sent Events (SSE) at GET /events?from=N. The `from` parameter specifies the entry index to start from. Each SSE event SHALL include an `id` field in the format `<sessionID>:<index>`.
+New access log entries SHALL be streamed to connected clients via Server-Sent Events (SSE) at GET /events?from=N. The `from` parameter specifies the entry index to start from. Each SSE event SHALL include an `id` field containing the numeric entry index.
 
 #### Scenario: New entries streamed via SSE
 - **WHEN** client is connected to `/events`
@@ -113,7 +209,7 @@ New access log entries SHALL be streamed to connected clients via Server-Sent Ev
 
 ### Requirement: No entries dropped between page load and SSE
 
-The page render SHALL include the current entry count and session ID. The SSE endpoint SHALL support a `from` query parameter to replay from a specific index. On reconnection with a `Last-Event-ID` header containing the same session ID, the server SHALL resume from the next entry after the last received. Cross-session reconnects (different or malformed session ID) SHALL replay from entry 0.
+The page render SHALL include the current entry count. The SSE endpoint SHALL support a `from` query parameter to replay from a specific index. On reconnection with a numeric `Last-Event-ID` header, the server SHALL resume from the next entry after the last received index. Stale reconnects (where the Last-Event-ID exceeds the current entry count) SHALL send a `clear` event and replay all entries from 0. Malformed (non-numeric) Last-Event-ID values SHALL replay from entry 0.
 
 #### Scenario: Entries during page-to-SSE gap not lost
 - **WHEN** GET / returns page with entry count 50
@@ -122,27 +218,32 @@ The page render SHALL include the current entry count and session ID. The SSE en
 - **THEN** SSE stream includes entries 50 and 51
 
 #### Scenario: SSE reconnection uses Last-Event-ID
-- **WHEN** client reconnects with Last-Event-ID `<sessionID>:75` from the same session
+- **WHEN** client reconnects with Last-Event-ID `75`
 - **THEN** server resumes streaming from entry 76
 
-#### Scenario: Cross-session reconnect replays from start
-- **WHEN** client connects with Last-Event-ID from a different session or with malformed format
+#### Scenario: Stale reconnect replays from start
+- **WHEN** client connects with Last-Event-ID exceeding the current entry count
+- **THEN** server sends a `clear` event
+- **AND** SSE stream replays all entries from entry 0
+
+#### Scenario: Malformed Last-Event-ID replays from start
+- **WHEN** client connects with a non-numeric Last-Event-ID
 - **THEN** SSE stream replays all entries from entry 0
 
 ### Requirement: Run status display
 
 The `StatusProvider` interface and `RunStatus` type move to the `runner` package. The web UI reads status from `*runner.Runner` directly. The display behavior is unchanged — only the source of the data changes. Tests that construct a `MockStatus` implementing `StatusProvider` should use `*runner.Runner` with test helpers instead.
 
-GET / SHALL display the current run status: the sandboxed command, whether the process is running, and (if exited) its exit code. Status updates SHALL be delivered via SSE status events. The command SHALL be included in the RunStatus so that cross-session reconnects display the correct command. The web UI reads status from `*runner.Runner` directly.
+GET / SHALL display the current run status: the sandboxed command, whether the process is running, and (if exited) its exit code. Status updates SHALL be delivered via SSE status events. The command SHALL be included in the RunStatus so that stale reconnects display the correct command. The web UI reads status from `*runner.Runner` directly.
 
 #### Scenario: Command shown in page
 - **WHEN** the runner has command `echo hello`
 - **AND** GET / is requested
 - **THEN** response contains `echo hello`
 
-#### Scenario: Cross-session reconnect delivers current command
-- **WHEN** client connects to `/events` with Last-Event-ID from a different session
-- **THEN** status event in the SSE stream contains the current command
+#### Scenario: Stale reconnect delivers current command
+- **WHEN** client connects to `/events` with a stale Last-Event-ID exceeding the current entry count
+- **THEN** server sends a `clear` event followed by a status event containing the current command
 
 #### Scenario: Running status shown
 - **WHEN** the runner reports Running=true
@@ -182,6 +283,12 @@ The web UI SHALL expose POST /api/start to start a new monitored run, POST /api/
 - **THEN** response status is 200
 - **AND** the previous run is stopped
 - **AND** a new run starts with a fresh access log using the submitted config
+
+#### Scenario: Restart sends clear event to SSE clients
+
+- **WHEN** POST /api/start is called with valid TOML config
+- **AND** an SSE client is connected
+- **THEN** the SSE client receives a `clear` event signaling that previous log entries should be discarded
 
 #### Scenario: Start with invalid config rejected
 
@@ -244,7 +351,7 @@ GET / SHALL display an editable textarea containing the raw TOML config file (ve
 
 ### Requirement: Config SSE event
 
-The SSE stream SHALL include a `config` event containing a JSON object with `draft` and `saved` fields, both containing the full TOML config text. This event SHALL be sent at the start of each SSE connection (in the initial burst: session, status, config, entries). The `draft` field contains the current server-side draft content; the `saved` field contains the last-saved content. Clients use these to populate the textarea and determine whether the config has been modified.
+The SSE stream SHALL include a `config` event containing a JSON object with `draft` and `saved` fields, both containing the full TOML config text. This event SHALL be sent at the start of each SSE connection (in the initial burst: status, config, entries). The `draft` field contains the current server-side draft content; the `saved` field contains the last-saved content. Clients use these to populate the textarea and determine whether the config has been modified.
 
 #### Scenario: Config event sent on SSE connect
 

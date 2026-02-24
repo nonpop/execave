@@ -1,9 +1,9 @@
 # execave TODOs
 
-- show only denied entries by default
-- allow configuring "don't log" (fs:nolog:..., net:nolog:...)
 - maybe use a simple "mini-react" library?
 - UI should indicate which config version is currently running
+- need a way to show log even if browser doesn't auto-open & tui covers terminal
+- how to get realtime denied notifications?
 
 ## easy, probably
 

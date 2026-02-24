@@ -1,18 +1,4 @@
-# Config Capability
-
-## Purpose
-
-The config capability loads and parses the execave configuration file. It reads TOML, routes rules to the appropriate engine by resource prefix (`fs:` or `net:`), and rejects unrecognized or malformed input at load time.
-
-## Requirements
-
-### Requirement: Config file location
-
-`config.Load` SHALL accept an explicit file path. If the file does not exist, it SHALL return an error.
-
-#### Scenario: Config file not found
-- **WHEN** the config file does not exist at the given path
-- **THEN** Load returns an error containing "config file not found"
+## MODIFIED Requirements
 
 ### Requirement: Config file format
 
@@ -40,18 +26,22 @@ The config file SHALL be valid TOML containing a `rules` array of strings. Rules
 - **THEN** Load returns a config with no FS rules, no net rules, no FS log rules, and no net log rules
 
 #### Scenario: Unknown resource type
+
 - **WHEN** config contains rule `"dns:allow:example.com"`
 - **THEN** Load returns an error containing "unknown resource type"
 
 #### Scenario: Invalid rule rejected at config load
+
 - **WHEN** config contains rule `"net:https:example.com"` (missing port segment)
 - **THEN** Load returns an error containing "malformed rule"
 
 #### Scenario: Config with comments
+
 - **WHEN** config contains TOML line comments (`#`) and inline comments
 - **THEN** Load parses successfully, ignoring all comments
 
 #### Scenario: Config with trailing comma
+
 - **WHEN** config contains a rules array with a trailing comma after the last element
 - **THEN** Load parses successfully
 
@@ -118,49 +108,3 @@ The config file SHALL be valid TOML containing a `rules` array of strings. Rules
 
 - **WHEN** ParseRules is called with a configPath that is not an absolute path (e.g., `"execave.toml"`)
 - **THEN** ParseRules panics
-
-### Requirement: Parse TOML from bytes
-
-`config.ParseTOML` SHALL accept raw TOML bytes, a configDir, a configPath, and managedPaths, and return a validated `*Config`. It SHALL unmarshal the TOML, extract the `rules` array, and delegate to `ParseRules` with the same configDir, configPath, and managedPaths. It SHALL apply all validation that `Load` applies. `Load` SHALL delegate to `ParseTOML` internally, so that `Load` and `ParseTOML` produce identical results for the same input.
-
-#### Scenario: Valid TOML parsed from bytes
-
-- **WHEN** ParseTOML is called with bytes containing `rules = ["fs:ro:/usr/bin", "net:https:example.com:443"]`, a valid configDir, an absolute configPath, and nil managedPaths
-- **THEN** it returns a Config with 1 FS rule and 1 net rule
-
-#### Scenario: Empty TOML produces empty Config
-
-- **WHEN** ParseTOML is called with empty bytes
-- **THEN** it returns a Config with no FS rules and no net rules
-
-#### Scenario: Invalid TOML rejected
-
-- **WHEN** ParseTOML is called with bytes that are not valid TOML
-- **THEN** it returns an error
-
-#### Scenario: Invalid rule rejected via ParseTOML
-
-- **WHEN** ParseTOML is called with bytes containing `rules = ["badprefix:something"]`
-- **THEN** it returns an error containing "unknown resource type"
-
-#### Scenario: ParseTOML produces identical result to Load
-
-- **WHEN** a TOML file contains `rules = ["fs:ro:/usr/bin", "net:https:example.com:443"]`
-- **AND** Load is called with that file path and managedPaths
-- **AND** ParseTOML is called with the file's bytes, the file's directory, the absolute file path, and the same managedPaths
-- **THEN** both return equivalent Config structs (same FSRules, NetRules, and ManagedPaths)
-
-#### Scenario: TOML with comments parsed from bytes
-
-- **WHEN** ParseTOML is called with bytes containing TOML comments and `rules = ["fs:ro:/usr/bin"]`
-- **THEN** it returns a Config with 1 FS rule (comments are ignored)
-
-### Requirement: Load delegates to ParseRules
-
-`config.Load` SHALL produce identical results to calling ParseRules with the same rule strings, configDir, configPath, and managedPaths. Load SHALL remain the file-based entry point; ParseRules SHALL be the non-I/O entry point.
-
-#### Scenario: Load and ParseRules produce identical Config
-- **WHEN** a TOML file contains `rules = ["fs:ro:/usr/bin", "net:https:example.com:443"]`
-- **AND** Load is called with that file path
-- **AND** ParseRules is called with the same raw rules, configDir derived from the file, the absolute file path, and the same managedPaths
-- **THEN** both return equivalent Config structs (same FSRules, NetRules, and ManagedPaths)

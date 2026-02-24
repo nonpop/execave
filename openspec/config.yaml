@@ -7,6 +7,7 @@ context: |
   Config: TOML format. Default filename: execave.toml. FS rules support tilde expansion (~/... → home dir) and relative paths (resolved against config dir).
   Network: Default-deny (no NIC). When net rules present or monitoring enabled: forward proxy on UDS + TCP-to-UDS tunnel bridge. Proxy enforces allowlist (deny-all with no net rules).
   Monitoring: --monitor=PORT starts localhost web UI with real-time access log via SSE and run control (start/stop/restart). Runner manages monitored sandbox lifecycle, creates fresh access log per run. Server survives sandbox exit for log review. Filesystem paths in web UI shortened to relative (vs config dir) or tilde form.
+  Log visibility rules: fs:log/fs:nolog and net:log/net:nolog control display filtering in the web UI (display-only, no security impact). fs log rules use longest-prefix-match. net log rules use single-dimension target specificity (same as access rules). Default (no matching log rule) = show entry. Two independent UI toggles: "Denied only" (default on, hides OK entries) and "Apply nolog rules" (default on, applies log/nolog filtering). All entries are stored in the Logger regardless of log rules.
 
 rules:
   proposal:

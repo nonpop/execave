@@ -20,7 +20,7 @@ import (
 
 // Monitor wraps command execution with strace to log filesystem access.
 type Monitor struct {
-	resolver       *fsrules.Resolver
+	resolver       *fsrules.AccessResolver
 	logger         *accesslog.Logger
 	bwrapArgs      []string // strace wraps bwrap
 	hasNetworkPath bool     // tunnel adds an extra execve to setup
@@ -41,7 +41,7 @@ const (
 // New creates a new Monitor.
 // bwrapArgs configures sandbox integration. If empty, strace traces the command directly.
 // hasNetworkPath indicates whether the sandbox has a network tunnel (adds an extra execve to setup).
-func New(logger *accesslog.Logger, resolver *fsrules.Resolver, bwrapArgs []string, hasNetworkPath bool) *Monitor {
+func New(logger *accesslog.Logger, resolver *fsrules.AccessResolver, bwrapArgs []string, hasNetworkPath bool) *Monitor {
 	return &Monitor{
 		logger:         logger,
 		resolver:       resolver,
@@ -419,7 +419,7 @@ func (m *Monitor) logPathAccess(
 	opType OperationType,
 	path string,
 	allowed bool,
-	rule *fsrules.Rule,
+	rule *fsrules.AccessRule,
 	errorContext string,
 ) error {
 	// Map monitor OperationType to accesslog OperationType

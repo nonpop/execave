@@ -32,7 +32,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 	cfg := setupConfig(tmpDir)
 
 	logger := accesslog.New(cfg.ManagedPaths)
-	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	mon := New(logger, resolver, nil, false)
 
 	return &monitorTestEnv{
@@ -72,8 +72,8 @@ func (e *monitorTestEnv) logLines() []string {
 	return strings.Split(strings.TrimSpace(e.readLog()), "\n")
 }
 
-func roRule(path string) fsrules.Rule {
-	return fsrules.Rule{
+func roRule(path string) fsrules.AccessRule {
+	return fsrules.AccessRule{
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
@@ -85,7 +85,7 @@ func roRule(path string) fsrules.Rule {
 func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
 	t.Helper()
 	logger := accesslog.New(cfg.ManagedPaths)
-	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	return New(logger, resolver, bwrapArgs, false), logger
 }
 
@@ -108,8 +108,8 @@ func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
 	t.Errorf("no line found containing all components: %v", components)
 }
 
-func rwRule(path string) fsrules.Rule {
-	return fsrules.Rule{
+func rwRule(path string) fsrules.AccessRule {
+	return fsrules.AccessRule{
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,
@@ -124,7 +124,7 @@ func TestMonitor_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(testFile)},
+			FSRules:      []fsrules.AccessRule{roRule(testFile)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -179,7 +179,7 @@ func TestMonitor_WriteOperation(t *testing.T) {
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -202,7 +202,7 @@ func TestMonitor_Deduplication(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:      []fsrules.Rule{roRule(testFile)},
+			FSRules:      []fsrules.AccessRule{roRule(testFile)},
 			NetRules:     nil,
 			ManagedPaths: nil,
 		}
@@ -299,7 +299,7 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 // until the user command's execve is detected.
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule("/usr")},
+		FSRules:      []fsrules.AccessRule{roRule("/usr")},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -393,7 +393,7 @@ func TestBuildStraceArgs(t *testing.T) {
 // testSymlinkAccessHelper sets up a symlink test scenario and validates the access log.
 func testSymlinkAccessHelper(
 	t *testing.T,
-	configRules []fsrules.Rule,
+	configRules []fsrules.AccessRule,
 	straceFlags string,
 	expectedHopOp, expectedTargetOp string,
 ) {
@@ -438,7 +438,7 @@ func testSymlinkAccessHelper(
 func TestMonitor_SymlinkWithinMount(t *testing.T) {
 	// Use /home prefix to avoid /tmp managed path filtering
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []fsrules.Rule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
+	testSymlinkAccessHelper(t, []fsrules.AccessRule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
 }
 
 func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
@@ -464,7 +464,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(mountDir)},
+		FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -494,7 +494,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 
 func TestMonitor_SymlinkWriteOperation(t *testing.T) {
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []fsrules.Rule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
+	testSymlinkAccessHelper(t, []fsrules.AccessRule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
 }
 
 func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
@@ -520,7 +520,7 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
+		FSRules:      []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -568,7 +568,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{rwRule(mountDir)},
+		FSRules:      []fsrules.AccessRule{rwRule(mountDir)},
 		NetRules:     nil,
 		ManagedPaths: []string{managedDir},
 	}
@@ -613,7 +613,7 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(testBase)},
+		FSRules:      []fsrules.AccessRule{roRule(testBase)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -670,7 +670,7 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -719,7 +719,7 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(dirA), roRule(dirB)},
+		FSRules:      []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -753,7 +753,7 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(hostDir, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(projectDir)},
+		FSRules:      []fsrules.AccessRule{roRule(projectDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -786,7 +786,7 @@ func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -813,7 +813,7 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -863,7 +863,7 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -893,7 +893,7 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -944,7 +944,7 @@ func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}

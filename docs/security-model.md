@@ -100,6 +100,15 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 - **Testing:** Use `--monitor` to audit actual access patterns before trusting a config.
 - **Incident:** Check file modifications (timestamps, git status) → review config → assess if access was excessive. (`--monitor` too expensive for regular use, so syscall logs typically unavailable.)
 
+## Log Visibility Rules
+
+`fs:log`/`fs:nolog` and `net:log`/`net:nolog` rules control which entries are displayed in the web UI. They are **display-only** and have no effect on:
+- Access enforcement (bwrap mounts, proxy allow/deny)
+- The Logger (all entries are stored unconditionally)
+- The sandbox boundary or bwrap invocation
+
+These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress entries does not grant or restrict access to that path; the underlying `fs:ro`/`fs:none`/etc. access rule still applies. Users can always toggle off "Apply nolog rules" in the web UI to see suppressed entries.
+
 ## Limitations
 
 - No protection against privileged attackers (root, config modification)

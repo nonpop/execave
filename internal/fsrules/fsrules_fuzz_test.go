@@ -32,7 +32,7 @@ func FuzzParseRule(f *testing.F) {
 			configDir = "/fuzz" + configDir
 		}
 
-		rule, err := Parse(ruleStr, configDir)
+		rule, err := ParseAccessRule(ruleStr, configDir)
 		if err != nil {
 			return // Invalid input is fine
 		}

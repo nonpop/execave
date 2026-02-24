@@ -31,6 +31,24 @@ func TestIntegration_ConfigFileFormat_ValidConfigWithFsAndNetRules(t *testing.T)
 	assert.Len(t, cfg.NetRules, 1)
 }
 
+func TestIntegration_ConfigFileFormat_ValidConfigWithLogRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/bin", "fs:nolog:/usr/bin", "net:https:api.example.com:443", "net:nolog:*.example.com:*"]`)
+
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Len(t, cfg.FSLogRules, 1)
+	assert.Len(t, cfg.NetRules, 1)
+	assert.Len(t, cfg.NetLogRules, 1)
+}
+
+func TestIntegration_ConfigFileFormat_EmptyRulesArrayHasNoLogRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `rules = []`)
+
+	require.NoError(t, err)
+	assert.Empty(t, cfg.FSLogRules)
+	assert.Empty(t, cfg.NetLogRules)
+}
+
 func TestIntegration_ConfigFileFormat_EmptyRulesArray(t *testing.T) {
 	cfg, err := loadTestConfig(t, `rules = []`)
 
@@ -86,12 +104,48 @@ func TestIntegration_ParseRules_ValidFsAndNetRules(t *testing.T) {
 	assert.Len(t, cfg.NetRules, 1)
 }
 
+func TestIntegration_ParseRules_LogRulesParsedFromStrings(t *testing.T) {
+	cfg, err := config.ParseRules(
+		[]string{"fs:nolog:/usr/lib", "net:nolog:*.example.com:*"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSLogRules, 1)
+	assert.Len(t, cfg.NetLogRules, 1)
+}
+
+func TestIntegration_ParseRules_TildeExpansionInFsLogRulePath(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	cfg, err := config.ParseRules(
+		[]string{"fs:nolog:~/projects"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, cfg.FSLogRules, 1)
+	assert.Equal(t, homeDir+"/projects", cfg.FSLogRules[0].Path)
+}
+
+func TestIntegration_ParseRules_DuplicateFsLogRulePathsRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"fs:nolog:/usr/bin", "fs:log:/usr/bin"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	assert.ErrorContains(t, err, "duplicate path")
+}
+
 func TestIntegration_ParseRules_EmptyRulesProduceEmptyConfig(t *testing.T) {
 	cfg, err := config.ParseRules([]string{}, "/some/dir", "/some/dir/execave.toml", nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, cfg.FSRules)
 	assert.Empty(t, cfg.NetRules)
+	assert.Empty(t, cfg.FSLogRules)
+	assert.Empty(t, cfg.NetLogRules)
 }
 
 func TestIntegration_ParseRules_InvalidRuleRejected(t *testing.T) {

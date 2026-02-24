@@ -13,8 +13,8 @@ import (
 	"strings"
 )
 
-// Rule represents a parsed filesystem access rule.
-type Rule struct {
+// AccessRule represents a parsed filesystem access rule.
+type AccessRule struct {
 	Permission Permission
 	Path       string
 	RawRule    string // Original rule for error messages and logging
@@ -34,14 +34,14 @@ const (
 	PermissionNone
 )
 
-// Parse parses a rule body in the format "permission:path".
+// ParseAccessRule parses an access rule body in the format "permission:path".
 // The resource prefix (e.g., "fs:") must be stripped by the caller before passing.
 // Relative paths are resolved relative to configDir.
-func Parse(ruleBody, configDir string) (Rule, error) {
+func ParseAccessRule(ruleBody, configDir string) (AccessRule, error) {
 	const expectedParts = 2
 	parts := strings.SplitN(ruleBody, ":", expectedParts)
 	if len(parts) != expectedParts {
-		return Rule{}, fmt.Errorf("malformed rule %q (expected format: permission:path)", ruleBody)
+		return AccessRule{}, fmt.Errorf("malformed rule %q (expected format: permission:path)", ruleBody)
 	}
 
 	permStr := parts[0]
@@ -56,15 +56,15 @@ func Parse(ruleBody, configDir string) (Rule, error) {
 	case "none":
 		perm = PermissionNone
 	default:
-		return Rule{}, fmt.Errorf("invalid permission type %q (must be 'ro', 'rw', or 'none')", permStr)
+		return AccessRule{}, fmt.Errorf("invalid permission type %q (must be 'ro', 'rw', or 'none')", permStr)
 	}
 
 	normalizedPath, err := normalizePath(path, configDir)
 	if err != nil {
-		return Rule{}, err
+		return AccessRule{}, err
 	}
 
-	return Rule{
+	return AccessRule{
 		Permission: perm,
 		Path:       normalizedPath,
 		RawRule:    ruleBody,
@@ -98,10 +98,10 @@ func normalizePath(path, configDir string) (string, error) {
 	return filepath.Clean(path), nil
 }
 
-// Validate performs cross-rule validation: checks for duplicate paths,
+// ValidateAccessRules performs cross-rule validation: checks for duplicate paths,
 // ensures config file is not writable, and ensures no rules target managed paths.
-func Validate(rules []Rule, configPath string, managedPaths []string) error {
-	if err := validateNoDuplicates(rules); err != nil {
+func ValidateAccessRules(rules []AccessRule, configPath string, managedPaths []string) error {
+	if err := validateNoDuplicateAccessPaths(rules); err != nil {
 		return err
 	}
 
@@ -116,9 +116,9 @@ func Validate(rules []Rule, configPath string, managedPaths []string) error {
 	return nil
 }
 
-// validateNoDuplicates rejects configs with duplicate paths.
-func validateNoDuplicates(rules []Rule) error {
-	seen := make(map[string]Rule)
+// validateNoDuplicateAccessPaths rejects configs with duplicate paths in access rules.
+func validateNoDuplicateAccessPaths(rules []AccessRule) error {
+	seen := make(map[string]AccessRule)
 	for _, rule := range rules {
 		if existing, ok := seen[rule.Path]; ok {
 			return fmt.Errorf("duplicate path %q: rules %q and %q",
@@ -130,7 +130,7 @@ func validateNoDuplicates(rules []Rule) error {
 }
 
 // validateConfigNotWritable rejects configs that explicitly list the config file as writable.
-func validateConfigNotWritable(rules []Rule, configPath string) error {
+func validateConfigNotWritable(rules []AccessRule, configPath string) error {
 	for _, rule := range rules {
 		if rule.Path == configPath && rule.Permission == PermissionReadWrite {
 			return fmt.Errorf("config file must not be writable: rule %q", rule.RawRule)
@@ -140,7 +140,7 @@ func validateConfigNotWritable(rules []Rule, configPath string) error {
 }
 
 // validateNoManagedPaths rejects rules targeting paths the sandbox manages automatically.
-func validateNoManagedPaths(rules []Rule, managedPaths []string) error {
+func validateNoManagedPaths(rules []AccessRule, managedPaths []string) error {
 	for _, rule := range rules {
 		for _, managed := range managedPaths {
 			if rule.Path == managed || strings.HasPrefix(rule.Path, managed+string(filepath.Separator)) {

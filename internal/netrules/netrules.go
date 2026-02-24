@@ -55,8 +55,8 @@ type port struct {
 	number     uint16 // Port number. Only meaningful when isWildcard is false.
 }
 
-// Rule represents a parsed network access rule.
-type Rule struct {
+// AccessRule represents a parsed network access rule.
+type AccessRule struct {
 	protocol  protocol
 	target    target
 	port      port
@@ -65,35 +65,35 @@ type Rule struct {
 	rawPort   string // Raw port string ("443" or "*") for validation identity.
 }
 
-// Parse parses a rule body in the format "action:target:port".
+// ParseAccessRule parses an access rule body in the format "action:target:port".
 // The resource prefix ("net:") must be stripped by the caller before passing.
-func Parse(ruleBody string) (Rule, error) {
+func ParseAccessRule(ruleBody string) (AccessRule, error) {
 	action, rest, ok := strings.Cut(ruleBody, ":")
 	if !ok {
-		return Rule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
+		return AccessRule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
 	}
 
 	protocol, err := parseProtocol(action)
 	if err != nil {
-		return Rule{}, err
+		return AccessRule{}, err
 	}
 
 	targetStr, portStr, err := splitTargetPort(rest)
 	if err != nil {
-		return Rule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
+		return AccessRule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
 	}
 
 	parsedPort, rawPort, err := parsePort(portStr)
 	if err != nil {
-		return Rule{}, err
+		return AccessRule{}, err
 	}
 
 	parsedTarget, rawTarget, err := parseTarget(targetStr)
 	if err != nil {
-		return Rule{}, err
+		return AccessRule{}, err
 	}
 
-	return Rule{
+	return AccessRule{
 		protocol:  protocol,
 		target:    parsedTarget,
 		port:      parsedPort,
@@ -103,13 +103,13 @@ func Parse(ruleBody string) (Rule, error) {
 	}, nil
 }
 
-// Validate performs cross-rule validation: checks for duplicate (target, port)
+// ValidateAccessRules performs cross-rule validation: checks for duplicate (target, port)
 // identity and mixed port patterns (wildcard + specific on the same target).
-func Validate(rules []Rule) error {
-	if err := validateNoDuplicateIdentity(rules); err != nil {
+func ValidateAccessRules(rules []AccessRule) error {
+	if err := validateNoDuplicateAccessIdentity(rules); err != nil {
 		return err
 	}
-	if err := validateNoMixedPortPatterns(rules); err != nil {
+	if err := validateNoMixedPortAccessPatterns(rules); err != nil {
 		return err
 	}
 	return nil
@@ -347,14 +347,14 @@ func isLabelChar(c rune) bool {
 	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-'
 }
 
-// validateNoDuplicateIdentity rejects configs where two rules have the same
+// validateNoDuplicateAccessIdentity rejects configs where two access rules have the same
 // (target-pattern, port-pattern) pair.
-func validateNoDuplicateIdentity(rules []Rule) error {
+func validateNoDuplicateAccessIdentity(rules []AccessRule) error {
 	type identity struct {
 		target string
 		port   string
 	}
-	seen := make(map[identity]Rule)
+	seen := make(map[identity]AccessRule)
 	for _, rule := range rules {
 		id := identity{target: rule.rawTarget, port: rule.rawPort}
 		if existing, ok := seen[id]; ok {
@@ -366,13 +366,13 @@ func validateNoDuplicateIdentity(rules []Rule) error {
 	return nil
 }
 
-// validateNoMixedPortPatterns rejects configs where a target has both wildcard
-// and specific port rules.
-func validateNoMixedPortPatterns(rules []Rule) error {
+// validateNoMixedPortAccessPatterns rejects configs where a target has both wildcard
+// and specific port access rules.
+func validateNoMixedPortAccessPatterns(rules []AccessRule) error {
 	type portInfo struct {
 		hasWildcard bool
 		hasSpecific bool
-		firstRule   Rule
+		firstRule   AccessRule
 	}
 	byTarget := make(map[string]*portInfo)
 	for _, rule := range rules {

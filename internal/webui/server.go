@@ -31,6 +31,8 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/runner"
 )
 
@@ -52,7 +54,6 @@ type Server struct {
 	runner     *runner.Runner
 	command    []string
 	addr       string // actual bound address, set by Start
-	sessionID  string
 	httpServer *http.Server
 	runCtx     context.Context //nolint:containedctx // stored from Start for use in HTTP handlers
 	homeDir    string          // user home directory for path shortening; empty disables tilde form
@@ -65,6 +66,12 @@ type Server struct {
 	draftContent string     // updated by Start (from request body) and Revert
 
 	accessToken string // random hex, required on every HTTP request as ?token=TOKEN
+
+	// fsLogResolver and netLogResolver determine whether entries should be hidden by nolog rules.
+	// Protected by mu. May be nil (meaning no log rules — all entries are visible).
+	// Read via isNolog, which acquires mu internally — do not call isNolog while holding mu.
+	fsLogResolver  *fsrules.LogResolver
+	netLogResolver *netrules.LogResolver
 
 	// OnConfigChange is called with the newly parsed config on every successful Start.
 	// It is called before runner.Start so net rule changes take effect before the run begins.
@@ -81,10 +88,6 @@ func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, c
 	if !filepath.IsAbs(configPath) {
 		panic(fmt.Sprintf("New: configPath must be absolute, got %q", configPath))
 	}
-	var sessionBuf [8]byte
-	if _, err := rand.Read(sessionBuf[:]); err != nil {
-		panic(fmt.Sprintf("generate session ID: %v", err))
-	}
 	var tokenBuf [16]byte
 	if _, err := rand.Read(tokenBuf[:]); err != nil {
 		panic(fmt.Sprintf("generate access token: %v", err))
@@ -93,7 +96,6 @@ func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, c
 		runner:         rnr,
 		command:        command,
 		addr:           "",
-		sessionID:      hex.EncodeToString(sessionBuf[:]),
 		httpServer:     nil,
 		runCtx:         nil,
 		homeDir:        homeDir,
@@ -178,6 +180,48 @@ func (s *Server) Token() string {
 	return s.accessToken
 }
 
+// SetLogResolvers updates the FS and net log resolvers used for nolog filtering.
+// Pass nil to disable nolog filtering (all entries visible).
+func (s *Server) SetLogResolvers(fs *fsrules.LogResolver, net *netrules.LogResolver) {
+	s.mu.Lock()
+	s.fsLogResolver = fs
+	s.netLogResolver = net
+	s.mu.Unlock()
+}
+
+// isNolog returns true if the entry matches a nolog rule, meaning it should be
+// hidden when "Apply nolog rules" is enabled in the UI.
+// Acquires s.mu internally; callers holding s.mu will deadlock.
+func (s *Server) isNolog(entry accesslog.Entry) bool {
+	s.mu.Lock()
+	fsResolver := s.fsLogResolver
+	netResolver := s.netLogResolver
+	s.mu.Unlock()
+
+	switch entry.Operation {
+	case accesslog.OperationRead, accesslog.OperationWrite:
+		if fsResolver == nil {
+			return false
+		}
+		return !fsResolver.Visible(entry.Target)
+	case accesslog.OperationHTTPS, accesslog.OperationHTTP:
+		if netResolver == nil {
+			return false
+		}
+		host, portStr, err := net.SplitHostPort(entry.Target)
+		if err != nil {
+			return false
+		}
+		portNum, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return false
+		}
+		return !netResolver.Visible(host, uint16(portNum))
+	default:
+		panic(fmt.Sprintf("isNolog: unexpected operation type %q", entry.Operation))
+	}
+}
+
 // tokenMiddleware returns a handler that rejects requests with a missing or incorrect token.
 func (s *Server) tokenMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -189,21 +233,10 @@ func (s *Server) tokenMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// parseLastEventID parses a "sessionID:index" formatted SSE event ID.
-// Returns the session ID, entry index, and whether parsing succeeded.
-func parseLastEventID(raw string) (string, int, bool) {
-	session, idxStr, ok := strings.Cut(raw, ":")
-	if !ok {
-		return "", 0, false
-	}
-	if session == "" {
-		return "", 0, false
-	}
-	idx, err := strconv.Atoi(idxStr)
-	if err != nil {
-		return "", 0, false
-	}
-	return session, idx, true
+// templateEntry is the entry type passed to the HTML template, augmented with display metadata.
+type templateEntry struct {
+	accesslog.Entry
+	Nolog bool // true if the entry matches a nolog rule
 }
 
 // handleIndex serves the main HTML page with all current entries.
@@ -215,13 +248,14 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	}
 	status := s.runner.Status()
 
-	// Shorten filesystem target paths for display.
-	shortened := make([]accesslog.Entry, len(entries))
+	// Shorten filesystem target paths for display and compute nolog metadata.
+	templateEntries := make([]templateEntry, len(entries))
 	for i, e := range entries {
-		shortened[i] = e
+		nolog := s.isNolog(e)
 		if (e.Operation == accesslog.OperationRead || e.Operation == accesslog.OperationWrite) && filepath.IsAbs(e.Target) {
-			shortened[i].Target = shortenPath(e.Target, s.homeDir, s.configDir)
+			e.Target = shortenPath(e.Target, s.homeDir, s.configDir)
 		}
+		templateEntries[i] = templateEntry{Entry: e, Nolog: nolog}
 	}
 
 	s.mu.Lock()
@@ -229,17 +263,15 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Unlock()
 
 	data := struct {
-		Entries    []accesslog.Entry
+		Entries    []templateEntry
 		EntryCount int
 		Status     runner.RunStatus
-		SessionID  string
 		Command    string
 		Config     string
 	}{
-		Entries:    shortened,
-		EntryCount: len(shortened),
+		Entries:    templateEntries,
+		EntryCount: len(templateEntries),
 		Status:     status,
-		SessionID:  s.sessionID,
 		Command:    status.Command,
 		Config:     draftContent,
 	}
@@ -252,19 +284,15 @@ func (s *Server) handleIndex(w http.ResponseWriter, _ *http.Request) {
 
 // resolveStartIndex determines the starting entry index for SSE streaming.
 // It checks Last-Event-ID header first (for automatic reconnection), then
-// falls back to the ?from query parameter.
-func (s *Server) resolveStartIndex(r *http.Request) int {
-	// Check Last-Event-ID header first (automatic reconnection).
-	// Parse session:index format to detect cross-session reconnects.
+// falls back to the ?from query parameter. The access token on the URL already
+// prevents cross-server reconnects (403), so only the numeric index matters.
+func resolveStartIndex(r *http.Request) int {
 	if lastEventID := r.Header.Get("Last-Event-ID"); lastEventID != "" {
-		session, idx, ok := parseLastEventID(lastEventID)
-		if ok && session == s.sessionID {
-			return idx + 1 // Same session: resume from next entry
+		if idx, err := strconv.Atoi(lastEventID); err == nil {
+			return idx + 1
 		}
-		// Cross-session or malformed: replay from 0
-		return 0
+		return 0 // malformed: replay from start
 	}
-	// Fall back to ?from query parameter (always current session)
 	if fromParam := r.URL.Query().Get("from"); fromParam != "" {
 		if id, err := strconv.Atoi(fromParam); err == nil {
 			return id
@@ -308,7 +336,7 @@ func (st *sseStream) handleStatusChange(w http.ResponseWriter, status runner.Run
 	if st.logger != nil {
 		st.entryCh = st.logger.Subscribe()
 	}
-	st.server.sendSessionEvent(w, 0)
+	st.server.sendClearEvent(w)
 	st.entries = nil
 }
 
@@ -316,7 +344,7 @@ func (st *sseStream) handleStatusChange(w http.ResponseWriter, status runner.Run
 // Supports ?from=N query parameter to replay from index N.
 // Supports Last-Event-ID header for automatic reconnection.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
-	startIndex := s.resolveStartIndex(r)
+	startIndex := resolveStartIndex(r)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -339,15 +367,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		defer stream.logger.Unsubscribe(stream.entryCh)
 	}
 
-	// Send session event, initial status, config, and initial entries from startIndex
-	s.sendSessionEvent(w, startIndex)
-	s.sendStatusEvent(w, s.runner.Status())
-	s.sendConfigEvent(w)
+	// Stale detection: if startIndex exceeds the current entry count, a new run
+	// started while the client was disconnected. Send a clear event and replay from 0.
+	entryCount := 0
 	if stream.logger != nil {
 		stream.entries = stream.logger.Entries()
-		for i := startIndex; i < len(stream.entries); i++ {
-			s.sendEntryEvent(w, stream.entries[i], i)
-		}
+		entryCount = len(stream.entries)
+	}
+	if startIndex > entryCount {
+		s.sendClearEvent(w)
+		startIndex = 0
+	}
+
+	s.sendStatusEvent(w, s.runner.Status())
+	s.sendConfigEvent(w)
+	for i := startIndex; i < entryCount; i++ {
+		s.sendEntryEvent(w, stream.entries[i], i)
 	}
 	flusher.Flush()
 
@@ -386,31 +421,29 @@ func (s *Server) sendEntryEvent(w http.ResponseWriter, entry accesslog.Entry, in
 		Target    string                  `json:"target"`
 		Result    accesslog.ResultType    `json:"result"`
 		Rule      string                  `json:"rule"`
+		Nolog     bool                    `json:"nolog"`
 	}{
 		Operation: entry.Operation,
 		Target:    target,
 		Result:    entry.Result,
 		Rule:      entry.Rule,
+		Nolog:     s.isNolog(entry),
 	}
 
 	data, err := json.Marshal(entryDto)
 	if err != nil {
 		panic(fmt.Sprintf("failed to marshal entry: %v", err))
 	}
-	_, _ = fmt.Fprintf(w, "id: %s:%d\n", s.sessionID, index)
+	_, _ = fmt.Fprintf(w, "id: %d\n", index)
 	_, _ = fmt.Fprintf(w, "event: entry\n")
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-// sendSessionEvent sends the session ID as an SSE event with an id field
-// encoding the resume point. This ensures Last-Event-ID is always set after
-// the initial batch, so cross-session reconnects are detected even when no
-// entry events are sent (e.g. when ?from matches the entry count).
+// sendClearEvent tells SSE clients to discard all current log entries.
+// Sent when a new run starts (live or detected on reconnect via stale index).
 // Write errors are ignored: they only occur on client disconnect, which ctx.Done handles.
-func (s *Server) sendSessionEvent(w http.ResponseWriter, startIndex int) {
-	_, _ = fmt.Fprintf(w, "id: %s:%d\n", s.sessionID, startIndex-1)
-	_, _ = fmt.Fprintf(w, "event: session\n")
-	_, _ = fmt.Fprintf(w, "data: %s\n\n", s.sessionID)
+func (s *Server) sendClearEvent(w http.ResponseWriter) {
+	_, _ = fmt.Fprintf(w, "event: clear\ndata:\n\n")
 }
 
 // sendStatusEvent sends the run status as an SSE event.
@@ -481,6 +514,12 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Update log resolvers from new config.
+	s.SetLogResolvers(
+		fsrules.NewLogResolver(cfg.FSLogRules),
+		netrules.NewLogResolver(cfg.NetLogRules),
+	)
 
 	if s.OnConfigChange != nil {
 		s.OnConfigChange(cfg)

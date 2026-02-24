@@ -36,7 +36,7 @@ func FuzzParse(f *testing.F) {
 	f.Add("https:[::1:443")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		rule, err := Parse(input)
+		rule, err := ParseAccessRule(input)
 		if err != nil {
 			return
 		}
@@ -106,13 +106,13 @@ func FuzzResolve(f *testing.F) {
 		"http:localhost:3000",
 	}
 
-	rules := make([]Rule, len(ruleSpecs))
+	rules := make([]AccessRule, len(ruleSpecs))
 	validRuleStrings := make(map[string]protocol)
 	for i, spec := range ruleSpecs {
 		rules[i] = mustParse(f, spec)
 		validRuleStrings[rules[i].RawRule] = rules[i].protocol
 	}
-	resolver := NewResolver(rules)
+	resolver := NewAccessResolver(rules)
 
 	f.Fuzz(func(t *testing.T, host string, port uint16, isHTTPS bool) {
 		proto := ProtocolHTTP
@@ -148,9 +148,9 @@ func FuzzResolve(f *testing.F) {
 	})
 }
 
-func mustParse(f *testing.F, ruleBody string) Rule {
+func mustParse(f *testing.F, ruleBody string) AccessRule {
 	f.Helper()
-	rule, err := Parse(ruleBody)
+	rule, err := ParseAccessRule(ruleBody)
 	if err != nil {
 		f.Fatalf("parse rule %q: %v", ruleBody, err)
 	}

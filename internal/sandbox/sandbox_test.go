@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
+func fsRule(permission fsrules.Permission, path string) fsrules.AccessRule {
 	var permStr string
 	switch permission {
 	case fsrules.PermissionReadOnly:
@@ -27,7 +27,7 @@ func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
 		permStr = "unknown"
 	}
 
-	return fsrules.Rule{
+	return fsrules.AccessRule{
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
@@ -36,7 +36,7 @@ func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
 
 func TestBuildBwrapArgs(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
@@ -85,7 +85,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 	require.NoError(t, os.Mkdir(noneDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
@@ -107,7 +107,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 	require.NoError(t, os.MkdirAll(childDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
@@ -129,7 +129,7 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 	require.NoError(t, os.WriteFile(noneFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{
+		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
@@ -149,7 +149,7 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -163,7 +163,7 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 
 func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}
@@ -186,7 +186,7 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 
 func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		ManagedPaths: nil,
 	}

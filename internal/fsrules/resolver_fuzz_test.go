@@ -61,7 +61,7 @@ func FuzzCheckAccess(f *testing.F) {
 
 		// Create a test config with various rules
 		cfg := &testConfig{
-			rules: []Rule{
+			rules: []AccessRule{
 				fsRule(PermissionReadWrite, "/home/user/project"),
 				fsRule(PermissionReadOnly, "/home/user/project/.git"),
 				fsRule(PermissionNone, "/home/user/.ssh"),
@@ -168,7 +168,7 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 
 		// Create config with overlapping rules at different levels
 		cfg := &testConfig{
-			rules: []Rule{
+			rules: []AccessRule{
 				fsRule(PermissionReadOnly, "/home"),
 				fsRule(PermissionReadWrite, "/home/user"),
 				fsRule(PermissionReadWrite, "/home/user/project"),
