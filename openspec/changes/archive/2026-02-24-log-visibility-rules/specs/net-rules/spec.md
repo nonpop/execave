@@ -72,7 +72,7 @@ Invalid rules SHALL be rejected with an error.
 
 #### Scenario: Same identity in access and log rules allowed
 
-- **WHEN** access rules contain `https:example.com:443` and log rules contain `nolog:example.com:443`
+- **WHEN** access rules contain `http:example.com:443` and log rules contain `nolog:example.com:443`
 - **THEN** validation succeeds (access and log are different namespaces)
 
 ### Requirement: Log rule resolution

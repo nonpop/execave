@@ -20,9 +20,7 @@ const (
 	OperationRead OperationType = "READ"
 	// OperationWrite represents filesystem write operations (write, unlink, mkdir, etc).
 	OperationWrite OperationType = "WRITE"
-	// OperationHTTPS represents HTTPS (CONNECT) requests through the proxy.
-	OperationHTTPS OperationType = "HTTPS"
-	// OperationHTTP represents plain HTTP requests through the proxy.
+	// OperationHTTP represents HTTP and CONNECT (tunneled) requests through the proxy.
 	OperationHTTP OperationType = "HTTP"
 )
 
@@ -53,7 +51,7 @@ const (
 
 // Entry represents a single access log entry.
 type Entry struct {
-	// Operation is the type of operation (READ, WRITE, HTTPS, or HTTP).
+	// Operation is the type of operation (READ, WRITE, or HTTP).
 	Operation OperationType
 	// Target is the absolute path for filesystem ops, host:port for network ops.
 	Target string

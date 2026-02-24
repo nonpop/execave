@@ -109,26 +109,26 @@ func TestIntegration_LogFormat_AllowedHttpsRequestLogged(t *testing.T) {
 	logger := accesslog.New(nil)
 
 	err := logger.Log(accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+		Operation: accesslog.OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    accesslog.ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	})
 	require.NoError(t, err)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, "api.example.com:443", entries[0].Target)
 	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
-	assert.Equal(t, "net:https:api.example.com:443", entries[0].Rule)
+	assert.Equal(t, "net:http:api.example.com:443", entries[0].Rule)
 }
 
 func TestIntegration_LogFormat_DeniedHttpsRequestLogged(t *testing.T) {
 	logger := accesslog.New(nil)
 
 	err := logger.Log(accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+		Operation: accesslog.OperationHTTP,
 		Target:    "malicious.example.com:443",
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
@@ -137,7 +137,7 @@ func TestIntegration_LogFormat_DeniedHttpsRequestLogged(t *testing.T) {
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, "malicious.example.com:443", entries[0].Target)
 	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
@@ -222,10 +222,10 @@ func TestIntegration_LogDeduplication_RepeatedHttpsRequestsDeduplicated(t *testi
 	logger := accesslog.New(nil)
 
 	entry := accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+		Operation: accesslog.OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    accesslog.ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	}
 	require.NoError(t, logger.Log(entry))
 	require.NoError(t, logger.Log(entry))

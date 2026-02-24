@@ -22,7 +22,7 @@ import (
 // --- Proxy lifecycle ---
 
 func TestProxy_StartAndStop(t *testing.T) {
-	p, _, cleanup := startTestProxy(t, "https:example.com:443")
+	p, _, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	// Verify the UDS is accessible
@@ -35,7 +35,7 @@ func TestProxy_StartAndStop(t *testing.T) {
 func TestProxy_StopRemovesUDS(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
-	resolver := newTestResolver(t, "https:example.com:443")
+	resolver := newTestResolver(t, "http:example.com:443")
 	p := proxy.New(resolver, nil)
 	err := p.Start(udsPath)
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestProxy_CONNECTAllowed(t *testing.T) {
 }
 
 func TestProxy_CONNECTDenied(t *testing.T) {
-	p, udsPath, cleanup := startTestProxy(t, "https:allowed.example.com:443")
+	p, udsPath, cleanup := startTestProxy(t, "http:allowed.example.com:443")
 	defer cleanup()
 	_ = p
 
@@ -95,7 +95,7 @@ func TestProxy_HTTPDenied(t *testing.T) {
 // --- Malformed request handling ---
 
 func TestProxy_RawBytesRejected(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -112,7 +112,7 @@ func TestProxy_RawBytesRejected(t *testing.T) {
 }
 
 func TestProxy_CONNECTMissingHost(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -131,7 +131,7 @@ func TestProxy_CONNECTMissingHost(t *testing.T) {
 
 func TestProxy_AllowlistExactBeatsWildcard(t *testing.T) {
 	_, udsPath, cleanup := startTestProxy(t,
-		"https:*.example.com:443",
+		"http:*.example.com:443",
 		"none:evil.example.com:443",
 	)
 	defer cleanup()
@@ -159,7 +159,7 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	defer tlsServer.Close()
 
 	host, port := hostPort(t, tlsServer.Listener.Addr().String())
-	ruleBody := fmt.Sprintf("https:%s:%s", host, port)
+	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
 	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, ruleBody)
@@ -177,13 +177,13 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestProxy_AccessLogDenied(t *testing.T) {
 	logger := accesslog.New(nil)
-	resolver := newTestResolver(t, "https:allowed.example.com:443")
+	resolver := newTestResolver(t, "http:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 	p := proxy.New(resolver, logger)
@@ -202,7 +202,7 @@ func TestProxy_AccessLogDenied(t *testing.T) {
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
 }
@@ -233,7 +233,7 @@ func testAllowedRequest(t *testing.T, useTLS bool, expectedBody string) {
 	defer server.Close()
 
 	host, port := hostPort(t, server.Listener.Addr().String())
-	ruleBody := fmt.Sprintf("%s:%s:%s", scheme, host, port)
+	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
 	p, udsPath, cleanup := startTestProxy(t, ruleBody)
 	defer cleanup()

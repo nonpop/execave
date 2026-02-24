@@ -28,7 +28,7 @@ GET / SHALL return an HTML page displaying access log entries in a table with co
 
 #### Scenario: Page displays all entry types
 
-- **WHEN** Logger contains READ, WRITE, HTTPS, and DENY entries
+- **WHEN** Logger contains READ, WRITE, HTTP, and DENY entries
 - **AND** GET / is requested
 - **THEN** all entry types are present in the response (some may be hidden by default filters)
 
@@ -55,7 +55,7 @@ GET / SHALL return an HTML page displaying access log entries in a table with co
 
 #### Scenario: Non-filesystem target paths not shortened
 
-- **WHEN** Logger contains entry (HTTPS, `api.example.com:443`, OK, `net:https:api.example.com:443`)
+- **WHEN** Logger contains entry (HTTP, `api.example.com:443`, OK, `net:http:api.example.com:443`)
 - **AND** GET / is requested
 - **THEN** the target column displays `api.example.com:443` unchanged
 

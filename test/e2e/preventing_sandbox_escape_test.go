@@ -114,7 +114,7 @@ func TestE2E_PreventingSandboxEscape_DataExfiltrationViaNetworkDenied(t *testing
 
 	rules := append(systemPaths(),
 		"fs:ro:"+tmpDir,
-		fmt.Sprintf("net:https:%s:%s", host, port),
+		fmt.Sprintf("net:http:%s:%s", host, port),
 	)
 	configPath := writeConfig(t, rules)
 

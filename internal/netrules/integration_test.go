@@ -21,7 +21,7 @@ func parseNetRule(t *testing.T, rawRule string) netrules.AccessRule {
 // --- Requirement: Net rule syntax ---
 
 func TestIntegration_NetRuleSyntax_ValidHttpsDomainRule(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:api.example.com:443")
+	_, err := netrules.ParseAccessRule("http:api.example.com:443")
 
 	assert.NoError(t, err)
 }
@@ -39,19 +39,19 @@ func TestIntegration_NetRuleSyntax_ValidCidrRule(t *testing.T) {
 }
 
 func TestIntegration_NetRuleSyntax_ValidIpv6Rule(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[::1]:443")
+	_, err := netrules.ParseAccessRule("http:[::1]:443")
 
 	assert.NoError(t, err)
 }
 
 func TestIntegration_NetRuleSyntax_ValidIpv6CidrRule(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[2001:db8::]/32:443")
+	_, err := netrules.ParseAccessRule("http:[2001:db8::]/32:443")
 
 	assert.NoError(t, err)
 }
 
 func TestIntegration_NetRuleSyntax_ValidWildcardPortRule(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com:*")
+	_, err := netrules.ParseAccessRule("http:example.com:*")
 
 	assert.NoError(t, err)
 }
@@ -63,25 +63,25 @@ func TestIntegration_NetRuleSyntax_InvalidAction(t *testing.T) {
 }
 
 func TestIntegration_NetRuleSyntax_MissingPortField(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com")
+	_, err := netrules.ParseAccessRule("http:example.com")
 
 	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestIntegration_NetRuleSyntax_InvalidPortNumber(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com:0")
+	_, err := netrules.ParseAccessRule("http:example.com:0")
 
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 func TestIntegration_NetRuleSyntax_PortAboveRange(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com:99999")
+	_, err := netrules.ParseAccessRule("http:example.com:99999")
 
 	assert.ErrorContains(t, err, "invalid port")
 }
 
 func TestIntegration_NetRuleSyntax_NonNumericPortRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com:abc")
+	_, err := netrules.ParseAccessRule("http:example.com:abc")
 
 	assert.ErrorContains(t, err, "invalid port")
 }
@@ -89,7 +89,7 @@ func TestIntegration_NetRuleSyntax_NonNumericPortRejected(t *testing.T) {
 // --- Requirement: Target parsing order ---
 
 func TestIntegration_TargetParsingOrder_BracketedIPv6ParsedAsIPv6(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[::1]:443")
+	_, err := netrules.ParseAccessRule("http:[::1]:443")
 
 	assert.NoError(t, err)
 }
@@ -107,19 +107,19 @@ func TestIntegration_TargetParsingOrder_BareIPParsedAsExactIP(t *testing.T) {
 }
 
 func TestIntegration_TargetParsingOrder_NonIPStringParsedAsDomain(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:api.example.com:443")
+	_, err := netrules.ParseAccessRule("http:api.example.com:443")
 
 	assert.NoError(t, err)
 }
 
 func TestIntegration_TargetParsingOrder_InvalidIPFallsThroughToDomainValidationAndFails(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:123.456.789.0:443")
+	_, err := netrules.ParseAccessRule("http:123.456.789.0:443")
 
 	assert.ErrorContains(t, err, "last label must contain at least one alphabetic character")
 }
 
 func TestIntegration_TargetParsingOrder_BracketedIPv4RejectedAsInvalidIPv6(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[127.0.0.1]:443")
+	_, err := netrules.ParseAccessRule("http:[127.0.0.1]:443")
 
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
@@ -131,25 +131,25 @@ func TestIntegration_TargetParsingOrder_BracketedIPv4CIDRRejectedAsInvalidIPv6(t
 }
 
 func TestIntegration_TargetParsingOrder_UnclosedBracketRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[::1:443")
+	_, err := netrules.ParseAccessRule("http:[::1:443")
 
 	assert.ErrorContains(t, err, "missing closing bracket")
 }
 
 func TestIntegration_TargetParsingOrder_EmptyBracketsRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[]:443")
+	_, err := netrules.ParseAccessRule("http:[]:443")
 
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestIntegration_TargetParsingOrder_BracketedDomainRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[example.com]:443")
+	_, err := netrules.ParseAccessRule("http:[example.com]:443")
 
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestIntegration_TargetParsingOrder_BracketedIPv4MappedIPv6Accepted(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:[::ffff:127.0.0.1]:443")
+	_, err := netrules.ParseAccessRule("http:[::ffff:127.0.0.1]:443")
 
 	assert.NoError(t, err)
 }
@@ -157,13 +157,13 @@ func TestIntegration_TargetParsingOrder_BracketedIPv4MappedIPv6Accepted(t *testi
 // --- Requirement: Domain pattern validation ---
 
 func TestIntegration_DomainPatternValidation_ValidExactDomain(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:api.example.com:443")
+	_, err := netrules.ParseAccessRule("http:api.example.com:443")
 
 	assert.NoError(t, err)
 }
 
 func TestIntegration_DomainPatternValidation_ValidWildcardDomain(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:*.example.com:443")
+	_, err := netrules.ParseAccessRule("http:*.example.com:443")
 
 	assert.NoError(t, err)
 }
@@ -175,56 +175,56 @@ func TestIntegration_DomainPatternValidation_ValidSingleLabelDomain(t *testing.T
 }
 
 func TestIntegration_DomainPatternValidation_AllNumericTLDRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:192.168.1.999:443")
+	_, err := netrules.ParseAccessRule("http:192.168.1.999:443")
 
 	assert.ErrorContains(t, err, "last label must contain at least one alphabetic character")
 }
 
 func TestIntegration_DomainPatternValidation_BareWildcardRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:*:443")
+	_, err := netrules.ParseAccessRule("http:*:443")
 
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestIntegration_DomainPatternValidation_DeepWildcardRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:*.*.example.com:443")
+	_, err := netrules.ParseAccessRule("http:*.*.example.com:443")
 
 	assert.ErrorContains(t, err, "invalid character")
 }
 
 func TestIntegration_DomainPatternValidation_NonLeftmostWildcardRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:sub.*.example.com:443")
+	_, err := netrules.ParseAccessRule("http:sub.*.example.com:443")
 
 	assert.ErrorContains(t, err, "wildcard must be single")
 }
 
 func TestIntegration_DomainPatternValidation_PartialWildcardRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:sub*.example.com:443")
+	_, err := netrules.ParseAccessRule("http:sub*.example.com:443")
 
 	assert.ErrorContains(t, err, "wildcard must be single")
 }
 
 func TestIntegration_DomainPatternValidation_LabelStartingWithHyphenRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:-example.com:443")
+	_, err := netrules.ParseAccessRule("http:-example.com:443")
 
 	assert.ErrorContains(t, err, "must not start or end with hyphen")
 }
 
 func TestIntegration_DomainPatternValidation_TrailingDotRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:example.com.:443")
+	_, err := netrules.ParseAccessRule("http:example.com.:443")
 
 	assert.ErrorContains(t, err, "empty label")
 }
 
 func TestIntegration_DomainPatternValidation_InvalidCharactersRejected(t *testing.T) {
-	_, err := netrules.ParseAccessRule("https:exam_ple.com:443")
+	_, err := netrules.ParseAccessRule("http:exam_ple.com:443")
 
 	assert.ErrorContains(t, err, "invalid character")
 }
 
 func TestIntegration_DomainPatternValidation_LabelTooLongRejected(t *testing.T) {
 	longLabel := strings.Repeat("a", 64)
-	_, err := netrules.ParseAccessRule("https:" + longLabel + ".com:443")
+	_, err := netrules.ParseAccessRule("http:" + longLabel + ".com:443")
 
 	assert.ErrorContains(t, err, "exceeds")
 }
@@ -233,44 +233,44 @@ func TestIntegration_DomainPatternValidation_LabelTooLongRejected(t *testing.T) 
 
 func TestIntegration_DomainMatching_ExactDomainMatches(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:api.example.com:443"),
+		parseNetRule(t, "net:http:api.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "api.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "api.example.com", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_DomainMatching_ExactDomainCaseInsensitive(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:API.Example.COM:443"),
+		parseNetRule(t, "net:http:API.Example.COM:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "api.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "api.example.com", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_DomainMatching_WildcardMatchesOneSubdomainLevel(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "api.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "api.example.com", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_DomainMatching_WildcardDoesNotMatchApexDomain(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "example.com", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -278,11 +278,11 @@ func TestIntegration_DomainMatching_WildcardDoesNotMatchApexDomain(t *testing.T)
 
 func TestIntegration_DomainMatching_WildcardDoesNotMatchDeepSubdomain(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "deep.sub.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "deep.sub.example.com", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -290,11 +290,11 @@ func TestIntegration_DomainMatching_WildcardDoesNotMatchDeepSubdomain(t *testing
 
 func TestIntegration_DomainMatching_WildcardRespectsDomainBoundary(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "notexample.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "notexample.com", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -338,33 +338,33 @@ func TestIntegration_IPAndCIDRMatching_CIDRRangeDoesNotMatchIPOutsideRange(t *te
 
 func TestIntegration_IPAndCIDRMatching_ExactIPv6Matches(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:[::1]:443"),
+		parseNetRule(t, "net:http:[::1]:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "::1", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "::1", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_IPAndCIDRMatching_IPv6CIDRMatchesIPWithinRange(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:[2001:db8::]/32:443"),
+		parseNetRule(t, "net:http:[2001:db8::]/32:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "2001:db8::1", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "2001:db8::1", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_IPAndCIDRMatching_IPv6CIDRDoesNotMatchIPOutsideRange(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:[2001:db8::]/32:443"),
+		parseNetRule(t, "net:http:[2001:db8::]/32:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "2001:db9::1", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "2001:db9::1", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -386,22 +386,22 @@ func TestIntegration_IPAndCIDRMatching_IPRuleDoesNotMatchDomainRequest(t *testin
 
 func TestIntegration_PortMatching_ExactPortMatches(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
+		parseNetRule(t, "net:http:example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "example.com", 443)
 
 	assert.True(t, result.Allowed)
 }
 
 func TestIntegration_PortMatching_ExactPortDoesNotMatchDifferentPort(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
+		parseNetRule(t, "net:http:example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 8443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "example.com", 8443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -409,39 +409,16 @@ func TestIntegration_PortMatching_ExactPortDoesNotMatchDifferentPort(t *testing.
 
 func TestIntegration_PortMatching_WildcardPortMatchesAnyPort(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:*"),
+		parseNetRule(t, "net:http:example.com:*"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 8080)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "example.com", 8080)
 
 	assert.True(t, result.Allowed)
 }
 
 // --- Requirement: Protocol matching ---
-
-func TestIntegration_ProtocolMatching_HTTPSRuleMatchesHTTPSRequest(t *testing.T) {
-	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
-	}
-	resolver := netrules.NewAccessResolver(rules)
-
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 443)
-
-	assert.True(t, result.Allowed)
-}
-
-func TestIntegration_ProtocolMatching_HTTPSRuleDoesNotMatchHTTPRequest(t *testing.T) {
-	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
-	}
-	resolver := netrules.NewAccessResolver(rules)
-
-	result := resolver.Resolve(netrules.ProtocolHTTP, "example.com", 443)
-
-	assert.False(t, result.Allowed)
-	assert.Equal(t, "no-matching-rule", result.Rule)
-}
 
 func TestIntegration_ProtocolMatching_HTTPRuleMatchesHTTPRequest(t *testing.T) {
 	rules := []netrules.AccessRule{
@@ -454,43 +431,27 @@ func TestIntegration_ProtocolMatching_HTTPRuleMatchesHTTPRequest(t *testing.T) {
 	assert.True(t, result.Allowed)
 }
 
-func TestIntegration_ProtocolMatching_HTTPRuleDoesNotMatchHTTPSRequest(t *testing.T) {
-	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:http:example.com:80"),
-	}
-	resolver := netrules.NewAccessResolver(rules)
-
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "example.com", 80)
-
-	assert.False(t, result.Allowed)
-	assert.Equal(t, "no-matching-rule", result.Rule)
-}
-
-func TestIntegration_ProtocolMatching_NoneRuleMatchesBothProtocols(t *testing.T) {
+func TestIntegration_ProtocolMatching_NoneRuleDenies(t *testing.T) {
 	rules := []netrules.AccessRule{
 		parseNetRule(t, "net:none:evil.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	httpsResult := resolver.Resolve(netrules.ProtocolHTTPS, "evil.com", 443)
-	assert.False(t, httpsResult.Allowed)
-	assert.Equal(t, "net:none:evil.com:443", httpsResult.Rule)
-
-	httpResult := resolver.Resolve(netrules.ProtocolHTTP, "evil.com", 443)
-	assert.False(t, httpResult.Allowed)
-	assert.Equal(t, "net:none:evil.com:443", httpResult.Rule)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "evil.com", 443)
+	assert.False(t, result.Allowed)
+	assert.Equal(t, "net:none:evil.com:443", result.Rule)
 }
 
 // --- Requirement: Single-dimension target specificity ---
 
 func TestIntegration_SingleDimensionTargetSpecificity_ExactDomainBeatsWildcard(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 		parseNetRule(t, "net:none:evil.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "evil.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "evil.example.com", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "net:none:evil.example.com:443", result.Rule)
@@ -498,12 +459,12 @@ func TestIntegration_SingleDimensionTargetSpecificity_ExactDomainBeatsWildcard(t
 
 func TestIntegration_SingleDimensionTargetSpecificity_WildcardAllowsWhenNoExactDeny(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:*.example.com:443"),
+		parseNetRule(t, "net:http:*.example.com:443"),
 		parseNetRule(t, "net:none:evil.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "api.example.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "api.example.com", 443)
 
 	assert.True(t, result.Allowed)
 }
@@ -535,11 +496,11 @@ func TestIntegration_SingleDimensionTargetSpecificity_ShorterCIDRAllowsWhenLonge
 
 func TestIntegration_SingleDimensionTargetSpecificity_NoMatchDefaultsToDeny(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:api.example.com:443"),
+		parseNetRule(t, "net:http:api.example.com:443"),
 	}
 	resolver := netrules.NewAccessResolver(rules)
 
-	result := resolver.Resolve(netrules.ProtocolHTTPS, "evil.com", 443)
+	result := resolver.Resolve(netrules.ProtocolHTTP, "evil.com", 443)
 
 	assert.False(t, result.Allowed)
 	assert.Equal(t, "no-matching-rule", result.Rule)
@@ -549,7 +510,7 @@ func TestIntegration_SingleDimensionTargetSpecificity_NoMatchDefaultsToDeny(t *t
 
 func TestIntegration_NoDuplicateIdentity_SameTargetAndPortWithDifferentActionsRejected(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
+		parseNetRule(t, "net:http:example.com:443"),
 		parseNetRule(t, "net:none:example.com:443"),
 	}
 
@@ -560,7 +521,7 @@ func TestIntegration_NoDuplicateIdentity_SameTargetAndPortWithDifferentActionsRe
 
 func TestIntegration_NoDuplicateIdentity_SameCIDRTargetAndPortWithDifferentActionsRejected(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:10.0.0.0/24:443"),
+		parseNetRule(t, "net:http:10.0.0.0/24:443"),
 		parseNetRule(t, "net:none:10.0.0.0/24:443"),
 	}
 
@@ -571,7 +532,7 @@ func TestIntegration_NoDuplicateIdentity_SameCIDRTargetAndPortWithDifferentActio
 
 func TestIntegration_NoDuplicateIdentity_SingleHostCIDRDuplicatesBareIP(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:127.0.0.1/32:443"),
+		parseNetRule(t, "net:http:127.0.0.1/32:443"),
 		parseNetRule(t, "net:none:127.0.0.1:443"),
 	}
 
@@ -582,7 +543,7 @@ func TestIntegration_NoDuplicateIdentity_SingleHostCIDRDuplicatesBareIP(t *testi
 
 func TestIntegration_NoDuplicateIdentity_IPv4MappedIPv6DuplicatesIPv4(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:[::ffff:127.0.0.1]:443"),
+		parseNetRule(t, "net:http:[::ffff:127.0.0.1]:443"),
 		parseNetRule(t, "net:none:127.0.0.1:443"),
 	}
 
@@ -593,7 +554,7 @@ func TestIntegration_NoDuplicateIdentity_IPv4MappedIPv6DuplicatesIPv4(t *testing
 
 func TestIntegration_NoDuplicateIdentity_DomainCaseDuplicates(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:Example.COM:443"),
+		parseNetRule(t, "net:http:Example.COM:443"),
 		parseNetRule(t, "net:none:example.com:443"),
 	}
 
@@ -604,7 +565,7 @@ func TestIntegration_NoDuplicateIdentity_DomainCaseDuplicates(t *testing.T) {
 
 func TestIntegration_NoDuplicateIdentity_NonCanonicalCIDRBaseDuplicatesCanonical(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:10.0.0.5/24:8080"),
+		parseNetRule(t, "net:http:10.0.0.5/24:8080"),
 		parseNetRule(t, "net:none:10.0.0.0/24:8080"),
 	}
 
@@ -615,7 +576,7 @@ func TestIntegration_NoDuplicateIdentity_NonCanonicalCIDRBaseDuplicatesCanonical
 
 func TestIntegration_NoDuplicateIdentity_SameTargetWithDifferentPortsAllowed(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:443"),
+		parseNetRule(t, "net:http:example.com:443"),
 		parseNetRule(t, "net:http:example.com:80"),
 	}
 
@@ -628,7 +589,7 @@ func TestIntegration_NoDuplicateIdentity_SameTargetWithDifferentPortsAllowed(t *
 
 func TestIntegration_NoMixedPortPatterns_WildcardAndSpecificPortOnSameTargetRejected(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:*"),
+		parseNetRule(t, "net:http:example.com:*"),
 		parseNetRule(t, "net:none:example.com:443"),
 	}
 
@@ -639,7 +600,7 @@ func TestIntegration_NoMixedPortPatterns_WildcardAndSpecificPortOnSameTargetReje
 
 func TestIntegration_NoMixedPortPatterns_CIDRWithWildcardAndSpecificPortRejected(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:10.0.0.0/24:*"),
+		parseNetRule(t, "net:http:10.0.0.0/24:*"),
 		parseNetRule(t, "net:none:10.0.0.0/24:443"),
 	}
 
@@ -650,8 +611,8 @@ func TestIntegration_NoMixedPortPatterns_CIDRWithWildcardAndSpecificPortRejected
 
 func TestIntegration_NoMixedPortPatterns_DifferentTargetsCanHaveDifferentPortStyles(t *testing.T) {
 	rules := []netrules.AccessRule{
-		parseNetRule(t, "net:https:example.com:*"),
-		parseNetRule(t, "net:https:other.com:443"),
+		parseNetRule(t, "net:http:example.com:*"),
+		parseNetRule(t, "net:http:other.com:443"),
 	}
 
 	err := netrules.ValidateAccessRules(rules)

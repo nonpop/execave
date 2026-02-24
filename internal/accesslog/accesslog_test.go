@@ -305,10 +305,10 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 	logger := New(nil)
 
 	entry := Entry{
-		Operation: OperationHTTPS,
+		Operation: OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	}
 
 	err := logger.Log(entry)
@@ -316,10 +316,10 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, OperationHTTP, entries[0].Operation)
 	assert.Equal(t, "api.example.com:443", entries[0].Target)
 	assert.Equal(t, ResultOK, entries[0].Result)
-	assert.Equal(t, "net:https:api.example.com:443", entries[0].Rule)
+	assert.Equal(t, "net:http:api.example.com:443", entries[0].Rule)
 }
 
 func TestLogger_HTTPEntry(t *testing.T) {
@@ -345,7 +345,7 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 	logger := New(nil)
 
 	entry := Entry{
-		Operation: OperationHTTPS,
+		Operation: OperationHTTP,
 		Target:    "malicious.example.com:443",
 		Result:    ResultDeny,
 		Rule:      RuleNoMatch,
@@ -356,7 +356,7 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
-	assert.Equal(t, OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, OperationHTTP, entries[0].Operation)
 	assert.Equal(t, "malicious.example.com:443", entries[0].Target)
 	assert.Equal(t, ResultDeny, entries[0].Result)
 	assert.Equal(t, RuleNoMatch, entries[0].Rule)
@@ -366,10 +366,10 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 	logger := New(nil)
 
 	entry := Entry{
-		Operation: OperationHTTPS,
+		Operation: OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	}
 
 	// Log the same entry three times
@@ -382,41 +382,35 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
-func TestLogger_HTTPSAndHTTPSeparate(t *testing.T) {
+func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
 	logger := New(nil)
 
-	httpsEntry := Entry{
-		Operation: OperationHTTPS,
-		Target:    "example.com:443",
-		Result:    ResultOK,
-		Rule:      "net:https:example.com:443",
-	}
-
-	httpEntry := Entry{
+	// CONNECT and plain HTTP to the same host:port now both log as OperationHTTP.
+	// A second identical entry (same operation, target, result) deduplicates.
+	entry := Entry{
 		Operation: OperationHTTP,
 		Target:    "example.com:443",
 		Result:    ResultOK,
 		Rule:      "net:http:example.com:443",
 	}
 
-	err := logger.Log(httpsEntry)
+	err := logger.Log(entry)
 	require.NoError(t, err)
-	err = logger.Log(httpEntry)
+	err = logger.Log(entry)
 	require.NoError(t, err)
 
-	// Both should be logged (different operations)
 	entries := logger.Entries()
-	assert.Len(t, entries, 2)
+	assert.Len(t, entries, 1)
 }
 
 func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
 	logger := New([]string{"/dev", "/proc", "/tmp"})
 
 	entry := Entry{
-		Operation: OperationHTTPS,
+		Operation: OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	}
 
 	err := logger.Log(entry)

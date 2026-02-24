@@ -83,7 +83,7 @@ func TestE2E_ConfiguringExecave_DuplicateFilesystemPathsRejected(t *testing.T) {
 // with the same target and port but different actions are rejected.
 func TestE2E_ConfiguringExecave_DuplicateNetworkRuleIdentityRejected(t *testing.T) {
 	configPath := writeConfig(t, append(systemPaths(),
-		"net:https:example.com:443",
+		"net:http:example.com:443",
 		"net:none:example.com:443",
 	))
 
@@ -97,7 +97,7 @@ func TestE2E_ConfiguringExecave_DuplicateNetworkRuleIdentityRejected(t *testing.
 // and a specific port on the same target are rejected.
 func TestE2E_ConfiguringExecave_MixedPortPatternsOnSameTargetRejected(t *testing.T) {
 	configPath := writeConfig(t, append(systemPaths(),
-		"net:https:example.com:*",
+		"net:http:example.com:*",
 		"net:none:example.com:443",
 	))
 

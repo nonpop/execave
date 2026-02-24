@@ -223,7 +223,7 @@ func TestE2E_MonitoringAccess_MonitorNetworkAccess(t *testing.T) {
 	httpHost, httpPort := testHTTPServer(t, "NET_HTTP_OK")
 
 	rules := append(systemPaths(),
-		fmt.Sprintf("net:https:%s:%s", httpsHost, httpsPort),
+		fmt.Sprintf("net:http:%s:%s", httpsHost, httpsPort),
 		fmt.Sprintf("net:http:%s:%s", httpHost, httpPort),
 	)
 
@@ -234,7 +234,7 @@ func TestE2E_MonitoringAccess_MonitorNetworkAccess(t *testing.T) {
 
 	assertExitCode(t, result.execaveResult, 0)
 
-	assertWebUIHasEntry(t, result.WebUI, "HTTPS", httpsHost+":"+httpsPort, "OK")
+	assertWebUIHasEntry(t, result.WebUI, "HTTP", httpsHost+":"+httpsPort, "OK")
 	assertWebUIHasEntry(t, result.WebUI, "HTTP", httpHost+":"+httpPort, "OK")
 }
 
@@ -251,7 +251,7 @@ func TestE2E_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *tes
 
 	rules := append(systemPaths(),
 		"fs:ro:"+env.TmpDir,
-		fmt.Sprintf("net:https:%s:%s", host, port),
+		fmt.Sprintf("net:http:%s:%s", host, port),
 	)
 
 	result := env.runMonitored(t, rules,
@@ -265,7 +265,7 @@ func TestE2E_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *tes
 	dataFileRel, err := filepath.Rel(homeDir, dataFile)
 	require.NoError(t, err)
 	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+dataFileRel, "OK")
-	assertWebUIHasEntry(t, result.WebUI, "HTTPS", host+":"+port, "OK")
+	assertWebUIHasEntry(t, result.WebUI, "HTTP", host+":"+port, "OK")
 }
 
 // TestE2E_MonitoringAccess_MonitorWithoutNetRules tests that when monitoring is enabled

@@ -204,7 +204,7 @@ func (s *Server) isNolog(entry accesslog.Entry) bool {
 			return false
 		}
 		return !fsResolver.Visible(entry.Target)
-	case accesslog.OperationHTTPS, accesslog.OperationHTTP:
+	case accesslog.OperationHTTP:
 		if netResolver == nil {
 			return false
 		}

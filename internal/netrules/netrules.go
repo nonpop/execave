@@ -19,9 +19,7 @@ type protocol int
 
 const (
 	protocolUnknown protocol = iota
-	// ProtocolHTTPS allows HTTPS (CONNECT) requests.
-	ProtocolHTTPS
-	// ProtocolHTTP allows plain HTTP requests.
+	// ProtocolHTTP allows HTTP and CONNECT (tunneled) requests.
 	ProtocolHTTP
 	protocolNone
 )
@@ -117,14 +115,12 @@ func ValidateAccessRules(rules []AccessRule) error {
 
 func parseProtocol(action string) (protocol, error) {
 	switch action {
-	case "https":
-		return ProtocolHTTPS, nil
 	case "http":
 		return ProtocolHTTP, nil
 	case "none":
 		return protocolNone, nil
 	default:
-		return protocolUnknown, fmt.Errorf("invalid action %q (must be 'https', 'http', or 'none')", action)
+		return protocolUnknown, fmt.Errorf("invalid action %q (must be 'http' or 'none')", action)
 	}
 }
 

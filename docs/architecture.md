@@ -76,7 +76,7 @@ Manages lifecycle of monitored sandbox executions with start/stop control, statu
 
 ### Web UI (`internal/webui/`)
 
-Localhost web server (OS-assigned port, bound to `127.0.0.1`) for real-time access log viewing, config editing, and run control. Serves server-rendered HTML with SSE streaming for live updates. Filesystem target paths are displayed in shortened form: relative to the config directory if the path is under it, otherwise `~/...` form if the path is under the home directory, otherwise absolute. Network targets (HTTPS/HTTP) are shown verbatim. Provides start/stop/save/revert controls that delegate to runner and config. The URL includes a random access token for authentication. Survives sandbox exit for log review; active when `--monitor` is specified.
+Localhost web server (OS-assigned port, bound to `127.0.0.1`) for real-time access log viewing, config editing, and run control. Serves server-rendered HTML with SSE streaming for live updates. Filesystem target paths are displayed in shortened form: relative to the config directory if the path is under it, otherwise `~/...` form if the path is under the home directory, otherwise absolute. Network targets (HTTP) are shown verbatim. Provides start/stop/save/revert controls that delegate to runner and config. The URL includes a random access token for authentication. Survives sandbox exit for log review; active when `--monitor` is specified.
 
 **Log visibility filtering:** The web UI applies two independent client-side filters. The "Denied only" filter (default: on) hides OK entries. The "Apply nolog rules" filter (default: on) hides entries matching `fs:nolog`/`net:nolog` rules (unless overridden by a more specific `fs:log`/`net:log` rule). SSE entry events carry a `nolog` boolean field so the client can apply nolog filtering without server round-trips. Both filters are display-only and do not affect the Logger or access enforcement.
 
@@ -102,7 +102,7 @@ Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, networ
 
 ### Proxy (`internal/proxy/`)
 
-Forward HTTP proxy on Unix domain socket (host-side). Handles HTTPS CONNECT tunneling and HTTP forwarding, checking requests against network rules. Denies unauthorized requests and logs all attempts when monitoring is enabled.
+Forward HTTP proxy on Unix domain socket (host-side). Handles CONNECT tunneling and HTTP forwarding, checking requests against network rules. Denies unauthorized requests and logs all attempts when monitoring is enabled.
 
 ### Tunnel (`internal/tunnel/`)
 

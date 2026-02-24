@@ -80,6 +80,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Bypass proxy via direct connection | No NIC; processes ignoring HTTP_PROXY cannot connect | None |
 | Connect to unauthorized host | Proxy enforces allowlist with default-deny | Misconfigured rules |
 | Proxy crash/failure | UDS: process death removes listener, new connections fail (fail-closed by design) | None |
+| Plaintext over CONNECT tunnel | None: non-MITM relay forwards bytes without inspection; TLS cannot be verified | Plaintext data exchange if remote server cooperates |
 | Tunnel binary tampering | Irrelevant: tunnel runs inside sandbox, only exit is UDS to host proxy which enforces filtering; read-only bind mount as defense in depth | None |
 
 ## Security-Critical Code
@@ -119,3 +120,4 @@ These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress ent
 - `fs:none` paths remain visible as entries in parent directory listings, but the directories themselves cannot be listed or written to (chmod 0000/0111)
 - Monitor logs `UNKNOWN` for symlinks whose targets fall under managed paths (`/dev`, `/proc`, `/tmp`), because these filesystems exist only inside the sandbox's mount namespace and cannot be resolved from the host
 - Monitor filters nonexistent paths from the log to reduce noise. Ephemeral files (created and deleted during execution) won't appear due to post-execution checking
+- HTTPS enforcement is not possible: the proxy is a non-MITM TCP relay. A `net:http:` rule permits CONNECT tunneling but cannot verify that TLS occurs inside the tunnel; the sandboxed process and remote server can exchange plaintext over the allowed channel

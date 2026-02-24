@@ -33,7 +33,7 @@ func TestE2E_RestrictingNetwork_AllowSpecificHTTPSEndpoints(t *testing.T) {
 	host, port := testHTTPSServer(t, "HTTPS_ALLOWED")
 
 	rules := append(systemPaths(),
-		fmt.Sprintf("net:https:%s:%s", host, port),
+		fmt.Sprintf("net:http:%s:%s", host, port),
 	)
 	configPath := writeConfig(t, rules)
 
@@ -138,7 +138,7 @@ func TestE2E_RestrictingNetwork_DirectTCPConnectionsFail(t *testing.T) {
 	failIfNoPython3(t)
 
 	// Net rules present, but process bypasses proxy
-	rules := append(systemPaths(), "net:https:192.0.2.1:443")
+	rules := append(systemPaths(), "net:http:192.0.2.1:443")
 	configPath := writeConfig(t, rules)
 
 	result := runExecave(t, "", "--config", configPath, "--",
@@ -154,7 +154,7 @@ func TestE2E_RestrictingNetwork_UDPTrafficBlocked(t *testing.T) {
 	failIfNoBwrap(t)
 	failIfNoPython3(t)
 
-	rules := append(systemPaths(), "net:https:192.0.2.1:443")
+	rules := append(systemPaths(), "net:http:192.0.2.1:443")
 	configPath := writeConfig(t, rules)
 
 	result := runExecave(t, "", "--config", configPath, "--",

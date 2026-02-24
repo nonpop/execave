@@ -1,7 +1,7 @@
 // Package proxy implements a forward HTTP proxy that listens on a Unix domain socket
 // and enforces a network allowlist based on net rules.
 //
-// The proxy handles CONNECT requests (for HTTPS tunneling) and plain HTTP requests.
+// The proxy handles CONNECT requests (for tunneling) and plain HTTP requests.
 // It evaluates each request against the configured allowlist and either forwards
 // the request or responds with 403 Forbidden.
 package proxy
@@ -147,8 +147,8 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := p.resolver.Load().Resolve(netrules.ProtocolHTTPS, host, port)
-	p.logAccess(accesslog.OperationHTTPS, r.Host, result)
+	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
+	p.logAccess(accesslog.OperationHTTP, r.Host, result)
 
 	if !result.Allowed {
 		http.Error(w, "Forbidden", http.StatusForbidden)

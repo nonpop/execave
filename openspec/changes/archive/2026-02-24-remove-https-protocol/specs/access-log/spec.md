@@ -1,10 +1,4 @@
-# Access Log Capability
-
-## Purpose
-
-The access-log capability handles formatting, deduplication, and filtering of access entries. It transforms raw access events (filesystem and network) into structured log entries, eliminates redundant entries, and filters out infrastructure paths that are not governed by user rules.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Log format
 
@@ -72,21 +66,8 @@ Each unique `(operation, target, result)` tuple SHALL be logged at most once, re
 - **WHEN** Logger receives the same WRITE entry three times
 - **THEN** output contains exactly one WRITE line
 
-### Requirement: Infrastructure path filtering
+## REMOVED Requirements
 
-When configured with managed paths (e.g., `/dev`, `/proc`, `/tmp`), the Logger SHALL silently drop entries whose target is a managed path or a descendant of one.
-
-#### Scenario: Infrastructure paths not logged
-- **WHEN** Logger is configured with managed paths `/dev`, `/proc`, `/tmp`
-- **AND** Logger receives entry (READ, `/proc/self/status`, OK, `fs:ro:/proc`)
-- **THEN** output is empty
-
-#### Scenario: Infrastructure writes not logged
-- **WHEN** Logger is configured with managed paths `/dev`, `/proc`, `/tmp`
-- **AND** Logger receives entry (WRITE, `/dev/tty`, OK, `fs:rw:/dev`)
-- **THEN** output is empty
-
-#### Scenario: Non-infrastructure paths still logged
-- **WHEN** Logger is configured with managed paths `/dev`, `/proc`, `/tmp`
-- **AND** Logger receives entry (READ, `/usr/bin/bash`, OK, `fs:ro:/usr`)
-- **THEN** output contains an entry for `/usr/bin/bash`
+### Requirement: Log deduplication
+**Reason**: Replaced by the modified version above, which removes the HTTPS-specific deduplication scenario and the statement that HTTPS and HTTP to the same host:port are distinct tuples (they are now the same operation type).
+**Migration**: No migration needed — deduplication behavior is the same, just with fewer operation types.

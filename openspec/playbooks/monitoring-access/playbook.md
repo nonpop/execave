@@ -73,20 +73,20 @@ The user refreshes the web UI page and sees all entries accumulated so far, with
 
 ### Use Case: Monitor network access (HTTPS and HTTP)
 
-The user enables monitoring with net rules to see which network endpoints the sandboxed command contacts and whether requests are allowed or denied.
+The user enables monitoring with net rules to see which network endpoints the sandboxed command contacts and whether requests are allowed or denied. Both plain HTTP and CONNECT-tunneled (HTTPS) requests appear as `HTTP` operations.
 
-- **GIVEN** a config with rules `net:https:api.example.com:443` and `net:http:internal.example.com:3000`
+- **GIVEN** a config with rules `net:http:api.example.com:443` and `net:http:internal.example.com:3000`
 - **WHEN** the user runs `execave --monitor=9876 -- curl https://api.example.com/data`
-- **THEN** the web UI displays an entry with operation `HTTPS`, target `api.example.com:443`, result `OK`, rule `net:https:api.example.com:443`
-- **AND** a denied request would appear with operation `HTTPS`, target `evil.com:443`, result `DENY`, rule `no-matching-rule`
+- **THEN** the web UI displays an entry with operation `HTTP`, target `api.example.com:443`, result `OK`, rule `net:http:api.example.com:443`
+- **AND** a denied request would appear with operation `HTTP`, target `evil.com:443`, result `DENY`, rule `no-matching-rule`
 
 ### Use Case: Monitor both filesystem and network concurrently
 
 The user enables monitoring with both filesystem and network rules. The web UI displays both filesystem operations and network requests.
 
-- **GIVEN** a config with rules `fs:ro:/usr/lib`, `fs:rw:/home/user/project`, and `net:https:api.example.com:443`
+- **GIVEN** a config with rules `fs:ro:/usr/lib`, `fs:rw:/home/user/project`, and `net:http:api.example.com:443`
 - **WHEN** the user runs `execave --monitor=9876 -- python script.py` (where the script reads files and makes HTTPS requests)
-- **THEN** the web UI displays both `READ`/`WRITE` entries for filesystem paths and `HTTPS` entries for network requests
+- **THEN** the web UI displays both `READ`/`WRITE` entries for filesystem paths and `HTTP` entries for network requests
 
 ### Use Case: Monitor without net rules (deny-all network logging)
 
@@ -224,17 +224,17 @@ The user nologs a broad directory but overrides with `fs:log` for a specific chi
 
 The user adds a `net:nolog` rule to suppress known harmless network deny entries.
 
-- **GIVEN** a config with rules `net:https:api.example.com:443` and `net:nolog:telemetry.example.com:443`
+- **GIVEN** a config with rules `net:http:api.example.com:443` and `net:nolog:telemetry.example.com:443`
 - **AND** the sandboxed app always tries to reach `telemetry.example.com:443` on startup (denied, but the app continues fine)
 - **WHEN** the user runs `execave --monitor=9876 -- myapp`
-- **THEN** the web UI does not display the `HTTPS telemetry.example.com:443 DENY` entry
+- **THEN** the web UI does not display the `HTTP telemetry.example.com:443 DENY` entry
 - **AND** other network entries are still displayed
 
 ### Use Case: Override net:nolog with net:log for specific endpoint
 
 The user nologs a wildcard domain but overrides with `net:log` for a specific subdomain.
 
-- **GIVEN** a config with rules `net:https:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
+- **GIVEN** a config with rules `net:http:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
 - **WHEN** the user runs `execave --monitor=9876 -- sh -c "curl https://cdn.example.com/ || true; curl https://api.example.com/ || true"`
 - **THEN** the web UI does not display entries for `cdn.example.com:443` (suppressed by nolog)
 - **AND** the web UI displays entries for `api.example.com:443` (overridden by the more specific log rule)
@@ -272,7 +272,7 @@ Filesystem log rules use longest-prefix-match, same as access rules. The most sp
 
 Network log rules use the same specificity ranking as access rules. Exact domain beats wildcard; longer CIDR prefix beats shorter.
 
-- **GIVEN** a config with rules `net:https:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
+- **GIVEN** a config with rules `net:http:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
 - **WHEN** the user runs `execave --monitor=9876 -- sh -c "curl https://cdn.example.com/ || true; curl https://api.example.com/ || true"`
 - **THEN** entries for `cdn.example.com:443` are suppressed (matches wildcard nolog)
 - **AND** entries for `api.example.com:443` are displayed (exact match log overrides wildcard nolog)

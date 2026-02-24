@@ -19,7 +19,7 @@ import (
 // --- Requirement: Proxy listens on UDS ---
 
 func TestIntegration_ProxyListensOnUDS_ProxyAcceptsConnectionOnUDS(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -28,7 +28,7 @@ func TestIntegration_ProxyListensOnUDS_ProxyAcceptsConnectionOnUDS(t *testing.T)
 }
 
 func TestIntegration_ProxyListensOnUDS_ProxyDoesNotListenOnTCP(t *testing.T) {
-	p, _, cleanup := startTestProxy(t, "https:example.com:443")
+	p, _, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	assert.Equal(t, "unix", p.Addr().Network())
@@ -41,7 +41,7 @@ func TestIntegration_CONNECTHandlingForHTTPS_AllowedCONNECTRequestTunneled(t *te
 }
 
 func TestIntegration_CONNECTHandlingForHTTPS_DeniedCONNECTRequestRejected(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:allowed.example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:allowed.example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -62,7 +62,7 @@ func TestIntegration_CONNECTHandlingForHTTPS_CONNECTTunnelClosesWhenTargetDiscon
 	defer server.Close()
 
 	host, port := hostPort(t, server.Listener.Addr().String())
-	_, udsPath, cleanup := startTestProxy(t, fmt.Sprintf("https:%s:%s", host, port))
+	_, udsPath, cleanup := startTestProxy(t, fmt.Sprintf("http:%s:%s", host, port))
 	defer cleanup()
 
 	client := httpClientViaUDS(udsPath, true)
@@ -139,7 +139,7 @@ func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denie
 // --- Requirement: Malformed request handling ---
 
 func TestIntegration_MalformedRequestHandling_RawBytesSentToUDS(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -154,7 +154,7 @@ func TestIntegration_MalformedRequestHandling_RawBytesSentToUDS(t *testing.T) {
 }
 
 func TestIntegration_MalformedRequestHandling_CONNECTWithMissingHost(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "https:example.com:443")
+	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -173,7 +173,7 @@ func TestIntegration_MalformedRequestHandling_CONNECTWithMissingHost(t *testing.
 func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *testing.T) {
 	logger := accesslog.New(nil)
 	resolver := newTestResolver(t,
-		"https:*.example.com:443",
+		"http:*.example.com:443",
 		"none:evil.example.com:443",
 	)
 
@@ -200,7 +200,7 @@ func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *te
 
 func TestIntegration_AllowlistEnforcement_RequestDeniedByMostSpecificRule(t *testing.T) {
 	_, udsPath, cleanup := startTestProxy(t,
-		"https:*.example.com:443",
+		"http:*.example.com:443",
 		"none:evil.example.com:443",
 	)
 	defer cleanup()
@@ -225,7 +225,7 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 	defer server.Close()
 
 	host, port := hostPort(t, server.Listener.Addr().String())
-	ruleBody := fmt.Sprintf("https:%s:%s", host, port)
+	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
 	logger := accesslog.New(nil)
 	resolver := newTestResolver(t, ruleBody)
@@ -242,14 +242,14 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 
 	entries := logger.Entries()
 	require.NotEmpty(t, entries)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, net.JoinHostPort(host, port), entries[0].Target)
 	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
 }
 
 func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
 	logger := accesslog.New(nil)
-	resolver := newTestResolver(t, "https:allowed.example.com:443")
+	resolver := newTestResolver(t, "http:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 	p := proxy.New(resolver, logger)
@@ -267,7 +267,7 @@ func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
 
 	entries := logger.Entries()
 	require.NotEmpty(t, entries)
-	assert.Equal(t, accesslog.OperationHTTPS, entries[0].Operation)
+	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
 	assert.Equal(t, "evil.example.com:443", entries[0].Target)
 	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
@@ -276,7 +276,7 @@ func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
 // --- Requirement: Proxy lifecycle ---
 
 func TestIntegration_ProxyLifecycle_ProxyStart(t *testing.T) {
-	p, _, cleanup := startTestProxy(t, "https:example.com:443")
+	p, _, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	assert.NotNil(t, p.Addr())
@@ -284,7 +284,7 @@ func TestIntegration_ProxyLifecycle_ProxyStart(t *testing.T) {
 
 func TestIntegration_ProxyLifecycle_ProxyStop(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	resolver := newTestResolver(t, "https:example.com:443")
+	resolver := newTestResolver(t, "http:example.com:443")
 	p := proxy.New(resolver, nil)
 	require.NoError(t, p.Start(udsPath))
 
@@ -403,7 +403,7 @@ func testProxyRequest(t *testing.T, expectedBody string, useTLS bool, scheme str
 	defer server.Close()
 
 	host, port := hostPort(t, server.Listener.Addr().String())
-	_, udsPath, cleanup := startTestProxy(t, fmt.Sprintf("%s:%s:%s", scheme, host, port))
+	_, udsPath, cleanup := startTestProxy(t, fmt.Sprintf("http:%s:%s", host, port))
 	defer cleanup()
 
 	client := httpClientViaUDS(udsPath, useTLS)

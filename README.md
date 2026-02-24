@@ -24,7 +24,7 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 **Filesystem rules:** `fs:<permission>:<path>` where permission is `ro`, `rw`, or `none`. More specific paths win. Paths may use `~/...` (expanded to the current user's home directory) or be relative to the config file location.
 
-**Network rules:** `net:<protocol>:<target>:<port>` where protocol is `https`, `http`, or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
+**Network rules:** `net:<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
 **Log visibility rules:** Control which entries appear in the monitor web UI. `fs:log:<path>` / `fs:nolog:<path>` show/hide filesystem entries; `net:log:<target>:<port>` / `net:nolog:<target>:<port>` show/hide network entries. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
 
@@ -38,7 +38,7 @@ rules = [
   "fs:rw:~/project",   # tilde expands to home directory
   "fs:none:.",
 
-  "net:https:api.example.com:443",
+  "net:http:api.example.com:443",
   "net:http:*.internal.corp:*",
   "net:none:evil.example.com:443",
 
@@ -72,7 +72,7 @@ The browser opens automatically. It displays access log entries as they happen:
 | READ | /usr/lib/libc.so.6 | OK | fs:ro:/usr |
 | WRITE | /home/user/output.txt | DENY | fs:ro:/home/user |
 | READ | /etc/passwd | DENY | no-matching-rule |
-| HTTPS | api.example.com:443 | OK | net:https:api.example.com:443 |
+| HTTP | api.example.com:443 | OK | net:http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
 **Real-time updates:** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.

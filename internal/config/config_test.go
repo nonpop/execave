@@ -55,7 +55,7 @@ func TestLoad_UnknownResourceType(t *testing.T) {
 func TestLoad_ValidNetRule(t *testing.T) {
 	cfg, err := loadTestConfig(t, `rules = [
 	"fs:ro:/usr/bin",
-	"net:https:api.anthropic.com:443",
+	"net:http:api.anthropic.com:443",
 ]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -63,7 +63,7 @@ func TestLoad_ValidNetRule(t *testing.T) {
 }
 
 func TestLoad_HasNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["net:https:api.anthropic.com:443"]`)
+	cfg, err := loadTestConfig(t, `rules = ["net:http:api.anthropic.com:443"]`)
 	require.NoError(t, err)
 	assert.True(t, cfg.HasNetRules())
 }
@@ -75,13 +75,13 @@ func TestLoad_HasNoNetRules(t *testing.T) {
 }
 
 func TestLoad_InvalidNetRule(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["net:https:example.com"]`)
+	_, err := loadTestConfig(t, `rules = ["net:http:example.com"]`)
 	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestLoad_NetRuleDuplicateIdentityRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `rules = [
-	"net:https:example.com:443",
+	"net:http:example.com:443",
 	"net:none:example.com:443",
 ]`)
 	assert.ErrorContains(t, err, "duplicate net rule")
@@ -89,7 +89,7 @@ func TestLoad_NetRuleDuplicateIdentityRejected(t *testing.T) {
 
 func TestLoad_NetRuleMixedPortPatternsRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `rules = [
-	"net:https:example.com:*",
+	"net:http:example.com:*",
 	"net:none:example.com:443",
 ]`)
 	assert.ErrorContains(t, err, "mixed port patterns")
@@ -143,7 +143,7 @@ func TestDuplicatePaths_TrailingSlash_Rejected(t *testing.T) {
 
 func TestParseRules_ValidFsAndNetRules(t *testing.T) {
 	cfg, err := config.ParseRules(
-		[]string{"fs:ro:/usr/bin", "net:https:api.example.com:443"},
+		[]string{"fs:ro:/usr/bin", "net:http:api.example.com:443"},
 		"/some/dir", "/some/dir/execave.toml", nil,
 	)
 	require.NoError(t, err)
@@ -225,7 +225,7 @@ func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
 }
 
 func TestParseTOML_ValidTOML(t *testing.T) {
-	content := `rules = ["fs:ro:/usr/bin", "net:https:api.example.com:443"]`
+	content := `rules = ["fs:ro:/usr/bin", "net:http:api.example.com:443"]`
 	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)

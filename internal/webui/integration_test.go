@@ -120,7 +120,7 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 	entries := []accesslog.Entry{
 		{Operation: accesslog.OperationRead, Target: "/usr/lib/libc.so", Result: accesslog.ResultOK, Rule: "fs:ro:/usr"},
 		{Operation: accesslog.OperationWrite, Target: "/home/user/out.txt", Result: accesslog.ResultOK, Rule: "fs:rw:/home/user"},
-		{Operation: accesslog.OperationHTTPS, Target: "api.example.com:443", Result: accesslog.ResultOK, Rule: "net:https:api.example.com:443"},
+		{Operation: accesslog.OperationHTTP, Target: "api.example.com:443", Result: accesslog.ResultOK, Rule: "net:http:api.example.com:443"},
 		{Operation: accesslog.OperationRead, Target: "/etc/secret", Result: accesslog.ResultDeny, Rule: accesslog.RuleNoMatch},
 	}
 	for _, e := range entries {
@@ -132,7 +132,7 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 
 	assert.Contains(t, body, "READ")
 	assert.Contains(t, body, "WRITE")
-	assert.Contains(t, body, "HTTPS")
+	assert.Contains(t, body, "HTTP")
 	assert.Contains(t, body, "DENY")
 }
 
@@ -196,10 +196,10 @@ func TestIntegration_PathShortening_FilesystemPathShortenedToTildeForm(t *testin
 func TestIntegration_PathShortening_NonFilesystemTargetNotShortened(t *testing.T) {
 	logger := accesslog.New(nil)
 	require.NoError(t, logger.Log(accesslog.Entry{
-		Operation: accesslog.OperationHTTPS,
+		Operation: accesslog.OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    accesslog.ResultOK,
-		Rule:      "net:https:api.example.com:443",
+		Rule:      "net:http:api.example.com:443",
 	}))
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
