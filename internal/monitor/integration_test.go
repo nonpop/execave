@@ -13,6 +13,8 @@ import (
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/monitor"
+	"github.com/nonpop/execave/internal/seccomp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +37,13 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(dataDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(dataDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -95,11 +99,13 @@ func TestIntegration_OperationTypeMapping_QueryingFileMetadataLoggedAsRead(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -130,11 +136,13 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -177,11 +185,13 @@ func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -238,11 +248,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkLog
 	// bwrap resolves these at mount time.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(linkDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(linkDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -294,11 +306,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInI
 	// The resolver skips the symlink; the kernel follows it transparently.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(linkDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(linkDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -347,11 +361,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountReso
 	// so the resolver walks the host FS and resolves it.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -402,11 +418,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinM
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -458,11 +476,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -513,11 +533,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPoin
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -567,11 +589,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -624,11 +648,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtD
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(ruledDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(ruledDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -683,11 +709,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediateP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -737,11 +765,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughS
 	// rw rule — both hop READ and target WRITE are allowed
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -791,11 +821,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToR
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(rwDir), roRule(roDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(rwDir), roRule(roDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -844,11 +876,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySy
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -896,11 +930,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExcee
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -942,11 +978,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -981,11 +1019,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_NonExistentPathNotReso
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1021,11 +1061,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: []string{managedDir},
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      []string{managedDir},
 		}
 	})
 
@@ -1059,11 +1101,13 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentReadFilteredFro
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1091,11 +1135,13 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *
 	// ro rule — monitor resolves this write as DENY
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1138,11 +1184,13 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1176,11 +1224,13 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1271,11 +1321,13 @@ func roRuleEnv(t *testing.T, absTestDir string) *monitorTestEnv {
 	t.Helper()
 	return newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 }
@@ -1327,11 +1379,13 @@ func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -1723,4 +1777,106 @@ int main(int argc, char *argv[]) {
 		}
 	}
 	assert.True(t, found, "new pid must not inherit parent's tracked cwd")
+}
+
+// --- Requirement: Blocked syscall attempts produce SYSCALL entries ---
+
+// TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry tests that when
+// blockedSyscalls is set, a real strace run that intercepts a blocked syscall attempt
+// produces a SYSCALL entry with DENY result and seccomp rule.
+func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t *testing.T) {
+	_, err := exec.LookPath("strace")
+	require.NoError(t, err)
+	_, err = exec.LookPath("python3")
+	require.NoError(t, err)
+
+	if runtime.GOARCH != "amd64" {
+		t.Skip("bpf syscall number 321 is x86_64-specific")
+	}
+
+	cfg := &config.Config{
+		FSRules:           []fsrules.AccessRule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+	}
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+
+	blocked := map[string]bool{"bpf": true}
+	seccompFile, err := seccomp.FilterPipe(nil)
+	require.NoError(t, err)
+	mon := monitor.New(logger, resolver, nil, false, seccompFile, blocked, nil)
+
+	// Python invokes the bpf syscall (nr 321 on x86_64) which is in our blocked set.
+	// Without bwrap the seccomp filter is not applied, but strace still emits the
+	// syscall. The monitor intercepts it based on the name and logs it as DENY.
+	exitCode, err := mon.Run(context.Background(), []string{
+		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range logger.Entries() {
+		if e.Operation == accesslog.OperationSyscall && e.Target == "bpf" {
+			found = true
+			assert.Equal(t, accesslog.ResultDeny, e.Result)
+			assert.Equal(t, accesslog.RuleNoMatch, e.Rule)
+		}
+	}
+	assert.True(t, found)
+}
+
+// TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry tests that when
+// allowedSyscalls is set, a real strace run that intercepts an allowed syscall produces
+// a SYSCALL entry with OK result.
+func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *testing.T) {
+	_, err := exec.LookPath("strace")
+	require.NoError(t, err)
+	_, err = exec.LookPath("python3")
+	require.NoError(t, err)
+
+	if runtime.GOARCH != "amd64" {
+		t.Skip("bpf syscall number 321 is x86_64-specific")
+	}
+
+	cfg := &config.Config{
+		FSRules:           []fsrules.AccessRule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+	}
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+
+	// blockedSyscalls must be non-nil to enable syscall tracing in buildStraceArgs.
+	// In production, both maps are populated from config when seccomp is active.
+	blocked := map[string]bool{}
+	allowed := map[string]bool{"bpf": true}
+	seccompFile, err := seccomp.FilterPipe(allowed)
+	require.NoError(t, err)
+	mon := monitor.New(logger, resolver, nil, false, seccompFile, blocked, allowed)
+
+	exitCode, err := mon.Run(context.Background(), []string{
+		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	var found bool
+	for _, e := range logger.Entries() {
+		if e.Operation == accesslog.OperationSyscall && e.Target == "bpf" {
+			found = true
+			assert.Equal(t, accesslog.ResultOK, e.Result)
+			assert.Equal(t, "syscall:allow:bpf", e.Rule)
+		}
+	}
+	assert.True(t, found)
 }

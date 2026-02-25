@@ -8,7 +8,7 @@ import (
 )
 
 func TestFormatEntry_DenyReadAbsPath_FormatsColumnsAndShortensPath(t *testing.T) {
-	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil)
+	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil, nil)
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/.ssh/id_rsa",
@@ -19,7 +19,7 @@ func TestFormatEntry_DenyReadAbsPath_FormatsColumnsAndShortensPath(t *testing.T)
 }
 
 func TestFormatEntry_OKWrite_FormatsColumnsAndShortensPath(t *testing.T) {
-	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil)
+	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil, nil)
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationWrite,
 		Target:    "/home/user/project/out.txt",
@@ -30,7 +30,7 @@ func TestFormatEntry_OKWrite_FormatsColumnsAndShortensPath(t *testing.T) {
 }
 
 func TestFormatEntry_HTTP_TargetNotShortened(t *testing.T) {
-	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil)
+	wtr := New(nil, "/home/user", "/home/user/project", false, false, nil, nil, nil)
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
 		Target:    "api.example.com:443",
@@ -41,7 +41,7 @@ func TestFormatEntry_HTTP_TargetNotShortened(t *testing.T) {
 }
 
 func TestFormatEntry_UnknownResult_FormatsCorrectly(t *testing.T) {
-	wtr := New(nil, "", "", false, false, nil, nil)
+	wtr := New(nil, "", "", false, false, nil, nil, nil)
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/relative/path",
@@ -53,7 +53,7 @@ func TestFormatEntry_UnknownResult_FormatsCorrectly(t *testing.T) {
 }
 
 func TestFormatEntry_EmptyHomeDirAndConfigDir_UsesAbsolutePath(t *testing.T) {
-	wtr := New(nil, "", "", false, false, nil, nil)
+	wtr := New(nil, "", "", false, false, nil, nil, nil)
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/cat",

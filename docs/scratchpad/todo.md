@@ -1,10 +1,13 @@
 # execave TODOs
 
+- clearScreen needs fixing. Can detect TUI?
+
 - maybe use a simple "mini-react" library?
 - UI should indicate which config version is currently running
 
 ## easy, probably
 
+- maybe just enable a small set of basic dirs like /lib64
 - env var expansion in rules
 - --monitor for stdout/err, --monitor=<path> for file log
 - should use absolute path for bwrap?

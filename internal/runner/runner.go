@@ -19,6 +19,7 @@ import (
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
 	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/seccomp"
 	"golang.org/x/term"
 )
 
@@ -177,7 +178,15 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 	// Build sandbox and monitor
 	sb := sandbox.New(cfg, r.absConfigPath, r.netPath)
 	bwrapArgs := sb.BuildBwrapArgs(command)
-	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath())
+
+	// Build syscall allow/block maps and seccomp filter.
+	allowedSyscalls, blockedSyscalls := buildSyscallMaps(cfg)
+	seccompPipe, err := seccomp.FilterPipe(allowedSyscalls)
+	if err != nil {
+		return fmt.Errorf("create seccomp filter for monitored run: %w", err)
+	}
+
+	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath(), seccompPipe, blockedSyscalls, allowedSyscalls)
 
 	// Create context for this run
 	runCtx, cancel := context.WithCancel(ctx)
@@ -244,6 +253,10 @@ func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, comm
 	// can't actually Ctrl-C because raw mode swallows it as a byte (0x03).
 	r.restoreTerminal()
 
+	// Clear any TUI artifacts left by the killed process.
+	// TUI apps often use alternate screen buffer and don't clean up when killed.
+	clearScreen()
+
 	commandStr := strings.Join(command, " ")
 	errMsg := ""
 	if err != nil {
@@ -255,10 +268,6 @@ func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, comm
 	r.cancel = nil
 	r.done = nil
 	r.mu.Unlock()
-
-	// Clear any TUI artifacts left by the killed process.
-	// TUI apps often use alternate screen buffer and don't clean up when killed.
-	clearScreen()
 
 	// Print exit notification to terminal
 	if err != nil {
@@ -295,6 +304,25 @@ func (r *Runner) restoreTerminal() {
 
 	stdinFd := int(os.Stdin.Fd())
 	_ = term.Restore(stdinFd, r.initialTermState)
+}
+
+// buildSyscallMaps creates the allowed and blocked syscall maps from config rules.
+// allowed contains syscalls explicitly permitted by syscall:allow rules.
+// blocked contains all remaining ruleable syscalls not covered by allow rules.
+// Defense-in-depth syscalls are excluded — they are blocked silently by the BPF
+// filter without monitor tracing.
+func buildSyscallMaps(cfg *config.Config) (map[string]bool, map[string]bool) {
+	allowed := make(map[string]bool, len(cfg.SyscallAllowRules))
+	for _, name := range cfg.SyscallAllowRules {
+		allowed[name] = true
+	}
+	blocked := make(map[string]bool)
+	for _, name := range seccomp.RuleableSyscallNames() {
+		if !allowed[name] {
+			blocked[name] = true
+		}
+	}
+	return allowed, blocked
 }
 
 // drainStdin drains any buffered input from stdin.

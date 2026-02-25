@@ -388,11 +388,13 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 	rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: tmpDir, RawRule: "fs:ro:" + tmpDir})
 
 	cfg := &config.Config{
-		FSRules:      rules,
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: []string{"/dev", "/proc", "/sys", "/tmp"},
+		FSRules:           rules,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
 	}
 
 	absConfigPath := filepath.Join(tmpDir, "execave.json")

@@ -18,7 +18,7 @@ import (
 func runWriterWithBuf(t *testing.T, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, entries []accesslog.Entry) string {
 	t.Helper()
 	var buf bytes.Buffer
-	wtr := textlog.New(&buf, "/home/user", "/home/user/project", showAllowed, showNolog, fsRes, nil)
+	wtr := textlog.New(&buf, "/home/user", "/home/user/project", showAllowed, showNolog, fsRes, nil, nil)
 
 	logger := accesslog.New(nil)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -29,7 +29,7 @@ func runWriterWithBuf(t *testing.T, showAllowed, showNolog bool, fsRes *fsrules.
 	}()
 
 	for _, e := range entries {
-		require.NoError(t, logger.Log(e))
+		logger.Log(e)
 	}
 
 	cancel()
@@ -122,7 +122,7 @@ func TestIntegration_TextLog_PathShorteningApplied(t *testing.T) {
 
 func TestIntegration_TextLog_FinalDrainOnContextCancellation(t *testing.T) {
 	var buf bytes.Buffer
-	wtr := textlog.New(&buf, "", "", true, false, nil, nil)
+	wtr := textlog.New(&buf, "", "", true, false, nil, nil, nil)
 
 	logger := accesslog.New(nil)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -131,12 +131,12 @@ func TestIntegration_TextLog_FinalDrainOnContextCancellation(t *testing.T) {
 	cancel()
 
 	// Log entries and immediately check — the final drain happens during Run
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/etc/hosts",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/etc",
-	}))
+	})
 
 	// Run should drain on cancel
 	require.NoError(t, wtr.Run(ctx, logger))

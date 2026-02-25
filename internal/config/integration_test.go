@@ -190,6 +190,59 @@ func TestIntegration_ParseRules_NonAbsoluteConfigPathPanics(t *testing.T) {
 	})
 }
 
+// --- Requirement: Syscall rule validation ---
+
+func TestIntegration_ParseRules_ValidSyscallRulesAccepted(t *testing.T) {
+	cfg, err := config.ParseRules(
+		[]string{"fs:ro:/usr/lib", "syscall:allow:ptrace", "syscall:nolog:bpf"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
+	assert.Equal(t, []string{"bpf"}, cfg.SyscallNologRules)
+}
+
+func TestIntegration_ParseRules_InvalidSyscallNameRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"syscall:allow:ptraec"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	assert.ErrorContains(t, err, "not a ruleable syscall name")
+}
+
+func TestIntegration_ParseRules_DefenseInDepthSyscallRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"syscall:allow:syslog"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	require.ErrorContains(t, err, "not a ruleable syscall name")
+	assert.ErrorContains(t, err, "defense-in-depth")
+}
+
+func TestIntegration_ParseRules_DuplicateSyscallAllowRejected(t *testing.T) {
+	_, err := config.ParseRules(
+		[]string{"syscall:allow:ptrace", "syscall:allow:ptrace"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	assert.ErrorContains(t, err, "duplicate syscall allow rule")
+}
+
+func TestIntegration_ParseRules_SameNameAllowAndNologPermitted(t *testing.T) {
+	cfg, err := config.ParseRules(
+		[]string{"syscall:allow:ptrace", "syscall:nolog:ptrace"},
+		"/some/dir", "/some/dir/execave.toml", nil,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallNologRules)
+}
+
 // --- Requirement: ParseTOML ---
 
 func TestIntegration_ParseTOML_ProducesIdenticalConfigToLoad(t *testing.T) {

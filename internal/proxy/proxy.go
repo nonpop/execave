@@ -246,14 +246,12 @@ func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result 
 		logResult = accesslog.ResultDeny
 	}
 
-	if err := logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: opType,
 		Target:    target,
 		Result:    logResult,
 		Rule:      result.Rule,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "execave: log access: %v\n", err)
-	}
+	})
 }
 
 // parseHostPort extracts host and port from a host:port string.

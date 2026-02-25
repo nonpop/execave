@@ -39,10 +39,12 @@ func TestBuildBwrapArgs(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "/tmp/execave-test.json", nil)
@@ -91,10 +93,12 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -116,10 +120,12 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 			fsRule(fsrules.PermissionNone, noneDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -139,10 +145,12 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -157,11 +165,13 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -173,11 +183,13 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 
 func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	netPath := &sandbox.NetworkPath{
@@ -198,11 +210,13 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 
 func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -212,6 +226,18 @@ func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 	assert.False(t, argsContainSequence(args, "network-tunnel"))
 	// Command should follow -- directly
 	assert.True(t, argsContainSequence(args, "--", "echo", "hello"))
+}
+
+func TestInsertSeccompArg_InsertsBeforeSeparator(t *testing.T) {
+	args := []string{"--unshare-all", "--", "echo", "hi"}
+	got := sandbox.InsertSeccompArg(args, 3)
+	assert.True(t, argsContainSequence(got, "--seccomp", "3", "--", "echo", "hi"))
+}
+
+func TestInsertSeccompArg_DoesNotModifyOriginal(t *testing.T) {
+	original := []string{"--unshare-all", "--", "echo"}
+	sandbox.InsertSeccompArg(original, 3)
+	assert.Equal(t, []string{"--unshare-all", "--", "echo"}, original)
 }
 
 func TestHasNetworkPath(t *testing.T) {

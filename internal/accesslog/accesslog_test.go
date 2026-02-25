@@ -21,8 +21,7 @@ func TestLogger_LogEntry(t *testing.T) {
 		Rule:      "fs:ro:/etc",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
@@ -41,8 +40,6 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines)
 
-	errCh := make(chan error, numGoroutines*entriesPerGoroutine)
-
 	// Each goroutine logs distinct entries
 	for i := range numGoroutines {
 		go func(id int) {
@@ -54,20 +51,12 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 					Result:    ResultOK,
 					Rule:      "fs:ro:/tmp",
 				}
-				if err := logger.Log(entry); err != nil {
-					errCh <- err
-				}
+				logger.Log(entry)
 			}
 		}(i)
 	}
 
 	wg.Wait()
-	close(errCh)
-
-	// Check for any errors from goroutines
-	for err := range errCh {
-		require.NoError(t, err)
-	}
 
 	// Assert all distinct entries are present (no entries lost)
 	entries := logger.Entries()
@@ -98,10 +87,8 @@ func TestLogger_Deduplication(t *testing.T) {
 	}
 
 	// Log the same entry twice
-	err := logger.Log(entry)
-	require.NoError(t, err)
-	err = logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
+	logger.Log(entry)
 
 	// Should only appear once
 	entries := logger.Entries()
@@ -130,10 +117,8 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 		Rule:      "fs:rw:" + tmpDir,
 	}
 
-	err = logger.Log(readEntry)
-	require.NoError(t, err)
-	err = logger.Log(writeEntry)
-	require.NoError(t, err)
+	logger.Log(readEntry)
+	logger.Log(writeEntry)
 
 	// Both should be logged (different operations)
 	entries := logger.Entries()
@@ -180,8 +165,7 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 				Rule:      "fs:ro:/",
 			}
 
-			err := logger.Log(entry)
-			require.NoError(t, err)
+			logger.Log(entry)
 
 			entries := logger.Entries()
 			if tt.filtered {
@@ -208,8 +192,7 @@ func TestLogger_NonExistentReadLogged(t *testing.T) {
 		Rule:      RuleNoMatch,
 	}
 
-	err := logger.Log(readEntry)
-	require.NoError(t, err)
+	logger.Log(readEntry)
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, OperationRead, entries[0].Operation)
@@ -230,8 +213,7 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 		Rule:      "fs:ro:" + tmpDir,
 	}
 
-	err = logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, OperationRead, entries[0].Operation)
@@ -290,8 +272,7 @@ func TestLogger_LogFormat(t *testing.T) {
 		Rule:      "fs:ro:/home/user/project",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
@@ -311,8 +292,7 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 		Rule:      "net:http:api.example.com:443",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
@@ -332,8 +312,7 @@ func TestLogger_HTTPEntry(t *testing.T) {
 		Rule:      "net:http:localhost:3000",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
@@ -351,8 +330,7 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 		Rule:      RuleNoMatch,
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
@@ -374,8 +352,7 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 
 	// Log the same entry three times
 	for range 3 {
-		err := logger.Log(entry)
-		require.NoError(t, err)
+		logger.Log(entry)
 	}
 
 	entries := logger.Entries()
@@ -394,10 +371,8 @@ func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
 		Rule:      "net:http:example.com:443",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
-	err = logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
+	logger.Log(entry)
 
 	entries := logger.Entries()
 	assert.Len(t, entries, 1)
@@ -413,8 +388,59 @@ func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
 		Rule:      "net:http:api.example.com:443",
 	}
 
-	err := logger.Log(entry)
-	require.NoError(t, err)
+	logger.Log(entry)
+	entries := logger.Entries()
+	assert.Len(t, entries, 1)
+}
+
+func TestLogger_SyscallEntryLogged(t *testing.T) {
+	logger := New(nil)
+
+	entry := Entry{
+		Operation: OperationSyscall,
+		Target:    "bpf",
+		Result:    ResultDeny,
+		Rule:      RuleNoMatch,
+	}
+
+	logger.Log(entry)
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, OperationSyscall, entries[0].Operation)
+	assert.Equal(t, "bpf", entries[0].Target)
+	assert.Equal(t, ResultDeny, entries[0].Result)
+	assert.Equal(t, RuleNoMatch, entries[0].Rule)
+}
+
+func TestLogger_SyscallEntryDeduplicated(t *testing.T) {
+	logger := New(nil)
+
+	entry := Entry{
+		Operation: OperationSyscall,
+		Target:    "bpf",
+		Result:    ResultDeny,
+		Rule:      RuleNoMatch,
+	}
+
+	logger.Log(entry)
+	logger.Log(entry)
+
+	assert.Len(t, logger.Entries(), 1)
+}
+
+func TestLogger_SyscallEntryNotFilteredByManagedPaths(t *testing.T) {
+	logger := New([]string{"/dev", "/proc", "/tmp"})
+
+	entry := Entry{
+		Operation: OperationSyscall,
+		Target:    "mount",
+		Result:    ResultDeny,
+		Rule:      RuleNoMatch,
+	}
+
+	logger.Log(entry)
+
 	entries := logger.Entries()
 	assert.Len(t, entries, 1)
 }
@@ -448,8 +474,7 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 				Rule:      tt.rule,
 			}
 
-			err = logger.Log(entry)
-			require.NoError(t, err)
+			logger.Log(entry)
 			entries := logger.Entries()
 			require.Len(t, entries, 1)
 			assert.Equal(t, tt.rule, entries[0].Rule)

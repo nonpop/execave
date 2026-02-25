@@ -77,11 +77,12 @@ type Server struct {
 
 	accessToken string // random hex, required on every HTTP request as ?token=TOKEN
 
-	// fsLogResolver and netLogResolver determine whether entries should be hidden by nolog rules.
+	// fsLogResolver, netLogResolver, and syscallNolog determine whether entries should be hidden by nolog rules.
 	// Protected by mu. May be nil (meaning no log rules — all entries are visible).
 	// Read via isNolog, which acquires mu internally — do not call isNolog while holding mu.
 	fsLogResolver  *fsrules.LogResolver
 	netLogResolver *netrules.LogResolver
+	syscallNolog   map[string]bool
 
 	// OnConfigChange is called with the newly parsed config on every successful Start.
 	// It is called before runner.Start so net rule changes take effect before the run begins.
@@ -120,6 +121,7 @@ func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, c
 		accessToken:    hex.EncodeToString(tokenBuf[:]),
 		fsLogResolver:  nil,
 		netLogResolver: nil,
+		syscallNolog:   nil,
 		OnConfigChange: nil,
 	}
 }
@@ -194,12 +196,13 @@ func (s *Server) Token() string {
 	return s.accessToken
 }
 
-// SetLogResolvers updates the FS and net log resolvers used for nolog filtering.
+// SetLogResolvers updates the FS, net, and syscall log resolvers used for nolog filtering.
 // Pass nil to disable nolog filtering (all entries visible).
-func (s *Server) SetLogResolvers(fs *fsrules.LogResolver, net *netrules.LogResolver) {
+func (s *Server) SetLogResolvers(fs *fsrules.LogResolver, net *netrules.LogResolver, syscallNolog map[string]bool) {
 	s.mu.Lock()
 	s.fsLogResolver = fs
 	s.netLogResolver = net
+	s.syscallNolog = syscallNolog
 	s.mu.Unlock()
 }
 
@@ -210,9 +213,10 @@ func (s *Server) isNolog(entry accesslog.Entry) bool {
 	s.mu.Lock()
 	fsResolver := s.fsLogResolver
 	netResolver := s.netLogResolver
+	syscallNolog := s.syscallNolog
 	s.mu.Unlock()
 
-	return logfilter.IsNolog(entry, fsResolver, netResolver)
+	return logfilter.IsNolog(entry, fsResolver, netResolver, syscallNolog)
 }
 
 // tokenMiddleware returns a handler that rejects requests with a missing or incorrect token.
@@ -456,7 +460,12 @@ func (s *Server) sendStatusEvent(w http.ResponseWriter, status runner.RunStatus)
 		ExitCode int    `json:"exitCode"`
 		Error    string `json:"error"`
 		Command  string `json:"command"`
-	}(status)
+	}{
+		Running:  status.Running,
+		ExitCode: status.ExitCode,
+		Error:    status.Error,
+		Command:  status.Command,
+	}
 
 	data, err := json.Marshal(statusDto)
 	if err != nil {
@@ -518,9 +527,14 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update log resolvers from new config.
+	syscallNolog := make(map[string]bool, len(cfg.SyscallNologRules))
+	for _, name := range cfg.SyscallNologRules {
+		syscallNolog[name] = true
+	}
 	s.SetLogResolvers(
 		fsrules.NewLogResolver(cfg.FSLogRules),
 		netrules.NewLogResolver(cfg.NetLogRules),
+		syscallNolog,
 	)
 
 	if s.OnConfigChange != nil {

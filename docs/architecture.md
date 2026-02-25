@@ -12,6 +12,7 @@ flowchart TB
         AccessLog[Access Log: internal/accesslog]
         Runner[Runner: internal/runner]
         Sandbox[Sandbox: internal/sandbox]
+        Seccomp[Seccomp: internal/seccomp]
         Monitor[Monitor: internal/monitor]
         Proxy[Proxy: internal/proxy]
         LogFilter[Log Filter: internal/logfilter]
@@ -32,6 +33,7 @@ flowchart TB
     CLI --> Config
     CLI --> Runner
     Runner --> Sandbox
+    Runner --> Seccomp
     Runner --> Monitor
     Runner --> AccessLog
     CLI --> Proxy
@@ -48,6 +50,7 @@ flowchart TB
     TextLog --> LogFilter
     TextLog --> AccessLog
     Sandbox --> FSRules
+    Sandbox --> Seccomp
     Sandbox -->|bwrap| Tunnel
     Tunnel --> Process
     Tunnel -->|UDS| Proxy
@@ -78,11 +81,11 @@ In-memory access log with deduplication and pub/sub notifications. Filters infra
 
 ### Runner (`internal/runner/`)
 
-Manages lifecycle of monitored sandbox executions with start/stop control, status tracking, and automatic cleanup. Creates fresh access logs per run and handles terminal restoration. Bridges web UI and CLI with sandbox+monitor subsystems.
+Manages lifecycle of monitored sandbox executions with start/stop control, status tracking, and automatic cleanup. Creates fresh access logs per run and handles terminal restoration. When seccomp is enabled, creates the seccomp filter pipe and threads it through to the monitor. Bridges web UI and CLI with sandbox+monitor subsystems.
 
 ### Log Filter (`internal/logfilter/`)
 
-Shared display logic used by both web UI and text log: `ShortenPath` reduces absolute paths to config-directory-relative or `~/...` form; `IsNolog` checks whether an entry matches any `fs:nolog`/`net:nolog` rule (delegating to `fsrules.LogResolver` and `netrules.LogResolver`).
+Shared display logic used by both web UI and text log: `ShortenPath` reduces absolute paths to config-directory-relative or `~/...` form; `IsNolog` checks whether an entry matches any `fs:nolog`/`net:nolog`/`syscall:nolog` rule (delegating to `fsrules.LogResolver`, `netrules.LogResolver`, and a `syscallNolog` map).
 
 ### Web UI (`internal/webui/`)
 
@@ -98,7 +101,7 @@ Alternative monitor output mode. `Writer` subscribes to an `accesslog.Logger`, a
 
 ### Sandbox (`internal/sandbox/`)
 
-Translates filesystem rules to bwrap mount arguments (`--bind`, `--ro-bind`, `--tmpfs`). When network access or monitoring is enabled, injects proxy tunnel infrastructure into the sandbox namespace.
+Translates filesystem rules to bwrap mount arguments (`--bind`, `--ro-bind`, `--tmpfs`). When seccomp filtering is enabled (default), creates a seccomp filter pipe via `internal/seccomp` and passes it to bwrap via `--seccomp 3`. When network access or monitoring is enabled, injects proxy tunnel infrastructure into the sandbox namespace.
 
 See security-model.md for bwrap arg risks.
 
@@ -116,6 +119,12 @@ The sandboxed process inherits the host's working directory. If the host cwd is 
 
 Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, network). On older kernels, uses `--new-session` to prevent TIOCSTI terminal injection; on Linux 6.2+ where the kernel blocks TIOCSTI, `--new-session` is skipped to allow SIGWINCH delivery for TUI applications. Environment variables pass through from the host. Network is isolated by default; when net rules are configured or monitoring is enabled, a proxy-tunnel bridge provides controlled access (or deny-all logging with no net rules).
 
+### Seccomp (`internal/seccomp/`)
+
+Builds a classic BPF (cBPF) seccomp deny-list filter that blocks ~34 dangerous syscalls (ptrace, BPF, io_uring, namespace manipulation, kernel module loading, etc.). Exposes `Filter() []byte` (raw bytes) and `FilterPipe() (*os.File, error)` (a pipe suitable for passing to bwrap via `--seccomp <fd>`). The filter rejects wrong-architecture programs with `KILL_PROCESS` and returns `EPERM` for blocked syscalls.
+
+See security-model.md for seccomp filter risks.
+
 ### Proxy (`internal/proxy/`)
 
 Forward HTTP proxy on Unix domain socket (host-side). Handles CONNECT tunneling and HTTP forwarding, checking requests against network rules. Denies unauthorized requests and logs all attempts when monitoring is enabled.
@@ -126,7 +135,7 @@ TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, 
 
 ### Monitor (`internal/monitor/`)
 
-Optional filesystem access tracer (`--monitor`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming.
+Optional filesystem and syscall access tracer (`--monitor`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. When seccomp is enabled, also traces blocked and allowed syscalls and logs them as `SYSCALL` entries. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for web UI streaming. Note: strace uses ptrace, so if monitoring is enabled, the sandboxed process cannot use ptrace even if allowed by config (see security-model.md Limitations).
 
 ## Data Flow
 

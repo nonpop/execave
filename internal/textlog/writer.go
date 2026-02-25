@@ -20,13 +20,14 @@ import (
 
 // Writer subscribes to an access logger and writes formatted entries to an io.Writer.
 type Writer struct {
-	out         io.Writer
-	homeDir     string
-	configDir   string
-	showAllowed bool
-	showNolog   bool
-	fsRes       *fsrules.LogResolver
-	netRes      *netrules.LogResolver
+	out          io.Writer
+	homeDir      string
+	configDir    string
+	showAllowed  bool
+	showNolog    bool
+	fsRes        *fsrules.LogResolver
+	netRes       *netrules.LogResolver
+	syscallNolog map[string]bool
 }
 
 // New creates a Writer that writes access log entries to out.
@@ -34,16 +35,17 @@ type Writer struct {
 // pass empty strings to disable shortening.
 // showAllowed includes OK entries when true (default: denied-only).
 // showNolog includes entries matching nolog rules when true (default: hidden).
-// fsRes and netRes may be nil if no log rules are configured.
-func New(out io.Writer, homeDir, configDir string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) *Writer {
+// fsRes, netRes, and syscallNolog may be nil if no log rules are configured.
+func New(out io.Writer, homeDir, configDir string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool) *Writer {
 	return &Writer{
-		out:         out,
-		homeDir:     homeDir,
-		configDir:   configDir,
-		showAllowed: showAllowed,
-		showNolog:   showNolog,
-		fsRes:       fsRes,
-		netRes:      netRes,
+		out:          out,
+		homeDir:      homeDir,
+		configDir:    configDir,
+		showAllowed:  showAllowed,
+		showNolog:    showNolog,
+		fsRes:        fsRes,
+		netRes:       netRes,
+		syscallNolog: syscallNolog,
 	}
 }
 
@@ -84,12 +86,11 @@ func (w *Writer) writeIfVisible(entry accesslog.Entry) error {
 	if !w.showAllowed && entry.Result == accesslog.ResultOK {
 		return nil
 	}
-	if !w.showNolog && logfilter.IsNolog(entry, w.fsRes, w.netRes) {
+	if !w.showNolog && logfilter.IsNolog(entry, w.fsRes, w.netRes, w.syscallNolog) {
 		return nil
 	}
-	_, err := fmt.Fprintf(w.out, "%s\n", w.formatEntry(entry))
-	if err != nil {
-		return fmt.Errorf("write entry: %w", err)
+	if _, err := fmt.Fprintf(w.out, "%s\n", w.formatEntry(entry)); err != nil {
+		return fmt.Errorf("write log entry: %w", err)
 	}
 	return nil
 }

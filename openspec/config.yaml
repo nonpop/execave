@@ -9,9 +9,10 @@ context: |
   Monitoring: --monitor modes: (default=web) localhost web UI with SSE access log and run control (start/stop/restart), survives sandbox exit; =<path> writes text log in real-time; =- buffers to stderr on exit. Runner creates fresh access log per run. Paths shortened via logfilter.ShortenPath (relative to config dir or tilde form).
   Filter flags: --show-allowed includes OK entries (default: denied-only). --show-nolog includes nolog-rule entries (default: hidden). Apply to web UI (initial checkbox state) and text log (filter at startup).
   E2E tests: scenario DSL in test/e2e/helpers_test.go — newScenario(t) creates a builder with dir/file/rule/run/assert methods. testDir named string enables rule concatenation and ~/‑relative paths for monitor assertions.
-  Log visibility rules: fs:log/fs:nolog and net:log/net:nolog control display filtering (display-only, no security impact). Default (no match) = show. All entries stored in Logger regardless of log rules.
+  Log visibility rules: fs:log/fs:nolog, net:log/net:nolog, and syscall:nolog control display filtering (display-only, no security impact). Default (no match) = show. All entries stored in Logger regardless of log rules.
   LogFilter package (internal/logfilter): shared ShortenPath and IsNolog logic used by webui and textlog.
   TextLog package (internal/textlog): Writer subscribes to accesslog.Logger, filters entries, writes one line per entry. Drains remaining entries on context cancellation.
+  Seccomp: ~34 dangerous syscalls blocked by BPF deny-list. Of these, 14 are defense-in-depth only (kernel already prevents them via init-namespace capabilities or removal) and cannot be used in config rules. The remaining ~20 are ruleable. Blocked attempts visible as SYSCALL entries in access log (DENY/no-matching-rule). syscall:allow:<name> removes a ruleable syscall from the BPF filter (security impact: expands kernel attack surface). syscall:nolog:<name> suppresses display of matching SYSCALL entries for ruleable syscalls. Note: --monitor uses strace (ptrace), so sandboxed process cannot use ptrace even if syscall:allow:ptrace is configured.
 
 rules:
   proposal:

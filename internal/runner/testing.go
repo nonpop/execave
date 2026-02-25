@@ -10,11 +10,13 @@ import (
 // The runner is in idle state by default.
 func NewTestRunner() *Runner {
 	cfg := &config.Config{
-		FSRules:      nil,
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	return New(cfg, "/tmp/test-config.json", &sandbox.NetworkPath{UDSPath: "", ExecaveBinary: ""})
 }

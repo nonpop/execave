@@ -12,8 +12,8 @@ import (
 
 // IsNolog reports whether entry matches a nolog rule, meaning it should be
 // hidden when nolog filtering is enabled.
-// fsRes and netRes may be nil (meaning no log rules — all entries are visible).
-func IsNolog(entry accesslog.Entry, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) bool {
+// fsRes, netRes, and syscallNolog may be nil (meaning no log rules — all entries are visible).
+func IsNolog(entry accesslog.Entry, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool) bool {
 	switch entry.Operation {
 	case accesslog.OperationRead, accesslog.OperationWrite:
 		if fsRes == nil {
@@ -33,6 +33,8 @@ func IsNolog(entry accesslog.Entry, fsRes *fsrules.LogResolver, netRes *netrules
 			return false
 		}
 		return !netRes.Visible(host, uint16(portNum))
+	case accesslog.OperationSyscall:
+		return syscallNolog[entry.Target]
 	default:
 		panic(fmt.Sprintf("IsNolog: unexpected operation type %q", entry.Operation))
 	}

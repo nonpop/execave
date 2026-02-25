@@ -98,12 +98,12 @@ func TestIntegration_AccessTokenAuthentication_SseConnectionRequiresToken(t *tes
 
 func TestIntegration_AccessLogPage_PageDisplaysEntries(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/tmp/data/file.txt",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/tmp/data",
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -124,7 +124,7 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 		{Operation: accesslog.OperationRead, Target: "/etc/secret", Result: accesslog.ResultDeny, Rule: accesslog.RuleNoMatch},
 	}
 	for _, e := range entries {
-		require.NoError(t, logger.Log(e))
+		logger.Log(e)
 	}
 
 	srv := webui.StartServer(t, logger)
@@ -138,12 +138,12 @@ func TestIntegration_AccessLogPage_PageDisplaysAllEntryTypes(t *testing.T) {
 
 func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 
@@ -163,12 +163,12 @@ func TestIntegration_AccessLogPage_PageRefreshShowsCurrentEntries(t *testing.T) 
 
 func TestIntegration_PathShortening_FilesystemPathShortenedToRelativeForm(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/project/src/main.go",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:rw:~/project",
-	}))
+	})
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -180,12 +180,12 @@ func TestIntegration_PathShortening_FilesystemPathShortenedToRelativeForm(t *tes
 
 func TestIntegration_PathShortening_FilesystemPathShortenedToTildeForm(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/.ssh/id_rsa",
 		Result:    accesslog.ResultDeny,
 		Rule:      "no-matching-rule",
-	}))
+	})
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -195,12 +195,12 @@ func TestIntegration_PathShortening_FilesystemPathShortenedToTildeForm(t *testin
 
 func TestIntegration_PathShortening_NonFilesystemTargetNotShortened(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
 		Target:    "api.example.com:443",
 		Result:    accesslog.ResultOK,
 		Rule:      "net:http:api.example.com:443",
-	}))
+	})
 
 	srv := webui.StartServerWithPaths(t, logger, "/home/user", "/home/user/project")
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -222,12 +222,12 @@ func TestIntegration_PathShortening_SseEntryEventUsesShortPath(t *testing.T) {
 	readEventWithTimeout(t, eventCh) // config
 
 	// Log entry after SSE connection is established
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/project/src/main.go",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:rw:~/project",
-	}))
+	})
 
 	entryEvent := readEventWithTimeout(t, eventCh)
 	assert.Equal(t, "entry", entryEvent.Event)
@@ -251,12 +251,12 @@ func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.
 	readEventWithTimeout(t, eventCh) // config
 
 	// Log a new entry after SSE connection is established
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/lib/streamed.so",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	// Entry is streamed to the client
 	entryEvent := readEventWithTimeout(t, eventCh)
@@ -267,12 +267,12 @@ func TestIntegration_RealTimeEntryStreaming_NewEntriesStreamedViaSse(t *testing.
 func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 50 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/lib/file" + strconv.Itoa(i) + ".so",
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := webui.StartServer(t, logger)
@@ -297,12 +297,12 @@ func TestIntegration_RealTimeEntryStreaming_SseReplaysFromCursor(t *testing.T) {
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSseGapNotLost(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 52 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/lib/entry" + strconv.Itoa(i) + ".so",
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := webui.StartServer(t, logger)
@@ -326,12 +326,12 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_EntriesDuringPageToSs
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLastEventId(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 80 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/lib/file" + strconv.Itoa(i) + ".so",
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := webui.StartServer(t, logger)
@@ -356,12 +356,12 @@ func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_SseReconnectionUsesLa
 func TestIntegration_NoEntriesDroppedBetweenPageLoadAndSse_StaleReconnectReplaysFromStart(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 5 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/lib/file" + strconv.Itoa(i) + ".so",
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := webui.StartServer(t, logger)
@@ -855,12 +855,12 @@ func TestIntegration_RunControlEndpoints_StartCallsOnConfigChangeBeforeRun(t *te
 
 func TestIntegration_RestartClearsLogEntries(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	rnr := runner.NewTestRunner()
 	rnr.SetTestLogger(logger)
@@ -985,12 +985,12 @@ func TestIntegration_DeniedOnlyFilter_PageContainsApplyNologCheckboxCheckedByDef
 
 func TestIntegration_DeniedOnlyFilter_OKEntriesHaveResultAttribute(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -1000,12 +1000,12 @@ func TestIntegration_DeniedOnlyFilter_OKEntriesHaveResultAttribute(t *testing.T)
 
 func TestIntegration_DeniedOnlyFilter_DenyEntriesHaveResultAttribute(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/etc/secret",
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -1017,16 +1017,17 @@ func TestIntegration_DeniedOnlyFilter_DenyEntriesHaveResultAttribute(t *testing.
 
 func TestIntegration_NologFilter_NologEntryHasNologAttribute(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/project/cache/data",
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	srv.SetLogResolvers(
 		fsrules.NewLogResolver([]fsrules.LogRule{{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"}}),
+		nil,
 		nil,
 	)
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -1036,12 +1037,12 @@ func TestIntegration_NologFilter_NologEntryHasNologAttribute(t *testing.T) {
 
 func TestIntegration_NologFilter_LogOverrideEntryHasNologFalseAttribute(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/project/secret/key.pem",
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	srv.SetLogResolvers(
@@ -1049,6 +1050,7 @@ func TestIntegration_NologFilter_LogOverrideEntryHasNologFalseAttribute(t *testi
 			{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"},
 			{Visible: true, Path: "/home/user/project/secret", RawRule: "log:/home/user/project/secret"},
 		}),
+		nil,
 		nil,
 	)
 	body := fetchBody(t, srv.EndpointURL("/"))
@@ -1058,12 +1060,12 @@ func TestIntegration_NologFilter_LogOverrideEntryHasNologFalseAttribute(t *testi
 
 func TestIntegration_NologFilter_NoLogResolverMeansNologFalse(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	srv := webui.StartServer(t, logger)
 	// No resolvers set — all entries should have nolog=false
@@ -1080,6 +1082,7 @@ func TestIntegration_SseNologMetadata_SseEntryEventContainsNologTrue(t *testing.
 	srv.SetLogResolvers(
 		fsrules.NewLogResolver([]fsrules.LogRule{{Visible: false, Path: "/home/user/project", RawRule: "nolog:/home/user/project"}}),
 		nil,
+		nil,
 	)
 
 	resp, err := http.Get(srv.EndpointURL("/events"))
@@ -1090,12 +1093,12 @@ func TestIntegration_SseNologMetadata_SseEntryEventContainsNologTrue(t *testing.
 	readEventWithTimeout(t, eventCh) // status
 	readEventWithTimeout(t, eventCh) // config
 
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/home/user/project/cache/data",
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleNoMatch,
-	}))
+	})
 
 	entryEvent := readEventWithTimeout(t, eventCh)
 	assert.Equal(t, "entry", entryEvent.Event)
@@ -1114,12 +1117,12 @@ func TestIntegration_SseNologMetadata_SseEntryEventContainsNologFalse(t *testing
 	readEventWithTimeout(t, eventCh) // status
 	readEventWithTimeout(t, eventCh) // config
 
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/lib/streamed.so",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	entryEvent := readEventWithTimeout(t, eventCh)
 	assert.Equal(t, "entry", entryEvent.Event)

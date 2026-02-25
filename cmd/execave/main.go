@@ -44,7 +44,6 @@ func newRootCommand() *cobra.Command {
 	var noOpen bool
 	var showAllowed bool
 	var showNolog bool
-
 	cmd := &cobra.Command{
 		Use:   "execave [flags] [--] <command>",
 		Short: "Filesystem sandbox for command execution",
@@ -83,7 +82,6 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Do not open the browser when --monitor is enabled")
 	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only). Also sets the initial 'Denied only' checkbox state in web UI mode.")
 	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden). Also sets the initial 'Apply nolog rules' checkbox state in web UI mode.")
-
 	cmd.AddCommand(newNetworkTunnelCommand())
 
 	return cmd
@@ -314,15 +312,19 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 
 	fsRes := fsrules.NewLogResolver(cfg.FSLogRules)
 	netRes := netrules.NewLogResolver(cfg.NetLogRules)
+	syscallNolog := make(map[string]bool, len(cfg.SyscallNologRules))
+	for _, name := range cfg.SyscallNologRules {
+		syscallNolog[name] = true
+	}
 
 	if monitorMode == "web" {
-		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, homeDir, configDir, command, noOpen, showAllowed, showNolog, fsRes, netRes, sigCh)
+		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, homeDir, configDir, command, noOpen, showAllowed, showNolog, fsRes, netRes, syscallNolog, sigCh)
 	}
-	return runMonitoredText(ctx, cfg, rnr, homeDir, configDir, command, monitorMode, showAllowed, showNolog, fsRes, netRes)
+	return runMonitoredText(ctx, cfg, rnr, homeDir, configDir, command, monitorMode, showAllowed, showNolog, fsRes, netRes, syscallNolog)
 }
 
 // runMonitoredWeb runs the command under strace monitoring with a web UI.
-func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, homeDir, configDir string, command []string, noOpen, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, sigCh chan os.Signal) (int, error) {
+func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, homeDir, configDir string, command []string, noOpen, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool, sigCh chan os.Signal) (int, error) {
 	// Read raw config file content for the web UI editor
 	configContent, err := os.ReadFile(absConfigPath) // #nosec G304 -- absConfigPath is validated as absolute path
 	if err != nil {
@@ -330,7 +332,7 @@ func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath stri
 	}
 
 	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
-	server.SetLogResolvers(fsRes, netRes)
+	server.SetLogResolvers(fsRes, netRes, syscallNolog)
 
 	// Wire config changes to update the proxy's net rules resolver
 	server.OnConfigChange = func(newCfg *config.Config) {
@@ -374,7 +376,7 @@ func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath stri
 
 // runMonitoredText runs the command under strace monitoring with text log output.
 // monitorPath is the output file path or "-" to buffer to stderr after process exit.
-func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) (_ int, err error) {
+func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool) (_ int, err error) {
 	var out io.Writer
 	var buf *bytes.Buffer
 
@@ -394,7 +396,7 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 		out = logFile
 	}
 
-	logWriter := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes)
+	logWriter := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes, syscallNolog)
 
 	if err := rnr.Start(ctx, cfg, command); err != nil {
 		return 0, fmt.Errorf("start initial run: %w", err)

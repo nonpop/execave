@@ -42,6 +42,7 @@ linters:
       exclude:
         - '.+/cobra\.Command$'
         - '(net|net/http|crypto/tls|syscall)\..+' # stdlib structs are well-known, well-behaved, and stable
+        - '(golang.org/x/sys/unix)\..+' # same as above
 
     goconst:
       ignore-tests: true

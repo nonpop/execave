@@ -95,6 +95,18 @@ In web UI mode these flags set the initial checkbox state.
 
 **Workflow:** Start with `execave.toml.example`, run with `--monitor`, check for DENY entries in the web UI (filesystem paths are shown in shortened form relative to the config directory or home), edit the config in-browser, grant only what's necessary, repeat. Use `--no-open` to suppress the automatic browser launch.
 
+## Seccomp
+
+A BPF deny-list blocks dangerous syscalls by default. With `--monitor`, blocked attempts appear as `SYSCALL` entries in the access log.
+
+To allow a specific syscall, add `syscall:allow:<name>` to your config. To hide a syscall from the monitor log, add `syscall:nolog:<name>`.
+
+**Note:** When `--monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, `syscall:allow:ptrace` will not make ptrace usable inside the sandbox.
+
+**Blocked syscalls:**
+
+`ptrace`, `bpf`, `io_uring_setup`, `io_uring_enter`, `io_uring_register`, `kexec_load`, `kexec_file_load`, `mount`, `umount2`, `unshare`, `setns`, `pivot_root`, `chroot`, `open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `keyctl`, `add_key`, `request_key`, `reboot`, `init_module`, `finit_module`, `delete_module`, `acct`, `swapon`, `swapoff`, `settimeofday`, `adjtimex`, `clock_adjtime`, `syslog`, `nfsservctl`
+
 ## Requirements
 
 - Linux, Go 1.25+, `bubblewrap`, `strace` (for `--monitor`)

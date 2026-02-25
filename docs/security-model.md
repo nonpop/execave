@@ -48,6 +48,7 @@ flowchart LR
 | Sandboxed process can't signal host processes | PID namespace isolation |
 | Sandboxed process can't share memory with host | IPC namespace isolation |
 | Sandboxed process can't inject terminal input | Kernel TIOCSTI disabling (Linux 6.2+) or `--new-session` fallback (older kernels) |
+| Dangerous syscalls blocked | Seccomp-bpf deny-list (ptrace, BPF, io_uring, namespace manipulation, and other privilege-escalation syscalls) |
 | No network access by default | Network namespace isolation (`--unshare-all` without `--share-net`) |
 | Network access only via allowlist | Forward proxy on UDS enforces net rules; no NIC inside sandbox |
 | No DNS exfiltration | No DNS resolver reachable from sandbox |
@@ -94,6 +95,8 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Config protection | Future-run escalation | Config validation rejects explicit rw; rule resolver determines inherited permission; synthetic ro rule overlays | Unit tests + e2e tests |
 | Net rule resolution | Wrong allow/deny | Single-dimension target specificity: domains (exact > wildcard), IPs (longer CIDR prefix > shorter) | Fuzz tests + unit tests + e2e tests |
 | Proxy allowlist | Unauthorized access | Default-deny; protocol+target+port matching via net rules | Unit tests + e2e tests |
+| Seccomp filter | Filter bypass or absent filter | Deny-list BPF program: arch check first, then per-syscall JEQ; KILL_PROCESS on wrong arch | Unit tests |
+| Syscall allow rules | Per-syscall seccomp bypass | `syscall:allow:<name>` removes a syscall from the BPF deny-list; names validated against blocked list at config parse time | Unit tests + integration tests + e2e tests |
 
 ## Safe Usage
 
@@ -101,9 +104,29 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 - **Testing:** Use `--monitor` to audit actual access patterns before trusting a config.
 - **Incident:** Check file modifications (timestamps, git status) → review config → assess if access was excessive. (`--monitor` too expensive for regular use, so syscall logs typically unavailable.)
 
+## Seccomp Visibility
+
+Only **ruleable** blocked syscalls are traced by the monitor and appear as `SYSCALL` entries in the access log. Defense-in-depth syscalls are blocked silently by the BPF filter without producing access log entries — they can never succeed inside bwrap's user-namespace sandbox, so tracing them would be noise the user cannot act on.
+
+Ruleable syscall attempts are visible as `SYSCALL` entries with `DENY` result and `no-matching-rule` rule (consistent with other resource types). This makes the seccomp filter auditable — users can verify the filter is working and see what the sandboxed process attempted.
+
+`syscall:allow:<name>` rules remove individual syscalls from the seccomp deny-list. **Trust implication:** each allowed syscall re-exposes the kernel attack surface for that syscall. Only allow syscalls that are genuinely required by the workload. Allowed syscalls appear as `SYSCALL` entries with `OK` result.
+
+`syscall:nolog:<name>` rules suppress display of matching `SYSCALL` entries (display-only, same as `fs:nolog`/`net:nolog`).
+
+### Defense-in-depth vs ruleable syscalls
+
+Of the ~34 seccomp-blocked syscalls, 13 require init-namespace capabilities that bwrap's user-namespace sandbox drops and 1 is removed from the kernel entirely (`nfsservctl`, ENOSYS since Linux 3.1). The kernel already prevents these syscalls inside the sandbox, so `syscall:allow` rules cannot meaningfully enable them.
+
+These **defense-in-depth** syscalls remain in the BPF filter (reducing attack surface if the sandbox model changes) but are rejected in config rules. Attempting to use `syscall:allow:<name>` or `syscall:nolog:<name>` for a defense-in-depth syscall produces a config error.
+
+**Defense-in-depth syscalls:** `kexec_load`, `kexec_file_load` (CAP_SYS_BOOT), `init_module`, `finit_module`, `delete_module` (CAP_SYS_MODULE), `settimeofday`, `adjtimex`, `clock_adjtime` (CAP_SYS_TIME), `syslog` (CAP_SYSLOG), `acct` (CAP_SYS_PACCT), `swapon`, `swapoff` (CAP_SYS_ADMIN), `nfsservctl` (ENOSYS).
+
+**Ruleable syscalls** (can be used in config rules): `ptrace`, `bpf`, `io_uring_setup`, `io_uring_enter`, `io_uring_register`, `reboot`, `mount`, `umount2`, `unshare`, `setns`, `pivot_root`, `chroot`, `open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `keyctl`, `add_key`, `request_key`.
+
 ## Log Visibility Rules
 
-`fs:log`/`fs:nolog` and `net:log`/`net:nolog` rules control which entries are displayed in the web UI. They are **display-only** and have no effect on:
+`fs:log`/`fs:nolog`, `net:log`/`net:nolog`, and `syscall:nolog` rules control which entries are displayed in the web UI. They are **display-only** and have no effect on:
 - Access enforcement (bwrap mounts, proxy allow/deny)
 - The Logger (all entries are stored unconditionally)
 - The sandbox boundary or bwrap invocation
@@ -121,3 +144,5 @@ These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress ent
 - Monitor logs `UNKNOWN` for symlinks whose targets fall under managed paths (`/dev`, `/proc`, `/tmp`), because these filesystems exist only inside the sandbox's mount namespace and cannot be resolved from the host
 - Monitor filters nonexistent paths from the log to reduce noise. Ephemeral files (created and deleted during execution) won't appear due to post-execution checking
 - HTTPS enforcement is not possible: the proxy is a non-MITM TCP relay. A `net:http:` rule permits CONNECT tunneling but cannot verify that TLS occurs inside the tunnel; the sandboxed process and remote server can exchange plaintext over the allowed channel
+- When `--monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, the sandboxed process cannot use ptrace even if `syscall:allow:ptrace` is configured
+- `syscall:allow` rules selectively weaken the seccomp filter; each allowed syscall expands the kernel attack surface

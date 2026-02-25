@@ -80,12 +80,12 @@ func TestToken_RequiredOnAllEndpoints(t *testing.T) {
 
 func TestSSE_EntryEventIDFormat(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	srv := StartServer(t, logger)
 
@@ -105,12 +105,12 @@ func TestSSE_EntryEventIDFormat(t *testing.T) {
 func TestSSE_ReconnectResumesFromLastEventID(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 3 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/bin/test" + strings.Repeat("x", i),
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := StartServer(t, logger)
@@ -136,12 +136,12 @@ func TestSSE_ReconnectResumesFromLastEventID(t *testing.T) {
 func TestSSE_StaleReconnectSendsClearAndReplaysFromStart(t *testing.T) {
 	logger := accesslog.New(nil)
 	for i := range 2 {
-		require.NoError(t, logger.Log(accesslog.Entry{
+		logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationRead,
 			Target:    "/usr/bin/test" + strings.Repeat("x", i),
 			Result:    accesslog.ResultOK,
 			Rule:      "fs:ro:/usr",
-		}))
+		})
 	}
 
 	srv := StartServer(t, logger)
@@ -169,12 +169,12 @@ func TestSSE_StaleReconnectSendsClearAndReplaysFromStart(t *testing.T) {
 
 func TestSSE_MalformedLastEventID_ReplaysFromStart(t *testing.T) {
 	logger := accesslog.New(nil)
-	require.NoError(t, logger.Log(accesslog.Entry{
+	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
 		Target:    "/usr/bin/test",
 		Result:    accesslog.ResultOK,
 		Rule:      "fs:ro:/usr",
-	}))
+	})
 
 	srv := StartServer(t, logger)
 

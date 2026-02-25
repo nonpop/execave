@@ -9,11 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/seccomp"
 )
 
 // tiocSTISysctlPath is the sysctl path for TIOCSTI legacy mode.
@@ -64,6 +66,23 @@ func New(cfg *config.Config, configPath string, netPath *NetworkPath) *Sandbox {
 	}
 }
 
+// InsertSeccompArg inserts --seccomp <fd> before the -- separator in bwrap args.
+// args must contain "--" as a separator. fd is the file descriptor number of
+// the seccomp filter pipe (e.g. 3 for the direct path, 4 for the monitored path).
+func InsertSeccompArg(args []string, fd int) []string {
+	for i, a := range args {
+		if a == "--" {
+			seccompArgs := []string{"--seccomp", strconv.Itoa(fd)}
+			result := make([]string, 0, len(args)+len(seccompArgs))
+			result = append(result, args[:i]...)
+			result = append(result, seccompArgs...)
+			result = append(result, args[i:]...)
+			return result
+		}
+	}
+	panic("internal error: InsertSeccompArg: no -- separator found in bwrap args")
+}
+
 // HasNetworkPath reports whether the sandbox has network proxy-tunnel configuration.
 func (s *Sandbox) HasNetworkPath() bool {
 	return s.netPath != nil
@@ -81,12 +100,30 @@ func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 
 	bwrapArgs := s.BuildBwrapArgs(command)
 
+	var allowedSyscalls map[string]bool
+	if len(s.cfg.SyscallAllowRules) > 0 {
+		allowedSyscalls = make(map[string]bool, len(s.cfg.SyscallAllowRules))
+		for _, name := range s.cfg.SyscallAllowRules {
+			allowedSyscalls[name] = true
+		}
+	}
+
+	var extraFiles []*os.File
+	pipe, err := seccomp.FilterPipe(allowedSyscalls)
+	if err != nil {
+		return 1, fmt.Errorf("create seccomp filter: %w", err)
+	}
+	defer pipe.Close() //nolint:errcheck // pipe closed after cmd.Run
+	extraFiles = []*os.File{pipe}
+	bwrapArgs = InsertSeccompArg(bwrapArgs, 3)
+
 	cmd := exec.CommandContext(ctx, "bwrap", bwrapArgs...) // #nosec G204 -- args built from validated config
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = extraFiles
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		exitErr := new(exec.ExitError)
 		if errors.As(err, &exitErr) {

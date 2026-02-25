@@ -11,19 +11,33 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/sandbox"
+)
+
+const (
+	// stracePipeFD is the file descriptor for strace output in the child process.
+	// ExtraFiles[0] → fd 3.
+	stracePipeFD = 3
+	// seccompFilterFD is the file descriptor for the seccomp filter pipe in the monitored path.
+	// ExtraFiles[1] → fd 4 (after strace pipe at fd 3).
+	seccompFilterFD = 4
 )
 
 // Monitor wraps command execution with strace to log filesystem access.
 type Monitor struct {
-	resolver       *fsrules.AccessResolver
-	logger         *accesslog.Logger
-	bwrapArgs      []string // strace wraps bwrap
-	hasNetworkPath bool     // tunnel adds an extra execve to setup
+	resolver        *fsrules.AccessResolver
+	logger          *accesslog.Logger
+	bwrapArgs       []string        // strace wraps bwrap
+	hasNetworkPath  bool            // tunnel adds an extra execve to setup
+	seccompFile     *os.File        // seccomp filter fd; nil means no filtering
+	blockedSyscalls map[string]bool // syscalls still blocked by seccomp (non-nil when seccomp active)
+	allowedSyscalls map[string]bool // syscalls allowed via syscall:allow rules
 }
 
 // OperationType classifies filesystem operations as read or write.
@@ -41,12 +55,28 @@ const (
 // New creates a new Monitor.
 // bwrapArgs configures sandbox integration. If empty, strace traces the command directly.
 // hasNetworkPath indicates whether the sandbox has a network tunnel (adds an extra execve to setup).
-func New(logger *accesslog.Logger, resolver *fsrules.AccessResolver, bwrapArgs []string, hasNetworkPath bool) *Monitor {
+// seccompFile is the read end of the seccomp filter pipe; nil means no filtering.
+// blockedSyscalls and allowedSyscalls control syscall tracing; both must be nil when seccompFile is nil.
+func New(
+	logger *accesslog.Logger,
+	resolver *fsrules.AccessResolver,
+	bwrapArgs []string,
+	hasNetworkPath bool,
+	seccompFile *os.File,
+	blockedSyscalls map[string]bool,
+	allowedSyscalls map[string]bool,
+) *Monitor {
+	if seccompFile == nil && (blockedSyscalls != nil || allowedSyscalls != nil) {
+		panic("New: blockedSyscalls and allowedSyscalls must be nil when seccompFile is nil")
+	}
 	return &Monitor{
-		logger:         logger,
-		resolver:       resolver,
-		bwrapArgs:      bwrapArgs,
-		hasNetworkPath: hasNetworkPath,
+		logger:          logger,
+		resolver:        resolver,
+		bwrapArgs:       bwrapArgs,
+		hasNetworkPath:  hasNetworkPath,
+		seccompFile:     seccompFile,
+		blockedSyscalls: blockedSyscalls,
+		allowedSyscalls: allowedSyscalls,
 	}
 }
 
@@ -62,14 +92,24 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 		return 1, fmt.Errorf("create pipe for strace output: %w", err)
 	}
 
+	// Build effective bwrap args: insert --seccomp 4 when filter is active.
+	// fd 3 = strace pipe (ExtraFiles[0]), fd 4 = seccomp pipe (ExtraFiles[1]).
+	effectiveBwrapArgs := m.bwrapArgs
+	extraFiles := []*os.File{straceW}
+	if m.seccompFile != nil {
+		if len(m.bwrapArgs) > 0 {
+			effectiveBwrapArgs = sandbox.InsertSeccompArg(m.bwrapArgs, seccompFilterFD)
+		}
+		extraFiles = append(extraFiles, m.seccompFile)
+	}
+
 	// Build strace command with pipe write end as ExtraFiles[0] (becomes fd 3 in child)
-	const stracePipeFD = 3
-	straceArgs := m.buildStraceArgs(command, stracePipeFD)
+	straceArgs := m.buildStraceArgs(command, effectiveBwrapArgs)
 	cmd := exec.CommandContext(ctx, "strace", straceArgs...) // #nosec G204 -- args built from validated config
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = []*os.File{straceW}
+	cmd.ExtraFiles = extraFiles
 
 	if err := cmd.Start(); err != nil {
 		_ = straceR.Close()
@@ -77,11 +117,8 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 		return 1, fmt.Errorf("start strace: %w", err)
 	}
 
-	// Close write end in parent - strace child has its own copy.
-	// If this fails, the pipe never gets EOF and the reader goroutine deadlocks.
-	if err := straceW.Close(); err != nil {
-		panic("close strace pipe write end: " + err.Error())
-	}
+	// Close parent-side pipe ends after child inherits them via ExtraFiles.
+	m.closeParentPipes(straceW)
 
 	// Process strace output in goroutine while child runs
 	processingErrCh := make(chan error, 1)
@@ -124,6 +161,20 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 	return exitCode, nil
 }
 
+// closeParentPipes closes parent-side pipe ends after cmd.Start hands dups to the child.
+// straceW must be closed or the reader goroutine deadlocks waiting for EOF.
+// seccompFile must be closed or each Run leaks a file descriptor.
+func (m *Monitor) closeParentPipes(straceW *os.File) {
+	if err := straceW.Close(); err != nil {
+		panic("close strace pipe write end: " + err.Error())
+	}
+	if m.seccompFile != nil {
+		if err := m.seccompFile.Close(); err != nil {
+			panic("close seccomp filter pipe: " + err.Error())
+		}
+	}
+}
+
 // extractExitCode determines the exit code from a command error.
 // Returns 0 if no error, or the exit code if the command failed.
 // Returns an error if the command could not be started at all.
@@ -148,22 +199,39 @@ func extractExitCode(err error) (int, error) {
 	return exitErr.ExitCode(), nil
 }
 
-func (m *Monitor) buildStraceArgs(command []string, outputFD int) []string {
+func (m *Monitor) buildStraceArgs(command []string, bwrapArgs []string) []string {
+	// Build trace expression: always trace file ops + fchdir.
+	// When seccomp tracing is active, also trace blocked and allowed syscall names.
+	traceExpr := "trace=file,fchdir"
+	if m.blockedSyscalls != nil {
+		names := make([]string, 0, len(m.blockedSyscalls)+len(m.allowedSyscalls))
+		for name := range m.blockedSyscalls {
+			names = append(names, name)
+		}
+		for name := range m.allowedSyscalls {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		if len(names) > 0 {
+			traceExpr += "," + strings.Join(names, ",")
+		}
+	}
+
 	straceArgs := []string{
-		"-f",                      // Follow forks
-		"-y",                      // Print paths for file descriptors
-		"-e", "trace=file,fchdir", // Only file operations (fchdir is fd-based so not in 'file' group)
+		"-f",            // Follow forks
+		"-y",            // Print paths for file descriptors
+		"-e", traceExpr, // File operations + blocked syscalls
 		"-s", "0", // Don't capture string arguments
-		"-o", fmt.Sprintf("/proc/self/fd/%d", outputFD), // Output to pipe
+		"-o", fmt.Sprintf("/proc/self/fd/%d", stracePipeFD), // Output to pipe
 		"-qq", // Suppress strace info messages
 		"--",
 	}
 
-	if len(m.bwrapArgs) > 0 {
+	if len(bwrapArgs) > 0 {
 		// strace wraps bwrap: strace [args] -- bwrap [args] -- command
 		// bwrapArgs includes both sandbox config and the command to execute
 		straceArgs = append(straceArgs, "bwrap")
-		straceArgs = append(straceArgs, m.bwrapArgs...)
+		straceArgs = append(straceArgs, bwrapArgs...)
 	} else {
 		// No sandbox (testing only) - trace command directly
 		straceArgs = append(straceArgs, command...)
@@ -175,7 +243,7 @@ func (m *Monitor) buildStraceArgs(command []string, outputFD int) []string {
 // processStraceOutput parses strace output and writes access log entries.
 func (m *Monitor) processStraceOutput(output io.Reader) error {
 	scanner := bufio.NewScanner(output)
-	parser := newStraceParser()
+	parser := newStraceParser(m.blockedSyscalls, m.allowedSyscalls)
 	cwdByPid := make(map[string]string)
 
 	// When bwrap is used, strace captures bwrap's sandbox setup (namespace,
@@ -221,6 +289,27 @@ func (m *Monitor) processStraceLine(parser *straceParser, cwdByPid map[string]st
 	// stale entries if the pid is reused within the same monitor run.
 	if result.syscall == "exit" {
 		delete(cwdByPid, result.pid)
+		return nil
+	}
+
+	// Intercept blocked/allowed syscalls before filesystem processing.
+	// These don't have meaningful paths and must not go through resolveCWD or processAccessEntry.
+	if m.allowedSyscalls[result.syscall] {
+		m.logger.Log(accesslog.Entry{
+			Operation: accesslog.OperationSyscall,
+			Target:    result.syscall,
+			Result:    accesslog.ResultOK,
+			Rule:      "syscall:allow:" + result.syscall,
+		})
+		return nil
+	}
+	if m.blockedSyscalls[result.syscall] {
+		m.logger.Log(accesslog.Entry{
+			Operation: accesslog.OperationSyscall,
+			Target:    result.syscall,
+			Result:    accesslog.ResultDeny,
+			Rule:      accesslog.RuleNoMatch,
+		})
 		return nil
 	}
 
@@ -336,7 +425,7 @@ func (m *Monitor) processAccessEntry(syscall, path, line string) error {
 	}
 
 	// No symlink - emit single entry for the path
-	return m.logPathAccess(opType, cleanPath, result.Allowed, result.Rule, "path")
+	return m.logPathAccess(opType, cleanPath, result.Allowed, result.Rule)
 }
 
 func (m *Monitor) handleRelativePath(opType OperationType, cleanPath string) error {
@@ -346,9 +435,7 @@ func (m *Monitor) handleRelativePath(opType OperationType, cleanPath string) err
 		Result:    accesslog.ResultUnknown,
 		Rule:      accesslog.RuleUnresolvedRelativePath,
 	}
-	if err := m.logger.Log(entry); err != nil {
-		return fmt.Errorf("log relative path entry: %w", err)
-	}
+	m.logger.Log(entry)
 	return nil
 }
 
@@ -359,9 +446,7 @@ func (m *Monitor) handleUncertainResult(opType OperationType, cleanPath string) 
 		Result:    accesslog.ResultUnknown,
 		Rule:      accesslog.RuleSymlinkTargetUnresolvable,
 	}
-	if err := m.logger.Log(entry); err != nil {
-		return fmt.Errorf("log unresolvable symlink entry: %w", err)
-	}
+	m.logger.Log(entry)
 	return nil
 }
 
@@ -371,7 +456,7 @@ func (m *Monitor) handleDepthLimitExceeded(opType OperationType, result fsrules.
 		if !hop.Allowed {
 			break // This is the depth-limit hop
 		}
-		if err := m.logPathAccess(OperationRead, hop.Path, hop.Allowed, hop.Rule, "symlink hop"); err != nil {
+		if err := m.logPathAccess(OperationRead, hop.Path, hop.Allowed, hop.Rule); err != nil {
 			return err
 		}
 	}
@@ -383,16 +468,14 @@ func (m *Monitor) handleDepthLimitExceeded(opType OperationType, result fsrules.
 		Result:    accesslog.ResultDeny,
 		Rule:      accesslog.RuleSymlinkDepthExceeded,
 	}
-	if err := m.logger.Log(entry); err != nil {
-		return fmt.Errorf("log depth limit entry: %w", err)
-	}
+	m.logger.Log(entry)
 	return nil
 }
 
 func (m *Monitor) handleSymlinkChain(opType OperationType, result fsrules.AccessResult) error {
 	// Emit one READ entry per hop
 	for _, hop := range result.Symlink.Hops {
-		if err := m.logPathAccess(OperationRead, hop.Path, hop.Allowed, hop.Rule, "symlink hop"); err != nil {
+		if err := m.logPathAccess(OperationRead, hop.Path, hop.Allowed, hop.Rule); err != nil {
 			return err
 		}
 
@@ -405,7 +488,7 @@ func (m *Monitor) handleSymlinkChain(opType OperationType, result fsrules.Access
 	// All hops were OK, emit target entry if we have a resolved path.
 	// Skip reads of non-existent targets (noise reduction, same as non-symlink case).
 	if result.Symlink.ResolvedPath != "" && (!result.PathNotFound || opType != OperationRead) {
-		if err := m.logPathAccess(opType, result.Symlink.ResolvedPath, result.Allowed, result.Rule, "symlink target"); err != nil {
+		if err := m.logPathAccess(opType, result.Symlink.ResolvedPath, result.Allowed, result.Rule); err != nil {
 			return err
 		}
 	}
@@ -420,7 +503,6 @@ func (m *Monitor) logPathAccess(
 	path string,
 	allowed bool,
 	rule *fsrules.AccessRule,
-	errorContext string,
 ) error {
 	// Map monitor OperationType to accesslog OperationType
 	var operation accesslog.OperationType
@@ -447,10 +529,7 @@ func (m *Monitor) logPathAccess(
 		Rule:      ruleStr,
 	}
 
-	if err := m.logger.Log(entry); err != nil {
-		return fmt.Errorf("log entry for %s: %w", errorContext, err)
-	}
-
+	m.logger.Log(entry)
 	return nil
 }
 
@@ -571,10 +650,13 @@ type straceParser struct {
 	atSyscallRegex  *regexp.Regexp
 	fchdirRegex     *regexp.Regexp
 	exitEventRegex  *regexp.Regexp
+	fallbackRegex   *regexp.Regexp // matches bare syscall name (no path arg)
 	fdFirstSyscalls map[string]bool
+	blockedSyscalls map[string]bool // names to intercept via fallback
+	allowedSyscalls map[string]bool // names to intercept via fallback
 }
 
-func newStraceParser() *straceParser {
+func newStraceParser(blockedSyscalls, allowedSyscalls map[string]bool) *straceParser {
 	return &straceParser{
 		// Matches: [pid] syscall("path" — captures syscall name and path
 		syscallRegex: regexp.MustCompile(`^\d*\s*(\w+)\("([^"]+)"`),
@@ -589,12 +671,17 @@ func newStraceParser() *straceParser {
 		// Matches process exit/kill events: "[pid] +++ exited with N +++"
 		// Captures: 1=pid
 		exitEventRegex: regexp.MustCompile(`^(\d+)\s*\+\+\+`),
+		// Matches: [pid] syscall( — captures just the syscall name before "("
+		// Tried last to match non-file syscalls (e.g., ptrace, bpf) that have no path arg.
+		fallbackRegex: regexp.MustCompile(`^\d*\s*(\w+)\(`),
 		fdFirstSyscalls: map[string]bool{
 			"openat": true, "fstatat": true, "newfstatat": true, "faccessat": true,
 			"faccessat2": true, "readlinkat": true, "mkdirat": true, "unlinkat": true,
 			"renameat": true, "renameat2": true, "linkat": true, "symlinkat": true,
 			"fchmodat": true, "fchownat": true, "execveat": true, "statx": true,
 		},
+		blockedSyscalls: blockedSyscalls,
+		allowedSyscalls: allowedSyscalls,
 	}
 }
 
@@ -683,6 +770,16 @@ func (p *straceParser) parseLine(line string) (parseResult, bool) {
 	matches = p.exitEventRegex.FindStringSubmatch(line)
 	if matches != nil {
 		return parseResult{pid: matches[1], syscall: "exit", path: "", cwdHint: "", failed: false}, true
+	}
+
+	// Fallback: match bare syscall name for non-file syscalls (e.g., ptrace, bpf).
+	// Only intercept if the name is a known blocked or allowed syscall.
+	matches = p.fallbackRegex.FindStringSubmatch(line)
+	if len(matches) >= 2 { //nolint:mnd // minimum regex group count
+		name := matches[1]
+		if p.blockedSyscalls[name] || p.allowedSyscalls[name] {
+			return parseResult{pid: pid, syscall: name, path: "", cwdHint: "", failed: failed}, true
+		}
 	}
 
 	return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false

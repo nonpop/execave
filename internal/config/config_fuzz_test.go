@@ -19,6 +19,10 @@ func FuzzLoad(f *testing.F) {
 	f.Add(`rules = ["fs:ro:./relative"]`)
 	f.Add(`rules = ["fs:rw:/path/with/../dots"]`)
 
+	// Seed with syscall rules
+	f.Add(`rules = ["syscall:allow:ptrace"]`)
+	f.Add(`rules = ["syscall:nolog:bpf"]`)
+
 	// Seed with some invalid examples
 	f.Add(`rules = ["invalid"]`)
 	f.Add(`{invalid json}`)

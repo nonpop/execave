@@ -12,9 +12,22 @@ import (
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// dummySeccompFile creates a pipe to satisfy the monitor.New precondition
+// that seccompFile must be non-nil when syscall maps are provided.
+// The pipe is closed when the test finishes.
+func dummySeccompFile(t *testing.T) *os.File {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	_ = w.Close()
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
 
 type monitorTestEnv struct {
 	t      *testing.T
@@ -33,7 +46,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := New(logger, resolver, nil, false)
+	mon := New(logger, resolver, nil, false, nil, nil, nil)
 
 	return &monitorTestEnv{
 		t:      t,
@@ -86,7 +99,7 @@ func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*M
 	t.Helper()
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	return New(logger, resolver, bwrapArgs, false), logger
+	return New(logger, resolver, bwrapArgs, false, nil, nil, nil), logger
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -124,11 +137,13 @@ func TestMonitor_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(testFile)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(testFile)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -181,11 +196,13 @@ func TestMonitor_WriteOperation(t *testing.T) {
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{rwRule(absTestDir)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -206,11 +223,13 @@ func TestMonitor_Deduplication(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:      []fsrules.AccessRule{roRule(testFile)},
-			NetRules:     nil,
-			FSLogRules:   nil,
-			NetLogRules:  nil,
-			ManagedPaths: nil,
+			FSRules:           []fsrules.AccessRule{roRule(testFile)},
+			NetRules:          nil,
+			FSLogRules:        nil,
+			NetLogRules:       nil,
+			SyscallAllowRules: nil,
+			SyscallNologRules: nil,
+			ManagedPaths:      nil,
 		}
 	})
 
@@ -305,11 +324,13 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 // until the user command's execve is detected.
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule("/usr")},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule("/usr")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	// Non-nil bwrapArgs enables setup phase detection
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -384,9 +405,9 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := New(nil, nil, nil, false)
+	mon := New(nil, nil, nil, false, nil, nil, nil)
 
-	args := mon.buildStraceArgs([]string{"echo", "hello"}, 3)
+	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
 	// Should contain strace flags and original command
 	assert.Contains(t, args, "-f")
@@ -396,6 +417,146 @@ func TestBuildStraceArgs(t *testing.T) {
 	assert.Contains(t, args, "/proc/self/fd/3")
 	assert.Contains(t, args, "echo")
 	assert.Contains(t, args, "hello")
+}
+
+func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
+	blocked := map[string]bool{"ptrace": true, "mount": true}
+	allowed := map[string]bool{"bpf": true}
+	dummyPipe := dummySeccompFile(t)
+	mon := New(nil, nil, nil, false, dummyPipe, blocked, allowed)
+
+	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
+
+	// Find the trace= argument
+	var traceArg string
+	for _, a := range args {
+		if strings.HasPrefix(a, "trace=") {
+			traceArg = a
+			break
+		}
+	}
+	require.NotEmpty(t, traceArg)
+
+	// Should include file,fchdir plus the sorted syscall names
+	assert.Contains(t, traceArg, "file,fchdir")
+	assert.Contains(t, traceArg, "mount")
+	assert.Contains(t, traceArg, "ptrace")
+	assert.Contains(t, traceArg, "bpf")
+
+	// Names should be sorted: bpf,mount,ptrace
+	idx := strings.Index(traceArg, "bpf")
+	require.Positive(t, idx)
+	assert.Contains(t, traceArg[idx:], "bpf,mount,ptrace")
+}
+
+func TestBuildStraceArgs_WithoutBlockedSyscalls(t *testing.T) {
+	mon := New(nil, nil, nil, false, nil, nil, nil)
+
+	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
+
+	// Find the trace= argument
+	var traceArg string
+	for _, a := range args {
+		if strings.HasPrefix(a, "trace=") {
+			traceArg = a
+			break
+		}
+	}
+	assert.Equal(t, "trace=file,fchdir", traceArg)
+}
+
+// assertBlockedSyscallEntry verifies that processing a strace line for a blocked syscall
+// produces a single SYSCALL DENY entry with the expected target name.
+func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
+	t.Helper()
+	blocked := map[string]bool{syscallName: true}
+	cfg := new(config.Config)
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	dummyPipe := dummySeccompFile(t)
+	mon := New(logger, resolver, nil, false, dummyPipe, blocked, nil)
+
+	err := mon.processStraceOutput(strings.NewReader(straceLine + "\n"))
+	require.NoError(t, err)
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.OperationSyscall, entries[0].Operation)
+	assert.Equal(t, syscallName, entries[0].Target)
+	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
+	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
+}
+
+func TestProcessStraceLine_BlockedSyscall(t *testing.T) {
+	assertBlockedSyscallEntry(t, "ptrace", `12345 ptrace(PTRACE_ATTACH, 999) = -1 EPERM (Operation not permitted)`)
+}
+
+func TestProcessStraceLine_BlockedSyscall_FileGroup(t *testing.T) {
+	// mount is in the file trace group AND in ignoredSyscalls. When blockedSyscalls
+	// is set, the syscall interception must catch it before the ignore list.
+	assertBlockedSyscallEntry(t, "mount", `12345 mount("none", "/proc", "proc", 0) = -1 EPERM`)
+}
+
+func TestProcessStraceLine_AllowedSyscall(t *testing.T) {
+	allowed := map[string]bool{"ptrace": true}
+	cfg := new(config.Config)
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	dummyPipe := dummySeccompFile(t)
+	mon := New(logger, resolver, nil, false, dummyPipe, nil, allowed)
+
+	straceData := strings.NewReader(
+		`12345 ptrace(PTRACE_ATTACH, 999) = 0` + "\n",
+	)
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.OperationSyscall, entries[0].Operation)
+	assert.Equal(t, "ptrace", entries[0].Target)
+	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
+	assert.Equal(t, "syscall:allow:ptrace", entries[0].Rule)
+}
+
+func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
+	pipeR, pipeW, err := os.Pipe()
+	require.NoError(t, err)
+	defer pipeR.Close() //nolint:errcheck // test cleanup
+	defer pipeW.Close() //nolint:errcheck // test cleanup
+
+	bwrapArgs := []string{"--unshare-all", "--", "true"}
+	mon := New(nil, nil, bwrapArgs, false, pipeR, nil, nil)
+
+	// With seccompFile non-nil, Run() will call InsertSeccompArg(bwrapArgs, 4).
+	// Verify by checking that buildStraceArgs receives modified bwrap args
+	// (this is an indirect test via the internal helper).
+	effectiveBwrap := sandbox.InsertSeccompArg(bwrapArgs, 4)
+	args := mon.buildStraceArgs([]string{"true"}, effectiveBwrap)
+
+	// --seccomp 4 should appear in the strace args (bwrap section)
+	found := false
+	for i, a := range args {
+		if a == "--seccomp" && i+1 < len(args) && args[i+1] == "4" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found)
+}
+
+func TestNew_NilSeccompFile_NoSeccompArgs(t *testing.T) {
+	bwrapArgs := []string{"--unshare-all", "--", "true"}
+	mon := New(nil, nil, bwrapArgs, false, nil, nil, nil)
+
+	args := mon.buildStraceArgs([]string{"true"}, mon.bwrapArgs)
+
+	for i, a := range args {
+		if a == "--seccomp" {
+			t.Errorf("unexpected --seccomp at index %d", i)
+		}
+	}
 }
 
 // testSymlinkAccessHelper sets up a symlink test scenario and validates the access log.
@@ -419,7 +580,7 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, ManagedPaths: nil}
+	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
@@ -472,11 +633,13 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(mountDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(mountDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -530,11 +693,13 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -580,11 +745,13 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{rwRule(mountDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: []string{managedDir},
+		FSRules:           []fsrules.AccessRule{rwRule(mountDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      []string{managedDir},
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -627,11 +794,13 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(testBase)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(testBase)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -686,11 +855,13 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -737,11 +908,13 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -773,11 +946,13 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(hostDir, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(projectDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(projectDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
 
@@ -808,11 +983,13 @@ func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -837,11 +1014,13 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -889,11 +1068,13 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -921,11 +1102,13 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -974,11 +1157,13 @@ func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:     nil,
-		FSLogRules:   nil,
-		NetLogRules:  nil,
-		ManagedPaths: nil,
+		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 

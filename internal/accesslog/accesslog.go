@@ -22,6 +22,8 @@ const (
 	OperationWrite OperationType = "WRITE"
 	// OperationHTTP represents HTTP and CONNECT (tunneled) requests through the proxy.
 	OperationHTTP OperationType = "HTTP"
+	// OperationSyscall represents blocked syscall attempts intercepted by the seccomp filter.
+	OperationSyscall OperationType = "SYSCALL"
 )
 
 // ResultType represents the outcome of an access check.
@@ -51,7 +53,7 @@ const (
 
 // Entry represents a single access log entry.
 type Entry struct {
-	// Operation is the type of operation (READ, WRITE, or HTTP).
+	// Operation is the type of operation (READ, WRITE, HTTP, or SYSCALL).
 	Operation OperationType
 	// Target is the absolute path for filesystem ops, host:port for network ops.
 	Target string
@@ -94,12 +96,12 @@ func New(managedPaths []string) *Logger {
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
 // After storing the entry, notifies all subscribers via non-blocking send.
-func (l *Logger) Log(entry Entry) error {
+func (l *Logger) Log(entry Entry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.isManagedPath(entry.Target) {
-		return nil
+		return
 	}
 
 	key := accessKey{
@@ -108,13 +110,12 @@ func (l *Logger) Log(entry Entry) error {
 		result:    entry.Result,
 	}
 	if l.seen[key] {
-		return nil
+		return
 	}
 	l.seen[key] = true
 
 	l.entries = append(l.entries, entry)
 	l.notifySubscribers()
-	return nil
 }
 
 // Entries returns a copy of all logged entries.

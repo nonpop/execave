@@ -224,6 +224,70 @@ func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
 	assert.Equal(t, managedPaths, cfg.ManagedPaths)
 }
 
+// --- Syscall rule tests ---
+
+func TestLoad_ValidSyscallRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/lib", "syscall:allow:ptrace", "syscall:nolog:bpf"]`)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
+	assert.Equal(t, []string{"bpf"}, cfg.SyscallNologRules)
+}
+
+func TestLoad_InvalidSyscallNameRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:allow:ptraec"]`)
+	assert.ErrorContains(t, err, "not a ruleable syscall name")
+}
+
+func TestLoad_NonBlockedSyscallNameRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:allow:read"]`)
+	assert.ErrorContains(t, err, "not a ruleable syscall name")
+}
+
+func TestLoad_DefenseInDepthSyscallRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:allow:syslog"]`)
+	assert.ErrorContains(t, err, "not a ruleable syscall name")
+}
+
+func TestLoad_DefenseInDepthSyscallNologRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:nolog:syslog"]`)
+	assert.ErrorContains(t, err, "not a ruleable syscall name")
+}
+
+func TestLoad_DuplicateSyscallAllowRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:allow:ptrace", "syscall:allow:ptrace"]`)
+	assert.ErrorContains(t, err, "duplicate syscall allow rule")
+}
+
+func TestLoad_DuplicateSyscallNologRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:nolog:ptrace", "syscall:nolog:ptrace"]`)
+	assert.ErrorContains(t, err, "duplicate syscall nolog rule")
+}
+
+func TestLoad_SameNameAllowAndNologPermitted(t *testing.T) {
+	cfg, err := loadTestConfig(t, `rules = ["syscall:allow:ptrace", "syscall:nolog:ptrace"]`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallNologRules)
+}
+
+func TestLoad_UnknownSyscallActionRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:deny:ptrace"]`)
+	assert.ErrorContains(t, err, "unknown syscall action")
+}
+
+func TestLoad_MalformedSyscallRuleRejected(t *testing.T) {
+	_, err := loadTestConfig(t, `rules = ["syscall:allow"]`)
+	assert.ErrorContains(t, err, "malformed syscall rule")
+}
+
+func TestLoad_EmptyRulesHasNoSyscallRules(t *testing.T) {
+	cfg, err := loadTestConfig(t, `rules = []`)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.SyscallAllowRules)
+	assert.Empty(t, cfg.SyscallNologRules)
+}
+
 func TestParseTOML_ValidTOML(t *testing.T) {
 	content := `rules = ["fs:ro:/usr/bin", "net:http:api.example.com:443"]`
 	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
