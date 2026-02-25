@@ -20,6 +20,8 @@ func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -37,6 +39,8 @@ func TestIntegration_DefaultDenyFilesystem_AllowedPathAccessible(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -56,6 +60,8 @@ func TestIntegration_ReadOnlyAccess_ReadAllowed(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -73,6 +79,8 @@ func TestIntegration_ReadOnlyAccess_WriteDeniedOnReadOnlyPath(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -94,6 +102,8 @@ func TestIntegration_ReadWriteAccess_ReadAllowedOnReadWritePath(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -111,6 +121,8 @@ func TestIntegration_ReadWriteAccess_WriteAllowedOnReadWritePath(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -133,6 +145,8 @@ func TestIntegration_NoAccessRule_ReadDeniedByNoneRule(t *testing.T) {
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -153,6 +167,8 @@ func TestIntegration_NoAccessRule_WriteDeniedByNoneRule(t *testing.T) {
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -173,6 +189,8 @@ func TestIntegration_NoAccessRule_NoneDirectoryInaccessible(t *testing.T) {
 			fsRule(fsrules.PermissionNone, blockedDir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -196,6 +214,8 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -217,6 +237,8 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -233,6 +255,8 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -251,6 +275,8 @@ func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *tes
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -273,6 +299,8 @@ func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *test
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -292,6 +320,8 @@ func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *te
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -313,6 +343,8 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFai
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -334,6 +366,8 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -355,6 +389,8 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *test
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
@@ -372,6 +408,8 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithNetRules(t *testing
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	netPath := &sandbox.NetworkPath{
@@ -402,6 +440,8 @@ func TestIntegration_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *t
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: sandbox.ManagedDirs,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
@@ -423,6 +463,8 @@ func TestIntegration_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblin
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: sandbox.ManagedDirs,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
@@ -447,6 +489,8 @@ func TestIntegration_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *
 			fsRule(fsrules.PermissionReadWrite, workDir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: sandbox.ManagedDirs,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
@@ -468,6 +512,8 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: sandbox.ManagedDirs,
 	}
 	sb := sandbox.New(cfg, configPath, nil)

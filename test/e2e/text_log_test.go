@@ -2,7 +2,6 @@ package e2e_test
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,78 +9,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// runTextLog runs execave with --monitor=<monitorArg> against the given rules and command,
-// captures stderr and stdout, and returns the execaveResult.
-func runTextLog(t *testing.T, rules []string, monitorArg string, args ...string) execaveResult {
-	t.Helper()
-	configPath := writeConfig(t, rules)
-	execArgs := make([]string, 0, 5+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor="+monitorArg, "--")
-	execArgs = append(execArgs, args...)
-	return runExecave(t, "", execArgs...)
-}
-
-// runTextLogWithFlags runs execave with --monitor=<monitorArg> and extra flags.
-func runTextLogWithFlags(t *testing.T, rules []string, monitorArg string, extraFlags []string, args ...string) execaveResult {
-	t.Helper()
-	configPath := writeConfig(t, rules)
-	execArgs := make([]string, 0, 5+len(extraFlags)+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor="+monitorArg)
-	execArgs = append(execArgs, extraFlags...)
-	execArgs = append(execArgs, "--")
-	execArgs = append(execArgs, args...)
-	return runExecave(t, "", execArgs...)
-}
-
 // TestE2E_TextLog_FileContainsDenyEntries tests that --monitor=<file> writes denied
 // filesystem access entries to the specified file.
 func TestE2E_TextLog_FileContainsDenyEntries(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	logFile := data.join("access.log")
+	deniedFile := data.file("secret.txt", "secret")
 
-	tmpDir := testTempDir(t)
-	logFile := filepath.Join(tmpDir, "access.log")
-	deniedFile := filepath.Join(tmpDir, "secret.txt")
-	createFile(t, deniedFile, "secret")
+	s.givenRules("fs:none:" + deniedFile)
 
-	// No rule allows deniedFile, so it will be denied
-	rules := append(systemPaths(), "fs:none:"+deniedFile)
+	s.whenRunTextLog(logFile, "cat", deniedFile)
 
-	result := runTextLog(t, rules, logFile, "cat", deniedFile)
-	// cat fails because the file is denied
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	logContent, err := os.ReadFile(logFile)
-	require.NoError(t, err)
-
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	deniedFileRel, err := filepath.Rel(homeDir, deniedFile)
-	require.NoError(t, err)
-
-	log := string(logContent)
-	assert.Contains(t, log, "DENY")
-	assert.Contains(t, log, "~/"+deniedFileRel)
+	s.thenExitCodeNonZero()
+	s.thenFileContains(logFile, "DENY")
+	s.thenFileContains(logFile, data.rel("secret.txt"))
 }
 
 // TestE2E_TextLog_FileWrittenRealTime tests that --monitor=<file> writes entries to
 // the file as they are generated (not buffered until exit).
 func TestE2E_TextLog_FileWrittenRealTime(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	logFile := data.join("access.log")
+	denied := s.givenDir("data/denied")
+	deniedFile := denied.file("file.txt", "data")
 
-	tmpDir := testTempDir(t)
-	logFile := filepath.Join(tmpDir, "access.log")
-	deniedDir := filepath.Join(tmpDir, "denied")
-	deniedFile := filepath.Join(deniedDir, "file.txt")
-	createFile(t, deniedFile, "data")
+	s.givenRules("fs:none:" + denied.String())
 
-	rules := append(systemPaths(), "fs:none:"+deniedDir)
+	s.whenRunTextLog(logFile, "cat", deniedFile)
 
-	result := runTextLog(t, rules, logFile, "cat", deniedFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	logContent, err := os.ReadFile(logFile)
+	s.thenExitCodeNonZero()
+	logContent, err := os.ReadFile(logFile) // #nosec G304 -- test code reading controlled test file path
 	require.NoError(t, err)
 	assert.NotEmpty(t, string(logContent))
 }
@@ -89,175 +48,121 @@ func TestE2E_TextLog_FileWrittenRealTime(t *testing.T) {
 // TestE2E_TextLog_StderrContainsEntriesAfterExit tests that --monitor=- buffers
 // entries and writes them to stderr after the process exits.
 func TestE2E_TextLog_StderrContainsEntriesAfterExit(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	deniedFile := data.file("secret.txt", "secret")
 
-	tmpDir := testTempDir(t)
-	deniedFile := filepath.Join(tmpDir, "secret.txt")
-	createFile(t, deniedFile, "secret")
+	s.givenRules("fs:none:" + deniedFile)
 
-	rules := append(systemPaths(), "fs:none:"+deniedFile)
+	s.whenRunTextLog("-", "cat", deniedFile)
 
-	result := runTextLog(t, rules, "-", "cat", deniedFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	deniedFileRel, err := filepath.Rel(homeDir, deniedFile)
-	require.NoError(t, err)
-
-	assert.Contains(t, result.Stderr, "DENY")
-	assert.Contains(t, result.Stderr, "~/"+deniedFileRel)
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("DENY")
+	s.thenStderrContains(data.rel("secret.txt"))
 }
 
 // TestE2E_TextLog_ShowAllowedIncludesOKEntries tests that --show-allowed causes OK entries
 // to appear in the text log (denied-only is the default).
 func TestE2E_TextLog_ShowAllowedIncludesOKEntries(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	allowedFile := data.file("data.txt", "data")
 
-	tmpDir := testTempDir(t)
-	allowedFile := filepath.Join(tmpDir, "data.txt")
-	createFile(t, allowedFile, "data")
+	s.givenRules("fs:ro:" + data.String())
 
-	rules := append(systemPaths(), "fs:ro:"+tmpDir)
+	s.whenRunTextLog("-", "cat", allowedFile)
 
-	// Without --show-allowed, OK entries are hidden
-	resultDefault := runTextLog(t, rules, "-", "cat", allowedFile)
-	assertExitCode(t, resultDefault, 0)
+	s.thenExitCode(0)
+	s.thenStderrNotContains(data.rel("data.txt"))
 
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	allowedFileRel, err := filepath.Rel(homeDir, allowedFile)
-	require.NoError(t, err)
+	s.whenRunTextLogWithFlags("-", []string{"--show-allowed"}, "cat", allowedFile)
 
-	assert.NotContains(t, resultDefault.Stderr, "~/"+allowedFileRel)
-
-	// With --show-allowed, OK entries appear
-	resultAllowed := runTextLogWithFlags(t, rules, "-", []string{"--show-allowed"}, "cat", allowedFile)
-	assertExitCode(t, resultAllowed, 0)
-
-	assert.Contains(t, resultAllowed.Stderr, "OK")
-	assert.Contains(t, resultAllowed.Stderr, "~/"+allowedFileRel)
+	s.thenExitCode(0)
+	s.thenStderrContains("OK")
+	s.thenStderrContains(data.rel("data.txt"))
 }
 
 // TestE2E_TextLog_ShowNologIncludesNologEntries tests that --show-nolog causes entries
 // matching nolog rules to appear in the text log (nolog entries are hidden by default).
 func TestE2E_TextLog_ShowNologIncludesNologEntries(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	project := s.givenDir("project")
+	cacheDir := project.join("cache")
+	cacheFile := project.file("cache/data.bin", "cache data")
 
-	tmpDir := testTempDir(t)
-	cacheDir := filepath.Join(tmpDir, "project", "cache")
-	cacheFile := filepath.Join(cacheDir, "data.bin")
-	createFile(t, cacheFile, "cache data")
-	projectDir := filepath.Join(tmpDir, "project")
+	s.givenRules("fs:ro:"+project.String(), "fs:nolog:"+cacheDir)
 
-	rules := append(systemPaths(),
-		"fs:ro:"+projectDir,
-		"fs:nolog:"+cacheDir,
-	)
+	s.whenRunTextLog("-", "cat", cacheFile)
 
-	// Without --show-nolog, nolog entries are hidden (even denied ones)
-	resultDefault := runTextLog(t, rules, "-", "cat", cacheFile)
-	assertExitCode(t, resultDefault, 0)
+	s.thenExitCode(0)
+	s.thenStderrNotContains(project.rel("cache/data.bin"))
 
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	cacheFileRel, err := filepath.Rel(homeDir, cacheFile)
-	require.NoError(t, err)
+	s.whenRunTextLogWithFlags("-", []string{"--show-nolog", "--show-allowed"}, "cat", cacheFile)
 
-	assert.NotContains(t, resultDefault.Stderr, "~/"+cacheFileRel)
-
-	// With --show-nolog, nolog entries appear
-	resultNolog := runTextLogWithFlags(t, rules, "-", []string{"--show-nolog", "--show-allowed"}, "cat", cacheFile)
-	assertExitCode(t, resultNolog, 0)
-
-	assert.Contains(t, resultNolog.Stderr, "~/"+cacheFileRel)
+	s.thenExitCode(0)
+	s.thenStderrContains(project.rel("cache/data.bin"))
 }
 
 // TestE2E_TextLog_BareMonitorStartsWebUI tests that bare --monitor (without a value)
 // still starts the web UI — backward compatibility.
 func TestE2E_TextLog_BareMonitorStartsWebUI(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
 
-	env := newMonitorTest(t)
+	s.givenRules()
 
-	rules := systemPaths()
-	result := env.runMonitored(t, rules, "true")
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("true")
 
-	// Web UI was started (monitor URL printed to stderr)
-	assert.Contains(t, result.Stderr, "monitor running at http://")
-	// Web UI responded with HTML content
-	assert.Contains(t, result.WebUI, "<html")
+	s.thenExitCode(0)
+	s.thenStderrContains("monitor running at http://")
+	s.thenWebUIContains("<html")
 }
 
 // TestE2E_TextLog_ShowAllowedSetsWebUICheckboxState tests that --show-allowed sets the
 // "Denied only" checkbox to unchecked in the web UI initial state.
 func TestE2E_TextLog_ShowAllowedSetsWebUICheckboxState(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
 
-	rules := systemPaths()
-	configPath := writeConfig(t, rules)
-	execArgs := []string{"--config", configPath, "--monitor", "--no-open", "--show-allowed", "--", "true"}
-	result := runExecaveMonitored(t, execArgs...)
+	s.givenRules()
 
-	// When showAllowed=true, DeniedOnlyChecked=false, so the checkbox should NOT have checked
-	assert.NotContains(t, result.WebUI, `id="denied-only-checkbox" checked`)
-	// Apply-nolog checkbox should still be checked (default)
-	assert.Contains(t, result.WebUI, `id="apply-nolog-checkbox" checked`)
+	s.whenRunMonitoredWithFlags([]string{"--show-allowed"}, "true")
+
+	s.thenWebUINotContains(`id="denied-only-checkbox" checked`)
+	s.thenWebUIContains(`id="apply-nolog-checkbox" checked`)
 }
 
 // TestE2E_TextLog_ShowNologSetsWebUICheckboxState tests that --show-nolog sets the
 // "Apply nolog rules" checkbox to unchecked in the web UI initial state.
 func TestE2E_TextLog_ShowNologSetsWebUICheckboxState(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
 
-	rules := systemPaths()
-	configPath := writeConfig(t, rules)
-	execArgs := []string{"--config", configPath, "--monitor", "--no-open", "--show-nolog", "--", "true"}
-	result := runExecaveMonitored(t, execArgs...)
+	s.givenRules()
 
-	// When showNolog=true, ApplyNologChecked=false, so the checkbox should NOT have checked
-	assert.NotContains(t, result.WebUI, `id="apply-nolog-checkbox" checked`)
-	// Denied-only checkbox should still be checked (default)
-	assert.Contains(t, result.WebUI, `id="denied-only-checkbox" checked`)
+	s.whenRunMonitoredWithFlags([]string{"--show-nolog"}, "true")
+
+	s.thenWebUINotContains(`id="apply-nolog-checkbox" checked`)
+	s.thenWebUIContains(`id="denied-only-checkbox" checked`)
 }
 
 // TestE2E_TextLog_OutputFormatContainsAllColumns tests that text log lines contain
 // all four columns: result, operation, target, rule.
 func TestE2E_TextLog_OutputFormatContainsAllColumns(t *testing.T) {
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	deniedFile := data.file("secret.txt", "secret")
 
-	tmpDir := testTempDir(t)
-	deniedFile := filepath.Join(tmpDir, "secret.txt")
-	createFile(t, deniedFile, "secret")
+	s.givenRules("fs:none:" + deniedFile)
 
-	rules := append(systemPaths(), "fs:none:"+deniedFile)
+	s.whenRunTextLog("-", "cat", deniedFile)
 
-	result := runTextLog(t, rules, "-", "cat", deniedFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	deniedFileRel, err := filepath.Rel(homeDir, deniedFile)
-	require.NoError(t, err)
-
-	// Find the text log line containing the denied file (shortened path form)
+	s.thenExitCodeNonZero()
 	var matchLine string
-	for _, line := range strings.Split(result.Stderr, "\n") {
-		if strings.Contains(line, "~/"+deniedFileRel) {
+	for line := range strings.SplitSeq(s.lastResult.Stderr, "\n") {
+		if strings.Contains(line, data.rel("secret.txt")) {
 			matchLine = line
 			break
 		}
 	}
 	require.NotEmpty(t, matchLine)
-
 	assert.Contains(t, matchLine, "DENY")
 	assert.Contains(t, matchLine, "READ")
 	assert.Contains(t, matchLine, "fs:none:"+deniedFile)

@@ -144,48 +144,61 @@ func parseRules(rawRules []string, configDir string) ([]fsrules.AccessRule, []ne
 			return nil, nil, nil, nil, fmt.Errorf("rule %d: malformed rule %q (expected format: resource:...)", i, rawRule)
 		}
 
-		resourcePrefix := before
-		ruleBody := after
-
-		switch resourcePrefix {
+		switch before {
 		case "fs":
-			action, _, _ := strings.Cut(ruleBody, ":")
-			if action == "log" || action == "nolog" {
-				rule, err := fsrules.ParseLogRule(ruleBody, configDir)
-				if err != nil {
-					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
-				}
-				rule.RawRule = rawRule
-				fsLogRules = append(fsLogRules, rule)
-			} else {
-				rule, err := fsrules.ParseAccessRule(ruleBody, configDir)
-				if err != nil {
-					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
-				}
-				rule.RawRule = rawRule
-				fsAccessRules = append(fsAccessRules, rule)
+			if err := parseFSRule(after, rawRule, configDir, &fsAccessRules, &fsLogRules); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
 			}
 		case "net":
-			action, _, _ := strings.Cut(ruleBody, ":")
-			if action == "log" || action == "nolog" {
-				rule, err := netrules.ParseLogRule(ruleBody)
-				if err != nil {
-					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
-				}
-				rule.RawRule = rawRule
-				netLogRules = append(netLogRules, rule)
-			} else {
-				rule, err := netrules.ParseAccessRule(ruleBody)
-				if err != nil {
-					return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
-				}
-				rule.RawRule = rawRule
-				netAccessRules = append(netAccessRules, rule)
+			if err := parseNetRule(after, rawRule, &netAccessRules, &netLogRules); err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("rule %d: %w", i, err)
 			}
 		default:
-			return nil, nil, nil, nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs' or 'net')", i, resourcePrefix)
+			return nil, nil, nil, nil, fmt.Errorf("rule %d: unknown resource type %q (must be 'fs' or 'net')", i, before)
 		}
 	}
 
 	return fsAccessRules, netAccessRules, fsLogRules, netLogRules, nil
+}
+
+// parseFSRule parses a single fs rule body and appends the result to the appropriate slice.
+func parseFSRule(ruleBody, rawRule, configDir string, fsAccess *[]fsrules.AccessRule, fsLog *[]fsrules.LogRule) error {
+	action, _, _ := strings.Cut(ruleBody, ":")
+	if action == "log" || action == "nolog" {
+		rule, err := fsrules.ParseLogRule(ruleBody, configDir)
+		if err != nil {
+			return err //nolint:wrapcheck // caller wraps with rule index context
+		}
+		rule.RawRule = rawRule
+		*fsLog = append(*fsLog, rule)
+	} else {
+		rule, err := fsrules.ParseAccessRule(ruleBody, configDir)
+		if err != nil {
+			return err //nolint:wrapcheck // caller wraps with rule index context
+		}
+		rule.RawRule = rawRule
+		*fsAccess = append(*fsAccess, rule)
+	}
+	return nil
+}
+
+// parseNetRule parses a single net rule body and appends the result to the appropriate slice.
+func parseNetRule(ruleBody, rawRule string, netAccess *[]netrules.AccessRule, netLog *[]netrules.LogRule) error {
+	action, _, _ := strings.Cut(ruleBody, ":")
+	if action == "log" || action == "nolog" {
+		rule, err := netrules.ParseLogRule(ruleBody)
+		if err != nil {
+			return err //nolint:wrapcheck // caller wraps with rule index context
+		}
+		rule.RawRule = rawRule
+		*netLog = append(*netLog, rule)
+	} else {
+		rule, err := netrules.ParseAccessRule(ruleBody)
+		if err != nil {
+			return err //nolint:wrapcheck // caller wraps with rule index context
+		}
+		rule.RawRule = rawRule
+		*netAccess = append(*netAccess, rule)
+	}
+	return nil
 }

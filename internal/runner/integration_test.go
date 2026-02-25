@@ -390,6 +390,8 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 	cfg := &config.Config{
 		FSRules:      rules,
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: []string{"/dev", "/proc", "/sys", "/tmp"},
 	}
 

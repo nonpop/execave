@@ -52,34 +52,59 @@ TestE2E_<PlaybookName>_<UseCaseName>
 For example:
 - Playbook: "sandboxing-filesystem", Use Case: "Run command with read-only system access" → `TestE2E_SandboxingFilesystem_RunCommandWithReadOnlySystemAccess` in `test/e2e/sandboxing_filesystem_test.go`.
 
-### Helpers
+### Scenario DSL
+
+Most E2E tests use a `scenario` builder that handles bwrap checks, temp dirs, config writing, and assertions.
 
 ```go
-// Dependency checks
-failIfNoBwrap(t)
-failIfNoStrace(t)
+func TestE2E_Example_ReadOnlyAccess(t *testing.T) {
+    s := newScenario(t)                        // checks bwrap, creates temp dir
+    data := s.givenDir("data")                 // creates named subdirectory → testDir
+    testFile := data.file("f.txt", "hello")    // creates file, returns path
 
-// Config
-configPath := writeConfig(t, []string{"fs:ro:/usr", "fs:rw:/home"})
-writeConfigInDir(t, dir, []string{"fs:ro:/usr"})
-rules := append(systemPaths(), "fs:rw:/home/user/project")
+    s.givenRules("fs:ro:" + data.String())     // prepends systemPaths(), writes config
 
-// Running execave
-result := runExecave(t, workDir, "--config", configPath, "--", "ls", "-la")
-// result has: Stdout, Stderr, ExitCode
-
-// Assertions
-assertExitCode(t, result, 0)
-assert.Contains(t, result.Stdout, "expected")
-assert.Contains(t, result.Stderr, "error message")
-assertLogExists(t, logPath)
-assertLogNotExists(t, logPath)
-assertLogContains(t, logPath, "pattern")
-
-// File setup
-createFile(t, path, "content")
-createSymlink(t, target, link)
+    s.whenRun("cat", testFile)                 // runs execave with config
+    s.thenExitCode(0)                          // asserts on last result
+    s.thenStdoutContains("hello")
+}
 ```
+
+**`testDir`** — named `string` with path helpers:
+- `dir.join("sub", "file")` — `filepath.Join`
+- `dir.file("name", "content")` — creates file with parent dirs, returns path
+- `dir.rel("sub/file")` — returns `~/`-shortened path for monitor assertions
+- `"fs:rw:" + dir` — concatenation works because `testDir` is a `string`
+
+**`scenario`** — unified test harness with Given/When/Then method prefixes:
+
+Given (setup):
+- `newScenario(t)` — checks bwrap, creates temp dir
+- `s.givenDir("name")` — creates subdirectory, returns `testDir`
+- `s.givenSymlink(target, link)` — creates symlink with parent dirs
+- `s.givenRules(rules...)` — prepends `systemPaths()`, writes config
+- `s.givenRulesOnly(rules...)` — writes config without `systemPaths()` (error-path tests)
+- `s.givenRulesInDir(dir, rules...)` — writes config in specific directory
+- `s.givenRawConfig(content)` — writes raw TOML content
+- `s.givenCurl()` / `s.givenPython3()` / `s.givenGcc()` — tool checks
+- `s.givenHTTPServer(body)` / `s.givenHTTPSServer(body)` — test servers returning `testServer`
+
+When (action):
+- `s.whenRun(args...)` — runs execave with config, resets result
+- `s.whenRunWithDefaultConfig(workDir, args...)` — runs without `--config`
+- `s.whenRunMonitored(args...)` — runs with `--monitor`, fetches web UI, sends SIGINT
+- `s.whenRunMonitoredWithInterrupt(args...)` — sends SIGINT during execution
+- `s.whenRunMonitoredWithFlags(flags, args...)` — monitored with extra CLI flags
+- `s.whenRunTextLog(monitorArg, args...)` — runs with `--monitor=<file or ->`
+- `s.whenRunTextLogWithFlags(monitorArg, flags, args...)` — text log with extra flags
+
+Then (assertions on last `whenRun*` result):
+- `s.thenExitCode(n)` / `s.thenExitCodeNonZero()`
+- `s.thenStdoutContains(sub)` / `s.thenStderrContains(sub)` / `s.thenStderrNotContains(sub)`
+- `s.thenFileContains(path, sub)`
+- `s.thenWebUIHasEntry(substrings...)` / `s.thenWebUIContains(sub)` / `s.thenWebUINotContains(sub)` / `s.thenWebUICountOf(sub)`
+
+**Edge cases** — some tests still use low-level helpers directly when they need raw `exec.Cmd` access (e.g., SIGWINCH test, long-running process tests in iterating-config).
 
 ## Security Testing
 

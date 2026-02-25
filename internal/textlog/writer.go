@@ -51,15 +51,15 @@ func New(out io.Writer, homeDir, configDir string, showAllowed, showNolog bool, 
 // On cancellation, performs a final drain to capture any remaining entries.
 // Blocks until ctx is done. Returns the first write error encountered.
 func (w *Writer) Run(ctx context.Context, logger *accesslog.Logger) error {
-	ch := logger.Subscribe()
-	defer logger.Unsubscribe(ch)
+	entryCh := logger.Subscribe()
+	defer logger.Unsubscribe(entryCh)
 
 	lastSeen := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return w.drain(logger, &lastSeen)
-		case <-ch:
+		case <-entryCh:
 			if err := w.drain(logger, &lastSeen); err != nil {
 				return err
 			}
@@ -88,12 +88,15 @@ func (w *Writer) writeIfVisible(entry accesslog.Entry) error {
 		return nil
 	}
 	_, err := fmt.Fprintf(w.out, "%s\n", w.formatEntry(entry))
-	return err
+	if err != nil {
+		return fmt.Errorf("write entry: %w", err)
+	}
+	return nil
 }
 
 // formatEntry formats a single entry as a line of text.
 // Format: %-7s %-5s  %s  (%s)
-// Example: DENY    READ   ~/.ssh/id_rsa  (no-matching-rule)
+// Example: DENY    READ   ~/.ssh/id_rsa  (no-matching-rule).
 func (w *Writer) formatEntry(entry accesslog.Entry) string {
 	target := entry.Target
 	if (entry.Operation == accesslog.OperationRead || entry.Operation == accesslog.OperationWrite) && filepath.IsAbs(target) {

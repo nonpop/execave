@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,24 +172,6 @@ func createSymlink(t *testing.T, target, link string) {
 	require.NoError(t, err)
 }
 
-// monitorTestEnv provides common setup for monitor e2e tests.
-type monitorTestEnv struct {
-	TmpDir string
-}
-
-// newMonitorTest creates a test environment for monitor tests.
-// It fails if bwrap or strace are not available.
-func newMonitorTest(t *testing.T) monitorTestEnv {
-	t.Helper()
-	failIfNoBwrap(t)
-	failIfNoStrace(t)
-
-	tmpDir := testTempDir(t)
-	return monitorTestEnv{
-		TmpDir: tmpDir,
-	}
-}
-
 // monitoredResult contains the result of a monitored execave run,
 // including the web UI HTML content for entry assertions.
 type monitoredResult struct {
@@ -197,39 +180,6 @@ type monitoredResult struct {
 	WebUI      string
 	MonitorURL string
 	ConfigDir  string // directory of the config file used for this run
-}
-
-// runMonitored runs execave with monitoring enabled using the given rules and command args.
-// It starts the process in the background, waits for the sandbox command to finish,
-// fetches entries from the web UI, then sends SIGINT to stop the monitor.
-func (env monitorTestEnv) runMonitored(t *testing.T, rules []string, args ...string) monitoredResult {
-	t.Helper()
-	configPath := writeConfig(t, rules)
-	configDir := filepath.Dir(configPath)
-	execArgs := make([]string, 0, 5+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor", "--no-open", "--")
-	execArgs = append(execArgs, args...)
-	result := runExecaveMonitored(t, execArgs...)
-	result.ConfigDir = configDir
-	return result
-}
-
-// runMonitoredWithInterrupt runs execave with monitoring enabled and sends SIGINT
-// to the process group after a short delay, simulating terminal ctrl-c behavior.
-// It fetches web UI entries before sending SIGINT.
-func (env monitorTestEnv) runMonitoredWithInterrupt(t *testing.T, rules []string, args ...string) monitoredResult {
-	t.Helper()
-	configPath := writeConfig(t, rules)
-	configDir := filepath.Dir(configPath)
-	execArgs := make([]string, 0, 5+len(args))
-	execArgs = append(execArgs, "--config", configPath, "--monitor", "--no-open", "--")
-	execArgs = append(execArgs, args...)
-	result := runMonitoredCmd(t, monitorRunOpts{
-		readyLine:     "execave: monitor running at ",
-		preFetchDelay: 200 * time.Millisecond,
-	}, execArgs...)
-	result.ConfigDir = configDir
-	return result
 }
 
 // monitorRunOpts configures how runMonitoredCmd determines readiness.
@@ -472,6 +422,348 @@ func systemPaths() []string {
 		"fs:ro:/lib64",
 		"fs:ro:/etc/ld.so.cache",
 	}
+}
+
+// testDir is a named string type representing a directory path with convenience methods
+// for test file management and path manipulation.
+type testDir string
+
+// String returns the raw directory path.
+func (d testDir) String() string {
+	return string(d)
+}
+
+// join constructs a path by joining parts under this directory.
+func (d testDir) join(parts ...string) string {
+	return filepath.Join(append([]string{string(d)}, parts...)...)
+}
+
+// file creates a file with the given content under this directory,
+// creating parent directories as needed.
+func (d testDir) file(name, content string) string {
+	path := d.join(name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		panic("testDir.file: mkdir: " + err.Error())
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		panic("testDir.file: write: " + err.Error())
+	}
+	return path
+}
+
+// rel returns the ~/‑shortened form of a path under this directory,
+// suitable for monitor log assertions.
+func (d testDir) rel(sub string) string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		panic("testDir.rel: UserHomeDir: " + err.Error())
+	}
+	full := d.join(sub)
+	r, err := filepath.Rel(homeDir, full)
+	if err != nil {
+		panic("testDir.rel: Rel: " + err.Error())
+	}
+	return "~/" + r
+}
+
+// testServer wraps a test HTTP/HTTPS server with convenience accessors.
+type testServer struct {
+	host string
+	port string
+}
+
+// hostPort returns "host:port" joined with net.JoinHostPort.
+func (s testServer) hostPort() string {
+	return net.JoinHostPort(s.host, s.port)
+}
+
+// addr returns "host:port" in the rule format (colon-separated, no brackets).
+func (s testServer) addr() string {
+	return s.host + ":" + s.port
+}
+
+// scenario is a unified test harness for E2E tests that encapsulates temp dir creation,
+// config writing, binary execution, and result assertions.
+type scenario struct {
+	t          *testing.T
+	tmpDir     string
+	configPath string
+	configDir  string
+	lastResult *execaveResult
+	lastWebUI  string
+	monitorURL string
+}
+
+// newScenario creates a new scenario, failing if bwrap is not available.
+func newScenario(t *testing.T) *scenario {
+	t.Helper()
+	failIfNoBwrap(t)
+	return &scenario{
+		t:          t,
+		tmpDir:     testTempDir(t),
+		configPath: "",
+		configDir:  "",
+		lastResult: nil,
+		lastWebUI:  "",
+		monitorURL: "",
+	}
+}
+
+// givenDir creates a named subdirectory under the scenario's temp dir
+// and returns it as a testDir.
+func (s *scenario) givenDir(name string) testDir {
+	s.t.Helper()
+	d := filepath.Join(s.tmpDir, name)
+	err := os.MkdirAll(d, 0o750)
+	require.NoError(s.t, err)
+	return testDir(d)
+}
+
+// givenSymlink creates a symlink at link pointing to target,
+// creating parent directories as needed.
+func (s *scenario) givenSymlink(target, link string) {
+	s.t.Helper()
+	createSymlink(s.t, target, link)
+}
+
+// givenRules sets the scenario's config by prepending systemPaths() to the given rules
+// and writing a config file.
+func (s *scenario) givenRules(rules ...string) {
+	s.t.Helper()
+	allRules := append(systemPaths(), rules...)
+	s.configPath = writeConfig(s.t, allRules)
+	s.configDir = filepath.Dir(s.configPath)
+}
+
+// givenRulesOnly sets the scenario's config to exactly the given rules,
+// without prepending systemPaths(). Use for error-path tests.
+func (s *scenario) givenRulesOnly(rules ...string) {
+	s.t.Helper()
+	s.configPath = writeConfig(s.t, rules)
+	s.configDir = filepath.Dir(s.configPath)
+}
+
+// givenRulesInDir writes the config in a specific directory and uses that as config dir.
+// Rules are prepended with systemPaths().
+func (s *scenario) givenRulesInDir(dir string, rules ...string) {
+	s.t.Helper()
+	allRules := append(systemPaths(), rules...)
+	writeConfigInDir(s.t, dir, allRules)
+	s.configPath = filepath.Join(dir, "execave.toml")
+	s.configDir = dir
+}
+
+// givenRawConfig writes raw config content (not rules array) to a config file.
+func (s *scenario) givenRawConfig(content string) {
+	s.t.Helper()
+	dir := testTempDir(s.t)
+	configPath := filepath.Join(dir, "execave.toml")
+	err := os.WriteFile(configPath, []byte(content), 0o600)
+	require.NoError(s.t, err)
+	s.configPath = configPath
+	s.configDir = dir
+}
+
+// whenRun executes execave with the scenario's config and the given command args.
+// Resets the last result but keeps the config.
+func (s *scenario) whenRun(args ...string) {
+	s.t.Helper()
+	execArgs := make([]string, 0, 4+len(args))
+	if s.configPath != "" {
+		execArgs = append(execArgs, "--config", s.configPath)
+	}
+	execArgs = append(execArgs, "--")
+	execArgs = append(execArgs, args...)
+	result := runExecave(s.t, "", execArgs...)
+	s.lastResult = &result
+	s.lastWebUI = ""
+	s.monitorURL = ""
+}
+
+// whenRunWithDefaultConfig executes execave without --config, relying on default config location.
+func (s *scenario) whenRunWithDefaultConfig(workDir string, args ...string) {
+	s.t.Helper()
+	execArgs := append([]string{"--"}, args...)
+	result := runExecave(s.t, workDir, execArgs...)
+	s.lastResult = &result
+	s.lastWebUI = ""
+	s.monitorURL = ""
+}
+
+// whenRunMonitored executes execave with monitoring enabled.
+// Lazily checks for strace availability.
+func (s *scenario) whenRunMonitored(args ...string) {
+	s.t.Helper()
+	failIfNoStrace(s.t)
+	execArgs := make([]string, 0, 6+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--monitor", "--no-open", "--")
+	execArgs = append(execArgs, args...)
+	result := runExecaveMonitored(s.t, execArgs...)
+	s.lastResult = &result.execaveResult
+	s.lastWebUI = result.WebUI
+	s.monitorURL = result.MonitorURL
+}
+
+// whenRunMonitoredWithInterrupt runs monitored execave and sends SIGINT during execution.
+func (s *scenario) whenRunMonitoredWithInterrupt(args ...string) {
+	s.t.Helper()
+	failIfNoStrace(s.t)
+	execArgs := make([]string, 0, 6+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--monitor", "--no-open", "--")
+	execArgs = append(execArgs, args...)
+	result := runMonitoredCmd(s.t, monitorRunOpts{
+		readyLine:     "execave: monitor running at ",
+		preFetchDelay: 200 * time.Millisecond,
+	}, execArgs...)
+	s.lastResult = &result.execaveResult
+	s.lastWebUI = result.WebUI
+	s.monitorURL = result.MonitorURL
+}
+
+// whenRunMonitoredWithFlags executes monitored execave with extra flags.
+func (s *scenario) whenRunMonitoredWithFlags(flags []string, args ...string) {
+	s.t.Helper()
+	failIfNoStrace(s.t)
+	execArgs := make([]string, 0, 6+len(flags)+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--monitor", "--no-open")
+	execArgs = append(execArgs, flags...)
+	execArgs = append(execArgs, "--")
+	execArgs = append(execArgs, args...)
+	result := runExecaveMonitored(s.t, execArgs...)
+	s.lastResult = &result.execaveResult
+	s.lastWebUI = result.WebUI
+	s.monitorURL = result.MonitorURL
+}
+
+// whenRunTextLog executes execave with --monitor=<monitorArg> for text log tests.
+func (s *scenario) whenRunTextLog(monitorArg string, args ...string) {
+	s.t.Helper()
+	failIfNoStrace(s.t)
+	execArgs := make([]string, 0, 5+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--monitor="+monitorArg, "--")
+	execArgs = append(execArgs, args...)
+	result := runExecave(s.t, "", execArgs...)
+	s.lastResult = &result
+	s.lastWebUI = ""
+	s.monitorURL = ""
+}
+
+// whenRunTextLogWithFlags executes execave with --monitor=<monitorArg> and extra flags.
+func (s *scenario) whenRunTextLogWithFlags(monitorArg string, flags []string, args ...string) {
+	s.t.Helper()
+	failIfNoStrace(s.t)
+	execArgs := make([]string, 0, 5+len(flags)+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--monitor="+monitorArg)
+	execArgs = append(execArgs, flags...)
+	execArgs = append(execArgs, "--")
+	execArgs = append(execArgs, args...)
+	result := runExecave(s.t, "", execArgs...)
+	s.lastResult = &result
+	s.lastWebUI = ""
+	s.monitorURL = ""
+}
+
+// givenCurl fails the test if curl is not available.
+func (s *scenario) givenCurl() {
+	s.t.Helper()
+	failIfNoCurl(s.t)
+}
+
+// givenPython3 fails the test if python3 is not available.
+func (s *scenario) givenPython3() {
+	s.t.Helper()
+	failIfNoPython3(s.t)
+}
+
+// givenGcc fails the test if gcc is not available.
+func (s *scenario) givenGcc() {
+	s.t.Helper()
+	failIfNoGcc(s.t)
+}
+
+// thenExitCode asserts the last run's exit code equals n.
+func (s *scenario) thenExitCode(n int) {
+	s.t.Helper()
+	require.NotNil(s.t, s.lastResult)
+	assertExitCode(s.t, *s.lastResult, n)
+}
+
+// thenExitCodeNonZero asserts the last run's exit code is not zero.
+func (s *scenario) thenExitCodeNonZero() {
+	s.t.Helper()
+	require.NotNil(s.t, s.lastResult)
+	assert.NotEqual(s.t, 0, s.lastResult.ExitCode)
+}
+
+// thenStdoutContains asserts the last run's stdout contains sub.
+func (s *scenario) thenStdoutContains(sub string) {
+	s.t.Helper()
+	require.NotNil(s.t, s.lastResult)
+	assert.Contains(s.t, s.lastResult.Stdout, sub)
+}
+
+// thenStderrContains asserts the last run's stderr contains sub.
+func (s *scenario) thenStderrContains(sub string) {
+	s.t.Helper()
+	require.NotNil(s.t, s.lastResult)
+	assert.Contains(s.t, s.lastResult.Stderr, sub)
+}
+
+// thenStderrNotContains asserts the last run's stderr does not contain sub.
+func (s *scenario) thenStderrNotContains(sub string) {
+	s.t.Helper()
+	require.NotNil(s.t, s.lastResult)
+	assert.NotContains(s.t, s.lastResult.Stderr, sub)
+}
+
+// thenFileContains asserts that the file at path exists and contains sub.
+func (s *scenario) thenFileContains(path, sub string) {
+	s.t.Helper()
+	data, err := os.ReadFile(path) // #nosec G304 -- test code reading controlled test files
+	require.NoError(s.t, err)
+	assert.Contains(s.t, string(data), sub)
+}
+
+// thenWebUIHasEntry asserts that the web UI HTML contains a table row with all substrings.
+func (s *scenario) thenWebUIHasEntry(substrings ...string) {
+	s.t.Helper()
+	require.NotEmpty(s.t, s.lastWebUI)
+	assertWebUIHasEntry(s.t, s.lastWebUI, substrings...)
+}
+
+// thenWebUIContains asserts the raw web UI HTML contains sub.
+func (s *scenario) thenWebUIContains(sub string) {
+	s.t.Helper()
+	require.NotEmpty(s.t, s.lastWebUI)
+	assert.Contains(s.t, s.lastWebUI, sub)
+}
+
+// thenWebUINotContains asserts the raw web UI HTML does not contain sub.
+func (s *scenario) thenWebUINotContains(sub string) {
+	s.t.Helper()
+	require.NotEmpty(s.t, s.lastWebUI)
+	assert.NotContains(s.t, s.lastWebUI, sub)
+}
+
+// thenWebUICountOf counts occurrences of sub in the web UI HTML.
+func (s *scenario) thenWebUICountOf(sub string) int {
+	s.t.Helper()
+	require.NotEmpty(s.t, s.lastWebUI)
+	return strings.Count(s.lastWebUI, sub)
+}
+
+// givenHTTPServer starts a plain HTTP test server returning body.
+func (s *scenario) givenHTTPServer(body string) testServer {
+	s.t.Helper()
+	h, p := testHTTPServer(s.t, body)
+	return testServer{host: h, port: p}
+}
+
+// givenHTTPSServer starts a TLS HTTP test server returning body.
+func (s *scenario) givenHTTPSServer(body string) testServer {
+	s.t.Helper()
+	h, p := testHTTPSServer(s.t, body)
+	return testServer{host: h, port: p}
 }
 
 // testHTTPServer starts a plain HTTP server that returns body.

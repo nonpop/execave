@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,38 +22,30 @@ import (
 // a web UI showing access log entries with all four columns (operation, target,
 // result, rule), and prints the monitor URL to stderr.
 func TestE2E_MonitoringAccess_ViewAccessLogInWebUI(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	dataFile := data.file("file.txt", "test data")
 
-	dataDir := filepath.Join(env.TmpDir, "data")
-	dataFile := filepath.Join(dataDir, "file.txt")
-	createFile(t, dataFile, "test data")
+	s.givenRules("fs:ro:" + data.String())
 
-	rules := append(systemPaths(), "fs:ro:"+dataDir)
+	s.whenRunMonitored("cat", dataFile)
 
-	result := env.runMonitored(t, rules, "cat", dataFile)
-	assertExitCode(t, result.execaveResult, 0)
-
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	dataFileRel, err := filepath.Rel(homeDir, dataFile)
-	require.NoError(t, err)
-
-	// Stderr contains the monitor URL
-	assert.Contains(t, result.Stderr, "monitor running at http://127.0.0.1:")
-
-	// Web UI displays entry with all four columns
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+dataFileRel, "OK", "fs:ro:"+dataDir)
+	s.thenExitCode(0)
+	s.thenStderrContains("monitor running at http://127.0.0.1:")
+	s.thenWebUIHasEntry("READ", data.rel("file.txt"), "OK", "fs:ro:"+data.String())
 }
 
 // TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI tests that log entries appear
 // in the web UI during execution, before the command exits.
 func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
-	env := newMonitorTest(t)
+	failIfNoBwrap(t)
+	failIfNoStrace(t)
 
-	testFile := filepath.Join(env.TmpDir, "data.txt")
-	createFile(t, testFile, "test content")
+	s := newScenario(t)
+	data := s.givenDir("data")
+	testFile := data.file("data.txt", "test content")
 
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+	rules := append(systemPaths(), "fs:ro:"+data.String())
 	configPath := writeConfig(t, rules)
 
 	//nolint:gosec // G204: test uses controlled input from test fixtures
@@ -72,7 +63,6 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 
 	require.NoError(t, cmd.Start())
 
-	// Wait for web UI to be ready, extract monitor URL
 	var monitorURL string
 	var stderrOnce sync.Once
 	ready := make(chan struct{})
@@ -87,20 +77,13 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 		stderrOnce.Do(func() { close(ready) })
 	}()
 	<-ready
-	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
+	require.NotEmpty(t, monitorURL)
 
-	// Give time for the cat to execute (but not enough to finish sleeping)
 	time.Sleep(500 * time.Millisecond)
 
-	// The READ entry should be visible in the web UI before the command exits
 	webUI := fetchWebUI(t, monitorURL)
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	testFileRel, err := filepath.Rel(homeDir, testFile)
-	require.NoError(t, err)
-	assert.Contains(t, webUI, "~/"+testFileRel)
+	assert.Contains(t, webUI, data.rel("data.txt"))
 
-	// Clean up
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 	_ = cmd.Wait()
 }
@@ -108,12 +91,14 @@ func TestE2E_MonitoringAccess_RealTimeStreamingViaWebUI(t *testing.T) {
 // TestE2E_MonitoringAccess_WebUISurvivesSandboxExit tests that the web UI remains
 // accessible after the sandboxed command exits.
 func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
-	env := newMonitorTest(t)
+	failIfNoBwrap(t)
+	failIfNoStrace(t)
 
-	dataFile := filepath.Join(env.TmpDir, "file.txt")
-	createFile(t, dataFile, "test data")
+	s := newScenario(t)
+	data := s.givenDir("data")
+	dataFile := data.file("file.txt", "test data")
 
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+	rules := append(systemPaths(), "fs:ro:"+data.String())
 	configPath := writeConfig(t, rules)
 
 	//nolint:gosec // G204: test uses controlled input from test fixtures
@@ -133,7 +118,6 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 
 	require.NoError(t, cmd.Start())
 
-	// Read stderr, extract monitor URL, signal readiness when URL appears
 	var monitorURL string
 	var stderrOnce sync.Once
 	stderrReady := make(chan struct{})
@@ -149,20 +133,13 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 	}()
 
 	<-stderrReady
-	require.NotEmpty(t, monitorURL, "monitor URL not found in stderr")
+	require.NotEmpty(t, monitorURL)
 
-	// Wait for the sandbox command to finish
 	time.Sleep(500 * time.Millisecond)
 
-	// Web UI is still accessible after sandbox exit
 	webUI := fetchWebUI(t, monitorURL)
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	dataFileRel, err := filepath.Rel(homeDir, dataFile)
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, webUI, "READ", "~/"+dataFileRel)
+	assertWebUIHasEntry(t, webUI, "READ", data.rel("file.txt"))
 
-	// Clean up: send SIGINT to stop the server
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
 	_ = cmd.Wait()
 }
@@ -170,17 +147,15 @@ func TestE2E_MonitoringAccess_WebUISurvivesSandboxExit(t *testing.T) {
 // TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI tests that sending
 // SIGINT after the sandboxed command has exited stops the web UI server.
 func TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
 
-	rules := systemPaths()
+	s.givenRules()
 
-	// runMonitored waits for sandbox exit, fetches web UI, sends SIGINT, waits for exit
-	result := env.runMonitored(t, rules, "true")
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("true")
 
-	// After SIGINT stopped the server, the web UI should no longer be accessible
+	s.thenExitCode(0)
 	client := &http.Client{Timeout: 1 * time.Second}
-	resp, err := client.Get(result.MonitorURL)
+	resp, err := client.Get(s.monitorURL)
 	if resp != nil {
 		resp.Body.Close() //nolint:errcheck,gosec // G104: best-effort close in test
 	}
@@ -190,19 +165,16 @@ func TestE2E_MonitoringAccess_SIGINTAfterSandboxExitStopsWebUI(t *testing.T) {
 // TestE2E_MonitoringAccess_RunStatusShownInWebUI tests that the web UI displays
 // the sandboxed command and its exit status.
 func TestE2E_MonitoringAccess_RunStatusShownInWebUI(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
 
-	rules := systemPaths()
+	s.givenRules()
 
-	result := env.runMonitored(t, rules, "echo", "hello")
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("echo", "hello")
 
-	// Web UI displays the command
-	assert.Contains(t, result.WebUI, "echo hello")
-
-	// Web UI displays exit status
-	assert.Contains(t, result.WebUI, "Exited")
-	assert.Contains(t, result.WebUI, "(code: 0)")
+	s.thenExitCode(0)
+	s.thenWebUIContains("echo hello")
+	s.thenWebUIContains("Exited")
+	s.thenWebUIContains("(code: 0)")
 }
 
 // TestE2E_MonitoringAccess_NoEntriesLostOnPageRefresh is a placeholder.
@@ -216,340 +188,247 @@ func TestE2E_MonitoringAccess_NoEntriesLostOnPageRefresh(t *testing.T) {
 // TestE2E_MonitoringAccess_MonitorNetworkAccess tests that monitoring with net rules
 // captures both HTTPS and HTTP entries visible via the web UI.
 func TestE2E_MonitoringAccess_MonitorNetworkAccess(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoCurl(t)
+	s := newScenario(t)
+	s.givenCurl()
 
-	httpsHost, httpsPort := testHTTPSServer(t, "NET_HTTPS_OK")
-	httpHost, httpPort := testHTTPServer(t, "NET_HTTP_OK")
+	https := s.givenHTTPSServer("NET_HTTPS_OK")
+	httpSrv := s.givenHTTPServer("NET_HTTP_OK")
 
-	rules := append(systemPaths(),
-		fmt.Sprintf("net:http:%s:%s", httpsHost, httpsPort),
-		fmt.Sprintf("net:http:%s:%s", httpHost, httpPort),
+	s.givenRules(
+		"net:http:"+https.addr(),
+		"net:http:"+httpSrv.addr(),
 	)
 
-	result := env.runMonitored(t, rules,
-		"sh", "-c", fmt.Sprintf("curl -sk https://%s/ && curl -sf http://%s/",
-			net.JoinHostPort(httpsHost, httpsPort),
-			net.JoinHostPort(httpHost, httpPort)))
+	s.whenRunMonitored("sh", "-c", fmt.Sprintf("curl -sk https://%s/ && curl -sf http://%s/",
+		https.hostPort(), httpSrv.hostPort()))
 
-	assertExitCode(t, result.execaveResult, 0)
-
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", httpsHost+":"+httpsPort, "OK")
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", httpHost+":"+httpPort, "OK")
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("HTTP", https.addr(), "OK")
+	s.thenWebUIHasEntry("HTTP", httpSrv.addr(), "OK")
 }
 
 // TestE2E_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently tests that monitoring
 // captures both filesystem READ/WRITE entries and network HTTPS entries.
 func TestE2E_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoCurl(t)
+	s := newScenario(t)
+	s.givenCurl()
 
-	host, port := testHTTPSServer(t, "CONCURRENT_OK")
+	srv := s.givenHTTPSServer("CONCURRENT_OK")
+	data := s.givenDir("data")
+	dataFile := data.file("data.txt", "fs data")
 
-	dataFile := filepath.Join(env.TmpDir, "data.txt")
-	createFile(t, dataFile, "fs data")
-
-	rules := append(systemPaths(),
-		"fs:ro:"+env.TmpDir,
-		fmt.Sprintf("net:http:%s:%s", host, port),
+	s.givenRules(
+		"fs:ro:"+data.String(),
+		"net:http:"+srv.addr(),
 	)
 
-	result := env.runMonitored(t, rules,
-		"sh", "-c", fmt.Sprintf("cat %s && curl -sk https://%s/", dataFile, net.JoinHostPort(host, port)))
+	s.whenRunMonitored("sh", "-c", fmt.Sprintf("cat %s && curl -sk https://%s/", dataFile, srv.hostPort()))
 
-	assertExitCode(t, result.execaveResult, 0)
-
+	s.thenExitCode(0)
 	// Both filesystem and network entries in the web UI
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	dataFileRel, err := filepath.Rel(homeDir, dataFile)
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+dataFileRel, "OK")
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", host+":"+port, "OK")
+	s.thenWebUIHasEntry("READ", data.rel("data.txt"), "OK")
+	s.thenWebUIHasEntry("HTTP", srv.addr(), "OK")
 }
 
 // TestE2E_MonitoringAccess_MonitorWithoutNetRules tests that when monitoring is enabled
 // without net rules, the proxy-tunnel starts with deny-all and network access attempts
 // by proxy-aware programs are logged.
 func TestE2E_MonitoringAccess_MonitorWithoutNetRules(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoCurl(t)
+	s := newScenario(t)
+	s.givenCurl()
 
-	host, port := testHTTPServer(t, "should not see this")
+	srv := s.givenHTTPServer("should not see this")
 
-	// No net rules
-	rules := systemPaths()
+	s.givenRules() // no net rules
 
-	result := env.runMonitored(t, rules,
-		"curl", "-sf", "--max-time", "5", fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
+	s.whenRunMonitored("curl", "-sf", "--max-time", "5",
+		fmt.Sprintf("http://%s/", srv.hostPort()))
 
 	// Denied network request logged
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", host+":"+port, "DENY", "no-matching-rule")
+	s.thenWebUIHasEntry("HTTP", srv.addr(), "DENY", "no-matching-rule")
 }
 
 // TestE2E_MonitoringAccess_AccessLogAfterSIGINT tests that the access log contains entries
 // for operations that occurred before the child process is terminated by SIGINT,
 // and that SIGINT is forwarded to the sandboxed process.
 func TestE2E_MonitoringAccess_AccessLogAfterSIGINT(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
 
-	result := env.runMonitoredWithInterrupt(t, systemPaths(), "sleep", "60")
+	s.givenRules()
 
-	// Exit code 130 = 128 + SIGINT(2), proving SIGINT was forwarded to the child
-	assertExitCode(t, result.execaveResult, 130)
+	s.whenRunMonitoredWithInterrupt("sleep", "60")
 
+	s.thenExitCode(130) // 128 + SIGINT(2), proving SIGINT was forwarded to the child
 	// Entries should exist (from process startup syscalls)
-	assert.NotEmpty(t, result.WebUI)
+	require.NotEmpty(t, s.lastWebUI)
 }
 
 // TestE2E_MonitoringAccess_LogDeduplication tests that each unique (operation, target) pair
 // appears in the web UI at most once, even when the resource is accessed multiple times.
 func TestE2E_MonitoringAccess_LogDeduplication(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	testFile := data.file("file.txt", "content")
 
-	testFile := filepath.Join(env.TmpDir, "file.txt")
-	createFile(t, testFile, "content")
-
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+	s.givenRules("fs:ro:" + data.String())
 
 	// Read the same file three times
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "cat "+testFile+" && cat "+testFile+" && cat "+testFile)
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("sh", "-c", "cat "+testFile+" && cat "+testFile+" && cat "+testFile)
 
-	// Deduplicated: the target should appear exactly once as a table cell value
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	testFileRel, err := filepath.Rel(homeDir, testFile)
-	require.NoError(t, err)
-	targetCell := `<td class="target">` + "~/" + testFileRel + `</td>`
-	count := strings.Count(result.WebUI, targetCell)
 	// Deduplicated: target cell should appear exactly once
-	assert.Equal(t, 1, count)
+	s.thenExitCode(0)
+	targetCell := `<td class="target">` + data.rel("file.txt") + `</td>`
+	assert.Equal(t, 1, s.thenWebUICountOf(targetCell))
 }
 
 // TestE2E_MonitoringAccess_SymlinkResolutionHopsLogged tests that when a file is accessed
 // through a symlink, each resolution hop is logged separately.
 func TestE2E_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	mount := s.givenDir("mount")
+	targetPath := mount.file("real.txt", "target content")
+	linkPath := mount.join("link.txt")
+	s.givenSymlink(targetPath, linkPath)
 
-	mountDir := filepath.Join(env.TmpDir, "mount")
-	linkPath := filepath.Join(mountDir, "link.txt")
-	targetPath := filepath.Join(mountDir, "real.txt")
+	s.givenRules("fs:ro:" + mount.String())
 
-	createFile(t, targetPath, "target content")
-	createSymlink(t, targetPath, linkPath)
-
-	rules := append(systemPaths(), "fs:ro:"+mountDir)
-
-	result := env.runMonitored(t, rules, "cat", linkPath)
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("cat", linkPath)
 
 	// Both the symlink hop and the resolved target are logged
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	linkPathRel, err := filepath.Rel(homeDir, linkPath)
-	require.NoError(t, err)
-	targetPathRel, err := filepath.Rel(homeDir, targetPath)
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+linkPathRel, "OK", "fs:ro:"+mountDir)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+targetPathRel, "OK", "fs:ro:"+mountDir)
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("READ", mount.rel("link.txt"), "OK", "fs:ro:"+mount.String())
+	s.thenWebUIHasEntry("READ", mount.rel("real.txt"), "OK", "fs:ro:"+mount.String())
 }
 
 // TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyLogged tests that
-// sandbox enforcement and monitor logging work correctly together. This is
-// the core integration test: when both --monitor and sandbox are active,
-// enforcement decisions must be accurately logged.
+// sandbox enforcement and monitor logging work correctly together.
 func TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyLogged(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	allowedFile := data.file("allowed.txt", "allowed content")
+	deniedFile := data.file("denied.txt", "denied content")
 
-	allowedFile := filepath.Join(env.TmpDir, "allowed.txt")
-	deniedFile := filepath.Join(env.TmpDir, "denied.txt")
-	createFile(t, allowedFile, "allowed content")
-	createFile(t, deniedFile, "denied content")
-
-	// Allow reading allowed.txt but deny denied.txt
-	rules := append(systemPaths(),
-		"fs:ro:"+allowedFile,
-		"fs:none:"+deniedFile,
-	)
+	s.givenRules("fs:ro:"+allowedFile, "fs:none:"+deniedFile)
 
 	// Run both operations in a single invocation so both are logged
-	// First cat should succeed, second should fail, but both get logged
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "cat "+allowedFile+" || true; cat "+deniedFile+" || true")
+	s.whenRunMonitored("sh", "-c", "cat "+allowedFile+" || true; cat "+deniedFile+" || true")
 
 	// Verify enforcement decisions in the web UI
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	allowedFileRel, err := filepath.Rel(homeDir, allowedFile)
-	require.NoError(t, err)
-	deniedFileRel, err := filepath.Rel(homeDir, deniedFile)
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+allowedFileRel, "OK", "fs:ro:"+allowedFile)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+deniedFileRel, "DENY", "fs:none:"+deniedFile)
+	s.thenWebUIHasEntry("READ", data.rel("allowed.txt"), "OK", "fs:ro:"+allowedFile)
+	s.thenWebUIHasEntry("READ", data.rel("denied.txt"), "DENY", "fs:none:"+deniedFile)
 }
 
 // TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged tests that
-// network enforcement and monitor logging work correctly together: allowed
-// endpoints show OK with the matching rule and denied endpoints show DENY with
-// the explicit deny rule.
+// network enforcement and monitor logging work correctly together.
 func TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoCurl(t)
+	s := newScenario(t)
+	s.givenCurl()
 
-	allowedHost, allowedPort := testHTTPServer(t, "ALLOWED_BODY")
-	deniedHost, deniedPort := testHTTPServer(t, "should not see this")
+	allowed := s.givenHTTPServer("ALLOWED_BODY")
+	denied := s.givenHTTPServer("should not see this")
 
-	rules := append(systemPaths(),
-		fmt.Sprintf("net:http:%s:%s", allowedHost, allowedPort),
-		fmt.Sprintf("net:none:%s:%s", deniedHost, deniedPort),
+	s.givenRules(
+		"net:http:"+allowed.addr(),
+		"net:none:"+denied.addr(),
 	)
 
-	result := env.runMonitored(t, rules,
-		"sh", "-c", fmt.Sprintf(
-			"curl -sf http://%s/ || true; curl -sf http://%s/ || true",
-			net.JoinHostPort(allowedHost, allowedPort),
-			net.JoinHostPort(deniedHost, deniedPort)))
+	s.whenRunMonitored("sh", "-c", fmt.Sprintf(
+		"curl -sf http://%s/ || true; curl -sf http://%s/ || true",
+		allowed.hostPort(), denied.hostPort()))
 
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", allowedHost+":"+allowedPort, "OK",
-		fmt.Sprintf("net:http:%s:%s", allowedHost, allowedPort))
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", deniedHost+":"+deniedPort, "DENY",
-		fmt.Sprintf("net:none:%s:%s", deniedHost, deniedPort))
+	s.thenWebUIHasEntry("HTTP", allowed.addr(), "OK",
+		"net:http:"+allowed.addr())
+	s.thenWebUIHasEntry("HTTP", denied.addr(), "DENY",
+		"net:none:"+denied.addr())
 }
 
 // TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly tests that most-specific rule
-// precedence is correctly enforced and logged. This ensures both rule
-// resolution systems (sandbox and monitor) agree on which rule applies.
+// precedence is correctly enforced and logged.
 func TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly(t *testing.T) {
-	env := newMonitorTest(t)
-
-	projectDir := filepath.Join(env.TmpDir, "project")
-	gitDir := filepath.Join(projectDir, ".git")
-
+	s := newScenario(t)
+	project := s.givenDir("project")
+	gitDir := project.join(".git")
 	err := os.MkdirAll(gitDir, 0o750)
 	require.NoError(t, err)
 
-	projectFile := filepath.Join(projectDir, "main.go")
-	gitFile := filepath.Join(gitDir, "config")
+	projectFile := project.file("main.go", "package main")
+	gitFile := project.file(".git/config", "[core]")
 
-	createFile(t, projectFile, "package main")
-	createFile(t, gitFile, "[core]")
-
-	// Nested rules: project rw, .git ro (more specific overrides parent)
-	rules := append(systemPaths(),
-		"fs:rw:"+projectDir,
-		"fs:ro:"+gitDir,
-	)
+	s.givenRules("fs:rw:"+project.String(), "fs:ro:"+gitDir)
 
 	// Run all operations in one invocation to capture all in the same log
 	cmd := "echo '// comment' >> " + projectFile + " && " +
 		"cat " + gitFile + " && " +
 		"(echo 'modified' >> " + gitFile + " || true)"
+	s.whenRunMonitored("sh", "-c", cmd)
 
-	result := env.runMonitored(t, rules, "sh", "-c", cmd)
 	// First two operations succeed, last one fails
-	assertExitCode(t, result.execaveResult, 0)
-
-	// Verify enforcement decisions in the web UI
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	projectFileRel, err := filepath.Rel(homeDir, projectFile)
-	require.NoError(t, err)
-	gitFileRel, err := filepath.Rel(homeDir, gitFile)
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, result.WebUI, "WRITE", "~/"+projectFileRel, "OK", "fs:rw:"+projectDir)
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+gitFileRel, "OK", "fs:ro:"+gitDir)
-	assertWebUIHasEntry(t, result.WebUI, "WRITE", "~/"+gitFileRel, "DENY", "fs:ro:"+gitDir)
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("WRITE", project.rel("main.go"), "OK", "fs:rw:"+project.String())
+	s.thenWebUIHasEntry("READ", project.rel(".git/config"), "OK", "fs:ro:"+gitDir)
+	s.thenWebUIHasEntry("WRITE", project.rel(".git/config"), "DENY", "fs:ro:"+gitDir)
 }
 
 // TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly tests that
-// network rule specificity is correctly enforced and logged. A longer CIDR prefix
-// deny rule must override a shorter CIDR prefix allow rule, and the monitor must
-// show the more-specific rule — not the broad one.
+// network rule specificity is correctly enforced and logged.
 func TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoCurl(t)
+	s := newScenario(t)
+	s.givenCurl()
 
-	// Both servers bind to 127.0.0.1 — we use port to distinguish allowed vs denied
 	_, allowedPort := testHTTPServer(t, "ALLOWED_CIDR")
 	_, deniedPort := testHTTPServer(t, "should not see this")
 
-	// Broad CIDR allow for all of 127.0.0.0/8 on any port,
-	// specific /32 deny for 127.0.0.1 on the denied port
-	rules := append(systemPaths(),
+	s.givenRules(
 		"net:http:127.0.0.0/8:*",
 		"net:none:127.0.0.1/32:"+deniedPort,
 	)
 
-	result := env.runMonitored(t, rules,
-		"sh", "-c", fmt.Sprintf(
-			"curl -sf http://127.0.0.1:%s/ || true; curl -sf http://127.0.0.1:%s/ || true",
-			allowedPort, deniedPort))
+	s.whenRunMonitored("sh", "-c", fmt.Sprintf(
+		"curl -sf http://127.0.0.1:%s/ || true; curl -sf http://127.0.0.1:%s/ || true",
+		allowedPort, deniedPort))
 
 	// Allowed port: broad CIDR matches (no specific deny for this port)
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", "127.0.0.1:"+allowedPort, "OK",
-		"net:http:127.0.0.0/8:*")
+	s.thenWebUIHasEntry("HTTP", "127.0.0.1:"+allowedPort, "OK", "net:http:127.0.0.0/8:*")
 	// Denied port: specific /32 deny overrides broad /8 allow
-	assertWebUIHasEntry(t, result.WebUI, "HTTP", "127.0.0.1:"+deniedPort, "DENY",
-		"net:none:127.0.0.1/32:"+deniedPort)
+	s.thenWebUIHasEntry("HTTP", "127.0.0.1:"+deniedPort, "DENY", "net:none:127.0.0.1/32:"+deniedPort)
 }
 
 // TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog tests that bare-path
 // syscalls (e.g., access()) with relative paths are resolved to absolute paths
 // using tracked per-pid cwd, producing proper rule matching instead of UNKNOWN.
 func TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoGcc(t)
+	s := newScenario(t)
+	s.givenGcc()
 
-	// Create project dir with .git/config (target of the bare-path access call)
-	projectDir := filepath.Join(env.TmpDir, "project")
-	createFile(t, filepath.Join(projectDir, ".git", "config"), "[core]")
+	project := s.givenDir("project")
+	project.file(".git/config", "[core]")
 
-	// Compile a C program that calls access(".git/config", R_OK).
-	// On Linux/glibc/x86_64, access() maps to the access syscall directly
-	// (not faccessat), producing a bare-path line in strace output.
-	cSource := filepath.Join(env.TmpDir, "access_test.c")
-	cBinary := filepath.Join(env.TmpDir, "access_test")
+	cSource := filepath.Join(s.tmpDir, "access_test.c")
+	cBinary := filepath.Join(s.tmpDir, "access_test")
 	createFile(t, cSource, "#include <unistd.h>\nint main(void) { access(\".git/config\", R_OK); return 0; }\n")
 
 	//nolint:gosec // G204: test code with controlled args
 	cmd := exec.CommandContext(context.Background(), "gcc", "-o", cBinary, cSource)
 	require.NoError(t, cmd.Run())
 
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+	s.givenRules("fs:ro:" + testDir(s.tmpDir).String())
 
-	// Run the C program with cwd set to projectDir.
-	// sh inherits cwd from bwrap, then cd changes it. The C program inherits
-	// sh's cwd. The dynamic linker emits AT_FDCWD-annotated openat calls,
-	// establishing the cwd for the pid. Then access(".git/config") resolves
-	// against the tracked cwd.
-	result := env.runMonitored(t, rules,
-		"sh", "-c", "cd "+projectDir+" && "+cBinary)
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("sh", "-c", "cd "+project.String()+" && "+cBinary)
 
 	// The bare-path access should be resolved to absolute path with rule matching
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	gitConfigRel, err := filepath.Rel(homeDir, filepath.Join(projectDir, ".git", "config"))
-	require.NoError(t, err)
-	assertWebUIHasEntry(t, result.WebUI, "READ",
-		"~/"+gitConfigRel, "OK", "fs:ro:"+env.TmpDir)
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("READ", project.rel(".git/config"), "OK",
+		"fs:ro:"+testDir(s.tmpDir).String())
 }
 
 // TestE2E_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked tests that bare-path
 // syscalls from a pid with no tracked cwd produce UNKNOWN entries.
-// This uses a minimal binary compiled with -nostdlib -static to avoid any
-// AT_FDCWD-annotated calls (no dynamic linker, no runtime initialization).
 func TestE2E_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked(t *testing.T) {
-	env := newMonitorTest(t)
-	failIfNoGcc(t)
+	s := newScenario(t)
+	s.givenGcc()
 
-	// Build a minimal static binary that calls the access syscall with a relative
-	// path and then exits. No libc/runtime means no AT_FDCWD-annotated calls,
-	// so the monitor has no tracked cwd for this pid.
-	cSource := filepath.Join(env.TmpDir, "bare_access.c")
-	cBinary := filepath.Join(env.TmpDir, "bare_access")
+	cSource := filepath.Join(s.tmpDir, "bare_access.c")
+	cBinary := filepath.Join(s.tmpDir, "bare_access")
 	createFile(t, cSource, `
 long sys_access(const char *path, int mode) {
 	long ret;
@@ -569,86 +448,67 @@ void _start(void) {
 	cmd := exec.CommandContext(context.Background(), "gcc", "-nostdlib", "-static", "-o", cBinary, cSource)
 	require.NoError(t, cmd.Run())
 
-	rules := append(systemPaths(), "fs:ro:"+env.TmpDir)
+	s.givenRules("fs:ro:" + testDir(s.tmpDir).String())
 
-	result := env.runMonitored(t, rules, cBinary)
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored(cBinary)
 
 	// The relative path should appear as UNKNOWN since no cwd was tracked
-	assertWebUIHasEntry(t, result.WebUI, "READ",
-		"untracked-relative/file.txt", "UNKNOWN", "unresolved-relative-path")
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("READ", "untracked-relative/file.txt", "UNKNOWN", "unresolved-relative-path")
 }
 
 // TestE2E_MonitoringAccess_DeniedOnlyDefaultView tests that the web UI shows
-// the "Denied only" checkbox as checked by default, and that OK and DENY entries
-// carry the correct data-result attributes for client-side filtering.
+// the "Denied only" checkbox as checked by default.
 func TestE2E_MonitoringAccess_DeniedOnlyDefaultView(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	data.file("file.txt", "test data")
 
-	dataDir := filepath.Join(env.TmpDir, "data")
-	createFile(t, filepath.Join(dataDir, "file.txt"), "test data")
+	s.givenRules("fs:ro:" + data.String())
 
-	rules := append(systemPaths(), "fs:ro:"+dataDir)
-	result := env.runMonitored(t, rules, "cat", filepath.Join(dataDir, "file.txt"))
-	assertExitCode(t, result.execaveResult, 0)
+	s.whenRunMonitored("cat", data.join("file.txt"))
 
 	// Denied-only checkbox is present and checked by default
-	assert.Contains(t, result.WebUI, `id="denied-only-checkbox" checked`)
+	s.thenExitCode(0)
+	s.thenWebUIContains(`id="denied-only-checkbox" checked`)
 	// Apply-nolog checkbox is also present and checked by default
-	assert.Contains(t, result.WebUI, `id="apply-nolog-checkbox" checked`)
+	s.thenWebUIContains(`id="apply-nolog-checkbox" checked`)
 }
 
 // TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries tests that fs:nolog rules
-// mark matching entries with data-nolog="true" in the web UI HTML, enabling
-// client-side nolog filtering.
+// mark matching entries with data-nolog="true" in the web UI HTML.
 func TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	project := s.givenDir("project")
+	cacheDir := project.join("cache")
+	cacheFile := project.file("cache/data.bin", "cache data")
 
-	cacheDir := filepath.Join(env.TmpDir, "project", "cache")
-	cacheFile := filepath.Join(cacheDir, "data.bin")
-	createFile(t, cacheFile, "cache data")
+	s.givenRules("fs:ro:"+project.String(), "fs:nolog:"+cacheDir)
 
-	projectDir := filepath.Join(env.TmpDir, "project")
-
-	rules := append(systemPaths(),
-		"fs:ro:"+projectDir,
-		"fs:nolog:"+cacheDir,
-	)
-	result := env.runMonitored(t, rules, "cat", cacheFile)
-	assertExitCode(t, result.execaveResult, 0)
-
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	cacheFileRel, err := filepath.Rel(homeDir, cacheFile)
-	require.NoError(t, err)
+	s.whenRunMonitored("cat", cacheFile)
 
 	// Entry is present in HTML but with data-nolog="true"
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+cacheFileRel, "data-nolog=\"true\"")
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("READ", project.rel("cache/data.bin"), "data-nolog=\"true\"")
 }
 
 // TestE2E_MonitoringAccess_FsLogOverridesNolog tests that a more specific fs:log
-// rule overrides a broader fs:nolog rule, marking the entry with data-nolog="false".
+// rule overrides a broader fs:nolog rule.
 func TestE2E_MonitoringAccess_FsLogOverridesNolog(t *testing.T) {
-	env := newMonitorTest(t)
+	s := newScenario(t)
+	project := s.givenDir("project")
+	secretDir := project.join("secret")
+	secretFile := project.file("secret/key.pem", "secret")
 
-	projectDir := filepath.Join(env.TmpDir, "project")
-	secretDir := filepath.Join(projectDir, "secret")
-	secretFile := filepath.Join(secretDir, "key.pem")
-	createFile(t, secretFile, "secret")
-
-	rules := append(systemPaths(),
-		"fs:ro:"+projectDir,
-		"fs:nolog:"+projectDir,
+	s.givenRules(
+		"fs:ro:"+project.String(),
+		"fs:nolog:"+project.String(),
 		"fs:log:"+secretDir,
 	)
-	result := env.runMonitored(t, rules, "cat", secretFile)
-	assertExitCode(t, result.execaveResult, 0)
 
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-	secretFileRel, err := filepath.Rel(homeDir, secretFile)
-	require.NoError(t, err)
+	s.whenRunMonitored("cat", secretFile)
 
 	// Entry is present with data-nolog="false" because log rule overrides nolog
-	assertWebUIHasEntry(t, result.WebUI, "READ", "~/"+secretFileRel, "data-nolog=\"false\"")
+	s.thenExitCode(0)
+	s.thenWebUIHasEntry("READ", project.rel("secret/key.pem"), "data-nolog=\"false\"")
 }

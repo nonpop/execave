@@ -118,6 +118,8 @@ func New(rnr *runner.Runner, command []string, homeDir, configDir, configPath, c
 		savedContent:   configContent,
 		draftContent:   configContent,
 		accessToken:    hex.EncodeToString(tokenBuf[:]),
+		fsLogResolver:  nil,
+		netLogResolver: nil,
 		OnConfigChange: nil,
 	}
 }
@@ -227,6 +229,7 @@ func (s *Server) tokenMiddleware(next http.Handler) http.Handler {
 // templateEntry is the entry type passed to the HTML template, augmented with display metadata.
 type templateEntry struct {
 	accesslog.Entry
+
 	Nolog bool // true if the entry matches a nolog rule
 }
 
@@ -335,6 +338,26 @@ func (st *sseStream) handleStatusChange(w http.ResponseWriter, status runner.Run
 	st.entries = nil
 }
 
+// sendInitialState handles stale-detection and sends the initial burst of SSE events
+// (status, config, and any replayed entries) to a newly connected client.
+// stream.entries is updated as a side effect.
+func (s *Server) sendInitialState(w http.ResponseWriter, stream *sseStream, startIndex int) {
+	entryCount := 0
+	if stream.logger != nil {
+		stream.entries = stream.logger.Entries()
+		entryCount = len(stream.entries)
+	}
+	if startIndex > entryCount {
+		s.sendClearEvent(w)
+		startIndex = 0
+	}
+	s.sendStatusEvent(w, s.runner.Status())
+	s.sendConfigEvent(w)
+	for i := startIndex; i < entryCount; i++ {
+		s.sendEntryEvent(w, stream.entries[i], i)
+	}
+}
+
 // handleEvents serves Server-Sent Events for real-time entry updates.
 // Supports ?from=N query parameter to replay from index N.
 // Supports Last-Event-ID header for automatic reconnection.
@@ -362,23 +385,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		defer stream.logger.Unsubscribe(stream.entryCh)
 	}
 
-	// Stale detection: if startIndex exceeds the current entry count, a new run
-	// started while the client was disconnected. Send a clear event and replay from 0.
-	entryCount := 0
-	if stream.logger != nil {
-		stream.entries = stream.logger.Entries()
-		entryCount = len(stream.entries)
-	}
-	if startIndex > entryCount {
-		s.sendClearEvent(w)
-		startIndex = 0
-	}
-
-	s.sendStatusEvent(w, s.runner.Status())
-	s.sendConfigEvent(w)
-	for i := startIndex; i < entryCount; i++ {
-		s.sendEntryEvent(w, stream.entries[i], i)
-	}
+	s.sendInitialState(w, stream, startIndex)
 	flusher.Flush()
 
 	// Stream new entries and status changes as they arrive

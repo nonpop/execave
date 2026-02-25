@@ -18,14 +18,14 @@ import (
 func runWriterWithBuf(t *testing.T, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, entries []accesslog.Entry) string {
 	t.Helper()
 	var buf bytes.Buffer
-	w := textlog.New(&buf, "/home/user", "/home/user/project", showAllowed, showNolog, fsRes, nil)
+	wtr := textlog.New(&buf, "/home/user", "/home/user/project", showAllowed, showNolog, fsRes, nil)
 
 	logger := accesslog.New(nil)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
 	go func() {
-		done <- w.Run(ctx, logger)
+		done <- wtr.Run(ctx, logger)
 	}()
 
 	for _, e := range entries {
@@ -122,7 +122,7 @@ func TestIntegration_TextLog_PathShorteningApplied(t *testing.T) {
 
 func TestIntegration_TextLog_FinalDrainOnContextCancellation(t *testing.T) {
 	var buf bytes.Buffer
-	w := textlog.New(&buf, "", "", true, false, nil, nil)
+	wtr := textlog.New(&buf, "", "", true, false, nil, nil)
 
 	logger := accesslog.New(nil)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -139,7 +139,7 @@ func TestIntegration_TextLog_FinalDrainOnContextCancellation(t *testing.T) {
 	}))
 
 	// Run should drain on cancel
-	w.Run(ctx, logger)
+	require.NoError(t, wtr.Run(ctx, logger))
 
 	assert.Contains(t, buf.String(), "/etc/hosts")
 }

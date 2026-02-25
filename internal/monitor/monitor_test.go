@@ -126,6 +126,8 @@ func TestMonitor_Integration(t *testing.T) {
 		return &config.Config{
 			FSRules:      []fsrules.AccessRule{roRule(testFile)},
 			NetRules:     nil,
+			FSLogRules:   nil,
+			NetLogRules:  nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -181,6 +183,8 @@ func TestMonitor_WriteOperation(t *testing.T) {
 		return &config.Config{
 			FSRules:      []fsrules.AccessRule{rwRule(absTestDir)},
 			NetRules:     nil,
+			FSLogRules:   nil,
+			NetLogRules:  nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -204,6 +208,8 @@ func TestMonitor_Deduplication(t *testing.T) {
 		return &config.Config{
 			FSRules:      []fsrules.AccessRule{roRule(testFile)},
 			NetRules:     nil,
+			FSLogRules:   nil,
+			NetLogRules:  nil,
 			ManagedPaths: nil,
 		}
 	})
@@ -301,6 +307,8 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule("/usr")},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	// Non-nil bwrapArgs enables setup phase detection
@@ -411,7 +419,7 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, NetRules: nil, ManagedPaths: nil}
+	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, ManagedPaths: nil}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
@@ -466,6 +474,8 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(mountDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -522,6 +532,8 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -570,6 +582,8 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{rwRule(mountDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: []string{managedDir},
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -615,6 +629,8 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(testBase)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -672,6 +688,8 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -721,6 +739,8 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -755,6 +775,8 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(projectDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -788,6 +810,8 @@ func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -815,6 +839,8 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -865,6 +891,8 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -895,6 +923,8 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
@@ -946,6 +976,8 @@ func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{roRule(tmpDir)},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)

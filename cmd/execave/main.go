@@ -374,7 +374,7 @@ func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath stri
 
 // runMonitoredText runs the command under strace monitoring with text log output.
 // monitorPath is the output file path or "-" to buffer to stderr after process exit.
-func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) (exitCode int, err error) {
+func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver) (_ int, err error) {
 	var out io.Writer
 	var buf *bytes.Buffer
 
@@ -382,19 +382,19 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 		buf = new(bytes.Buffer)
 		out = buf
 	} else {
-		f, createErr := os.Create(monitorPath) // #nosec G304 -- monitorPath is user-provided output path for text log
+		logFile, createErr := os.Create(monitorPath) // #nosec G304 -- monitorPath is user-provided output path for text log
 		if createErr != nil {
 			return 0, fmt.Errorf("create text log file %s: %w", monitorPath, createErr)
 		}
 		defer func() {
-			if closeErr := f.Close(); closeErr != nil && err == nil {
-				err = fmt.Errorf("close text log file %s: %w", monitorPath, closeErr)
+			if closeErr := logFile.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close text log file %s: %w", monitorPath, closeErr))
 			}
 		}()
-		out = f
+		out = logFile
 	}
 
-	w := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes)
+	logWriter := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes)
 
 	if err := rnr.Start(ctx, cfg, command); err != nil {
 		return 0, fmt.Errorf("start initial run: %w", err)
@@ -405,7 +405,7 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 	writerCtx, writerCancel := context.WithCancel(ctx)
 	writerErr := make(chan error, 1)
 	go func() {
-		writerErr <- w.Run(writerCtx, logger)
+		writerErr <- logWriter.Run(writerCtx, logger)
 	}()
 
 	// Wait for the process to exit
@@ -417,14 +417,14 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 
 	// Trigger final drain in the writer
 	writerCancel()
-	if writeErr := <-writerErr; writeErr != nil && err == nil {
-		err = fmt.Errorf("write text log: %w", writeErr)
+	if writeErr := <-writerErr; writeErr != nil {
+		err = errors.Join(err, fmt.Errorf("write text log: %w", writeErr))
 	}
 
 	// Flush buffered output for stderr mode after process exits
 	if buf != nil {
-		if _, copyErr := io.Copy(os.Stderr, buf); copyErr != nil && err == nil {
-			err = fmt.Errorf("flush text log to stderr: %w", copyErr)
+		if _, copyErr := io.Copy(os.Stderr, buf); copyErr != nil {
+			err = errors.Join(err, fmt.Errorf("flush text log to stderr: %w", copyErr))
 		}
 	}
 

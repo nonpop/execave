@@ -12,6 +12,8 @@ func NewTestRunner() *Runner {
 	cfg := &config.Config{
 		FSRules:      nil,
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 	return New(cfg, "/tmp/test-config.json", &sandbox.NetworkPath{UDSPath: "", ExecaveBinary: ""})

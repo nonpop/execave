@@ -18,250 +18,198 @@ import (
 // TestE2E_SandboxingFilesystem_RunCommandWithReadOnlySystemAccess tests that the user
 // can grant read-only access to system paths and the sandboxed command can read but not write.
 func TestE2E_SandboxingFilesystem_RunCommandWithReadOnlySystemAccess(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	testFile := data.file("data.txt", "hello from sandbox")
 
-	tmpDir := testTempDir(t)
-	testFile := filepath.Join(tmpDir, "data.txt")
-	createFile(t, testFile, "hello from sandbox")
-
-	rules := append(systemPaths(), "fs:ro:"+tmpDir)
-	configPath := writeConfig(t, rules)
+	s.givenRules("fs:ro:" + data.String())
 
 	// Read should succeed
-	result := runExecave(t, "", "--config", configPath, "--", "cat", testFile)
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "hello from sandbox")
+	s.whenRun("cat", testFile)
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello from sandbox")
 
 	// Write should be denied
-	result = runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo test > "+filepath.Join(tmpDir, "new.txt"))
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "Read-only file system")
+	s.whenRun("sh", "-c", "echo test > "+data.join("new.txt"))
+
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("Read-only file system")
 }
 
 // TestE2E_SandboxingFilesystem_RunCommandWithReadWriteProjectAccess tests that the user
 // can grant read-write access so the sandboxed command can create and read files.
 func TestE2E_SandboxingFilesystem_RunCommandWithReadWriteProjectAccess(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	testFile := data.join("output.txt")
 
-	tmpDir := testTempDir(t)
-	testFile := filepath.Join(tmpDir, "output.txt")
-
-	rules := append(systemPaths(), "fs:rw:"+tmpDir)
-	configPath := writeConfig(t, rules)
+	s.givenRules("fs:rw:" + data.String())
 
 	// Write should succeed
-	result := runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo 'written' > "+testFile)
-	assertExitCode(t, result, 0)
+	s.whenRun("sh", "-c", "echo 'written' > "+testFile)
 
-	// Verify file was written
-	data, err := os.ReadFile(testFile) // #nosec G304 -- test code reading controlled test files
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "written")
+	s.thenExitCode(0)
+	s.thenFileContains(testFile, "written")
 
 	// Read should also succeed
-	result = runExecave(t, "", "--config", configPath, "--", "cat", testFile)
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "written")
+	s.whenRun("cat", testFile)
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("written")
 }
 
 // TestE2E_SandboxingFilesystem_ProtectSensitiveFilesWithNoAccessRules tests that the user
 // can block access to sensitive files within an otherwise accessible directory.
 func TestE2E_SandboxingFilesystem_ProtectSensitiveFilesWithNoAccessRules(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	envFile := data.file(".env", "SECRET=password")
+	normalFile := data.file("data.txt", "normal data")
 
-	tmpDir := testTempDir(t)
-	envFile := filepath.Join(tmpDir, ".env")
-	normalFile := filepath.Join(tmpDir, "data.txt")
-	createFile(t, envFile, "SECRET=password")
-	createFile(t, normalFile, "normal data")
-
-	rules := append(systemPaths(),
-		"fs:rw:"+tmpDir,
-		"fs:none:"+envFile,
-	)
-	configPath := writeConfig(t, rules)
+	s.givenRules("fs:rw:"+data.String(), "fs:none:"+envFile)
 
 	// Reading the protected file should be denied
-	result := runExecave(t, "", "--config", configPath, "--", "cat", envFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, ".env: Permission denied")
+	s.whenRun("cat", envFile)
+
+	s.thenExitCodeNonZero()
+	s.thenStderrContains(".env: Permission denied")
 
 	// Reading and writing other files should still work
-	result = runExecave(t, "", "--config", configPath, "--", "cat", normalFile)
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "normal data")
+	s.whenRun("cat", normalFile)
 
-	result = runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo new >> "+normalFile)
-	assertExitCode(t, result, 0)
+	s.thenExitCode(0)
+	s.thenStdoutContains("normal data")
+
+	s.whenRun("sh", "-c", "echo new >> "+normalFile)
+
+	s.thenExitCode(0)
 }
 
 // TestE2E_SandboxingFilesystem_OverrideParentRuleWithMoreSpecificChildRule tests that the
 // most specific rule wins when rules overlap.
 func TestE2E_SandboxingFilesystem_OverrideParentRuleWithMoreSpecificChildRule(t *testing.T) {
-	failIfNoBwrap(t)
-
-	tmpDir := testTempDir(t)
-	projDir := filepath.Join(tmpDir, "proj")
-	gitDir := filepath.Join(projDir, ".git")
-	gitFile := filepath.Join(gitDir, "config")
-	srcFile := filepath.Join(projDir, "src", "main.go")
-
+	s := newScenario(t)
+	proj := s.givenDir("proj")
+	gitDir := proj.join(".git")
 	err := os.MkdirAll(gitDir, 0o750)
 	require.NoError(t, err)
-	createFile(t, gitFile, "existing")
-	createFile(t, srcFile, "package main")
+	gitFile := proj.file(".git/config", "existing")
+	srcFile := proj.file("src/main.go", "package main")
 
-	rules := append(systemPaths(),
-		"fs:rw:"+projDir,
-		"fs:ro:"+gitDir,
-	)
-	configPath := writeConfig(t, rules)
+	s.givenRules("fs:rw:"+proj.String(), "fs:ro:"+gitDir)
 
 	// Writing to .git should be denied (ro child rule overrides rw parent)
-	result := runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo test > "+gitFile)
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "config: Read-only file system")
+	s.whenRun("sh", "-c", "echo test > "+gitFile)
+
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("config: Read-only file system")
 
 	// Reading from .git should succeed
-	result = runExecave(t, "", "--config", configPath, "--", "cat", gitFile)
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "existing")
+	s.whenRun("cat", gitFile)
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("existing")
 
 	// Writing to project/src should succeed (parent rw rule applies)
-	result = runExecave(t, "", "--config", configPath, "--", "sh", "-c", "echo 'updated' > "+srcFile)
-	assertExitCode(t, result, 0)
+	s.whenRun("sh", "-c", "echo 'updated' > "+srcFile)
+
+	s.thenExitCode(0)
 }
 
 // TestE2E_SandboxingFilesystem_AccessFilesThroughSymlinksWithAllowedTarget tests that
 // symlinks work when both the symlink path and target are permitted.
 func TestE2E_SandboxingFilesystem_AccessFilesThroughSymlinksWithAllowedTarget(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	project := s.givenDir("project")
+	target := s.givenDir("target")
+	targetFile := target.file("data.txt", "target content")
+	linkFile := project.join("data-link")
+	s.givenSymlink(targetFile, linkFile)
 
-	tmpDir := testTempDir(t)
-	projectDir := filepath.Join(tmpDir, "project")
-	targetDir := filepath.Join(tmpDir, "target")
-	targetFile := filepath.Join(targetDir, "data.txt")
-	linkFile := filepath.Join(projectDir, "data-link")
+	s.givenRules("fs:rw:"+project.String(), "fs:ro:"+target.String())
 
-	err := os.MkdirAll(projectDir, 0o750)
-	require.NoError(t, err)
-	err = os.MkdirAll(targetDir, 0o750)
-	require.NoError(t, err)
+	s.whenRun("cat", linkFile)
 
-	createFile(t, targetFile, "target content")
-	createSymlink(t, targetFile, linkFile)
-
-	rules := append(systemPaths(),
-		"fs:rw:"+projectDir,
-		"fs:ro:"+targetDir,
-	)
-	configPath := writeConfig(t, rules)
-
-	result := runExecave(t, "", "--config", configPath, "--", "cat", linkFile)
-
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "target content")
+	s.thenExitCode(0)
+	s.thenStdoutContains("target content")
 }
 
 // TestE2E_SandboxingFilesystem_SymlinkToInaccessibleTargetDenied tests that symlinks
 // pointing to paths outside any rule are denied.
 func TestE2E_SandboxingFilesystem_SymlinkToInaccessibleTargetDenied(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	secret := s.givenDir("secret")
+	secret.file("data.txt", "secret data")
+	public := s.givenDir("public")
+	linkFile := public.join("link.txt")
+	s.givenSymlink(secret.join("data.txt"), linkFile)
 
-	tmpDir := testTempDir(t)
-	secretDir := filepath.Join(tmpDir, "secret")
-	secretFile := filepath.Join(secretDir, "data.txt")
-	publicDir := filepath.Join(tmpDir, "public")
-	linkFile := filepath.Join(publicDir, "link.txt")
+	s.givenRules("fs:rw:" + public.String())
 
-	err := os.MkdirAll(secretDir, 0o750)
-	require.NoError(t, err)
-	err = os.MkdirAll(publicDir, 0o750)
-	require.NoError(t, err)
+	s.whenRun("cat", linkFile)
 
-	createFile(t, secretFile, "secret data")
-	createSymlink(t, secretFile, linkFile)
-
-	// Allow rw to public but no rule for secret
-	rules := append(systemPaths(), "fs:rw:"+publicDir)
-	configPath := writeConfig(t, rules)
-
-	result := runExecave(t, "", "--config", configPath, "--", "cat", linkFile)
-
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "link.txt: No such file or directory")
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("link.txt: No such file or directory")
 }
 
 // TestE2E_SandboxingFilesystem_DefaultDenyForUnmatchedPaths tests that paths not
 // matched by any rule are inaccessible.
 func TestE2E_SandboxingFilesystem_DefaultDenyForUnmatchedPaths(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	testFile := data.file("secret.txt", "secret data")
 
-	tmpDir := testTempDir(t)
-	testFile := filepath.Join(tmpDir, "secret.txt")
-	createFile(t, testFile, "secret data")
+	s.givenRules() // no extra rules beyond systemPaths
 
-	// System paths let cat execute, but no rule for tmpDir
-	configPath := writeConfig(t, systemPaths())
+	s.whenRun("cat", testFile)
 
-	result := runExecave(t, "", "--config", configPath, "--", "cat", testFile)
-
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "secret.txt: No such file or directory")
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("secret.txt: No such file or directory")
 }
 
 // TestE2E_SandboxingFilesystem_NoneDirectoryWithAccessibleChildPath tests that a
 // none-directory with a child rule allows access to the child but blocks the parent.
 func TestE2E_SandboxingFilesystem_NoneDirectoryWithAccessibleChildPath(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	tmp := s.givenDir("tmp")
+	parent := s.givenDir("tmp/parent")
+	child := s.givenDir("tmp/parent/child")
+	childFile := child.file("data.txt", "child content")
 
-	tmpDir := testTempDir(t)
-	parentDir := filepath.Join(tmpDir, "parent")
-	childDir := filepath.Join(parentDir, "child")
-	childFile := filepath.Join(childDir, "data.txt")
-
-	err := os.MkdirAll(childDir, 0o750)
-	require.NoError(t, err)
-	createFile(t, childFile, "child content")
-
-	rules := append(systemPaths(),
-		"fs:rw:"+tmpDir,
-		"fs:none:"+parentDir,
-		"fs:rw:"+childDir,
+	s.givenRules(
+		"fs:rw:"+tmp.String(),
+		"fs:none:"+parent.String(),
+		"fs:rw:"+child.String(),
 	)
-	configPath := writeConfig(t, rules)
 
 	// Child file should be accessible
-	result := runExecave(t, "", "--config", configPath, "--", "cat", childFile)
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "child content")
+	s.whenRun("cat", childFile)
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("child content")
 
 	// Parent listing should be denied
-	result = runExecave(t, "", "--config", configPath, "--", "ls", parentDir)
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "parent': Permission denied")
+	s.whenRun("ls", parent.String())
+
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("parent': Permission denied")
 }
 
 // TestE2E_SandboxingFilesystem_RelativePathsInRulesResolvedRelativeToConfigDirectory tests
 // that relative paths in rules are resolved from the config file's directory.
 func TestE2E_SandboxingFilesystem_RelativePathsInRulesResolvedRelativeToConfigDirectory(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	workDir := s.givenDir("work")
+	src := s.givenDir("work/src")
+	testFile := src.file("test.txt", "hello")
 
-	workDir := testTempDir(t)
-	srcDir := filepath.Join(workDir, "src")
-	err := os.MkdirAll(srcDir, 0o750)
-	require.NoError(t, err)
+	s.givenRulesInDir(workDir.String(), "fs:ro:./src")
 
-	testFile := filepath.Join(srcDir, "test.txt")
-	createFile(t, testFile, "hello")
+	s.whenRunWithDefaultConfig(workDir.String(), "cat", testFile)
 
-	rules := append(systemPaths(), "fs:ro:./src")
-	writeConfigInDir(t, workDir, rules)
-
-	result := runExecave(t, workDir, "--", "cat", testFile)
-
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "hello")
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello")
 }
 
 // TestE2E_SandboxingFilesystem_SandboxedProcessReceivesTerminalResizeSignal tests that

@@ -106,7 +106,7 @@ func validateNoLogMixedPortPatterns(rules []LogRule) error {
 	for _, rule := range rules {
 		info, ok := byTarget[rule.rawTarget]
 		if !ok {
-			info = &portInfo{firstRule: rule}
+			info = &portInfo{hasWildcard: false, hasSpecific: false, firstRule: rule}
 			byTarget[rule.rawTarget] = info
 		}
 		if rule.port.isWildcard {
@@ -136,7 +136,7 @@ func NewLogResolver(rules []LogRule) *LogResolver {
 // Visible returns true if entries for the given host and port should be displayed.
 // Resolution is protocol-agnostic: it matches on target and port only.
 // If no rule matches, the default is visible (true).
-func (r *LogResolver) Visible(host string, port uint16) bool {
+func (r *LogResolver) Visible(host string, portNum uint16) bool {
 	lowerHost := strings.ToLower(host)
 	parsedIP := net.ParseIP(lowerHost)
 
@@ -146,12 +146,12 @@ func (r *LogResolver) Visible(host string, port uint16) bool {
 	for i := range r.rules {
 		rule := &r.rules[i]
 
-		if !portMatches(rule.port, port) {
+		if !portMatches(rule.port, portNum) {
 			continue
 		}
 
 		// Reuse targetSpecificity by wrapping the log rule target in a Rule struct.
-		tmpRule := &AccessRule{target: rule.target}
+		tmpRule := &AccessRule{protocol: protocolUnknown, target: rule.target, port: port{isWildcard: false, number: 0}, RawRule: "", rawTarget: "", rawPort: ""}
 		specificity := targetSpecificity(tmpRule, lowerHost, parsedIP)
 		if specificity < 0 {
 			continue

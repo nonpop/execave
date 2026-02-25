@@ -352,7 +352,7 @@ func TestHandleSave_ValidBody_WritesFile(t *testing.T) {
 
 	logger := accesslog.New(nil)
 	r := newTestRunnerWithLogger(logger)
-	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, `rules = []`, nil, FilterDefaults{})
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, `rules = []`, nil, FilterDefaults{ShowAllowed: false, ShowNolog: false})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -374,7 +374,7 @@ func TestHandleSave_InvalidBody_Returns400AndFileUnchanged(t *testing.T) {
 
 	logger := accesslog.New(nil)
 	r := newTestRunnerWithLogger(logger)
-	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil, FilterDefaults{})
+	srv := New(r, []string{"true"}, "", "/tmp", tmpFile, original, nil, FilterDefaults{ShowAllowed: false, ShowNolog: false})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 
@@ -440,7 +440,7 @@ func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, confi
 	t.Helper()
 	r := newTestRunnerWithLogger(logger)
 	command := []string{"true"}
-	srv := New(r, command, homeDir, configDir, "/tmp/test-execave.toml", "", nil, FilterDefaults{})
+	srv := New(r, command, homeDir, configDir, "/tmp/test-execave.toml", "", nil, FilterDefaults{ShowAllowed: false, ShowNolog: false})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv
@@ -451,7 +451,7 @@ func StartServerWithPaths(t *testing.T, logger *accesslog.Logger, homeDir, confi
 // Path shortening is disabled (empty homeDir and configDir).
 func StartServerWithRunner(t *testing.T, r *runner.Runner) *Server {
 	t.Helper()
-	srv := New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil, FilterDefaults{})
+	srv := New(r, []string{"true"}, "", "", "/tmp/test-execave.toml", "", nil, FilterDefaults{ShowAllowed: false, ShowNolog: false})
 	require.NoError(t, srv.Start(t.Context()))
 	t.Cleanup(func() { _ = srv.Shutdown(t.Context()) })
 	return srv

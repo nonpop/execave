@@ -12,28 +12,28 @@ import (
 // TestE2E_ConfiguringExecave_DefaultConfigLocation tests that execave reads ./execave.toml
 // from the current working directory by default.
 func TestE2E_ConfiguringExecave_DefaultConfigLocation(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
+	workDir := s.givenDir("work")
 
-	workDir := testTempDir(t)
-	writeConfigInDir(t, workDir, systemPaths())
+	s.givenRulesInDir(workDir.String())
 
-	result := runExecave(t, workDir, "--", "echo", "hello")
+	s.whenRunWithDefaultConfig(workDir.String(), "echo", "hello")
 
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "hello")
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello")
 }
 
 // TestE2E_ConfiguringExecave_CustomConfigPathViaConfig tests that --config overrides
 // the default config location.
 func TestE2E_ConfiguringExecave_CustomConfigPathViaConfig(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
 
-	configPath := writeConfig(t, systemPaths())
+	s.givenRules()
 
-	result := runExecave(t, "", "--config", configPath, "--", "echo", "hello")
+	s.whenRun("echo", "hello")
 
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "hello")
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello")
 }
 
 // TestE2E_ConfiguringExecave_MissingConfigFileShowsError tests that a missing config file
@@ -48,63 +48,62 @@ func TestE2E_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
 // TestE2E_ConfiguringExecave_InvalidRuleSyntaxRejectedBeforeExecution tests that a malformed
 // rule is rejected at config load time and the command never executes.
 func TestE2E_ConfiguringExecave_InvalidRuleSyntaxRejectedBeforeExecution(t *testing.T) {
-	configPath := writeConfig(t, []string{"fs:readonly:/home/user"})
+	s := newScenario(t)
+	s.givenRulesOnly("fs:readonly:/home/user")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "invalid permission type")
+	s.thenExitCode(1)
+	s.thenStderrContains("invalid permission type")
 }
 
 // TestE2E_ConfiguringExecave_UnknownResourceTypeRejected tests that rules with unrecognized
 // resource prefixes are rejected before command execution.
 func TestE2E_ConfiguringExecave_UnknownResourceTypeRejected(t *testing.T) {
-	configPath := writeConfig(t, []string{"dns:allow:example.com"})
+	s := newScenario(t)
+	s.givenRulesOnly("dns:allow:example.com")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "unknown resource type")
+	s.thenExitCode(1)
+	s.thenStderrContains("unknown resource type")
 }
 
 // TestE2E_ConfiguringExecave_DuplicateFilesystemPathsRejected tests that two rules targeting
 // the same normalized path are rejected.
 func TestE2E_ConfiguringExecave_DuplicateFilesystemPathsRejected(t *testing.T) {
-	configPath := writeConfig(t, []string{"fs:ro:/home/user", "fs:rw:/home/user"})
+	s := newScenario(t)
+	s.givenRulesOnly("fs:ro:/home/user", "fs:rw:/home/user")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "duplicate path")
-	assert.Contains(t, result.Stderr, "/home/user")
+	s.thenExitCode(1)
+	s.thenStderrContains("duplicate path")
+	s.thenStderrContains("/home/user")
 }
 
 // TestE2E_ConfiguringExecave_DuplicateNetworkRuleIdentityRejected tests that two net rules
 // with the same target and port but different actions are rejected.
 func TestE2E_ConfiguringExecave_DuplicateNetworkRuleIdentityRejected(t *testing.T) {
-	configPath := writeConfig(t, append(systemPaths(),
-		"net:http:example.com:443",
-		"net:none:example.com:443",
-	))
+	s := newScenario(t)
+	s.givenRules("net:http:example.com:443", "net:none:example.com:443")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "duplicate net rule")
+	s.thenExitCode(1)
+	s.thenStderrContains("duplicate net rule")
 }
 
 // TestE2E_ConfiguringExecave_MixedPortPatternsOnSameTargetRejected tests that a wildcard port
 // and a specific port on the same target are rejected.
 func TestE2E_ConfiguringExecave_MixedPortPatternsOnSameTargetRejected(t *testing.T) {
-	configPath := writeConfig(t, append(systemPaths(),
-		"net:http:example.com:*",
-		"net:none:example.com:443",
-	))
+	s := newScenario(t)
+	s.givenRules("net:http:example.com:*", "net:none:example.com:443")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "mixed port patterns")
+	s.thenExitCode(1)
+	s.thenStderrContains("mixed port patterns")
 }
 
 // TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected tests that a rule granting
@@ -126,38 +125,37 @@ func TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.
 // TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected tests that rules targeting managed
 // paths (/dev, /proc, /tmp) or their descendants are rejected.
 func TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected(t *testing.T) {
-	configPath := writeConfig(t, []string{"fs:ro:/proc/self/status"})
+	s := newScenario(t)
+	s.givenRulesOnly("fs:ro:/proc/self/status")
 
-	result := runExecave(t, "", "--config", configPath, "--", "true")
+	s.whenRun("true")
 
-	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "managed path")
+	s.thenExitCode(1)
+	s.thenStderrContains("managed path")
 }
 
 // TestE2E_ConfiguringExecave_TildeRuleExpandsAndMountsCorrectly tests that a tilde
 // path in a rule is expanded to the home directory and the path is mounted correctly.
 func TestE2E_ConfiguringExecave_TildeRuleExpandsAndMountsCorrectly(t *testing.T) {
-	failIfNoBwrap(t)
+	s := newScenario(t)
 
 	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	tmpDir := testTempDir(t)
-	dataFile := filepath.Join(tmpDir, "data.txt")
-	createFile(t, dataFile, "tilde content")
+	data := s.givenDir("data")
+	dataFile := data.file("data.txt", "tilde content")
 
-	// Compute the tilde form of tmpDir (must be under homeDir for this test)
-	rel, err := filepath.Rel(homeDir, tmpDir)
+	rel, err := filepath.Rel(homeDir, data.String())
 	require.NoError(t, err)
-	require.False(t, filepath.IsAbs(rel), "testTempDir must be under home directory")
+	require.False(t, filepath.IsAbs(rel))
 
 	tildeDir := "~/" + rel
-	rules := append(systemPaths(), "fs:ro:"+tildeDir)
+	s.givenRules("fs:ro:" + tildeDir)
 
-	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "cat", dataFile)
+	s.whenRun("cat", dataFile)
 
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "tilde content")
+	s.thenExitCode(0)
+	s.thenStdoutContains("tilde content")
 }
 
 // TestE2E_ConfiguringExecave_TildeDuplicatePathRejected tests that two tilde rules
@@ -169,12 +167,12 @@ func TestE2E_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
 	tmpDir := testTempDir(t)
 	rel, err := filepath.Rel(homeDir, tmpDir)
 	require.NoError(t, err)
-	require.False(t, filepath.IsAbs(rel), "testTempDir must be under home directory")
+	require.False(t, filepath.IsAbs(rel))
 
 	tildeDir := "~/" + rel
 	rules := []string{
 		"fs:ro:" + tildeDir,
-		"fs:rw:" + tmpDir, // same path as above, without tilde
+		"fs:rw:" + tmpDir,
 	}
 
 	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "true")
@@ -187,23 +185,18 @@ func TestE2E_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
 // TestE2E_ConfiguringExecave_CommentsInConfig tests that TOML comments in the config
 // file are ignored and the config loads successfully.
 func TestE2E_ConfiguringExecave_CommentsInConfig(t *testing.T) {
-	failIfNoBwrap(t)
-
-	tmpDir := testTempDir(t)
-	configPath := filepath.Join(tmpDir, "execave.toml")
-	content := `# Sandbox config
+	s := newScenario(t)
+	s.givenRawConfig(`# Sandbox config
 rules = [
     # System libraries
     "fs:ro:/usr",
     "fs:ro:/lib",
     "fs:ro:/lib64",
     "fs:ro:/etc/ld.so.cache",  # linker cache
-]`
-	err := os.WriteFile(configPath, []byte(content), 0o600)
-	require.NoError(t, err)
+]`)
 
-	result := runExecave(t, "", "--config", configPath, "--", "echo", "hello")
+	s.whenRun("echo", "hello")
 
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "hello")
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello")
 }

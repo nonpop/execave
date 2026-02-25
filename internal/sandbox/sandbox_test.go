@@ -40,6 +40,8 @@ func TestBuildBwrapArgs(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -90,6 +92,8 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -113,6 +117,8 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -134,6 +140,8 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -151,6 +159,8 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -165,6 +175,8 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
@@ -188,6 +200,8 @@ func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 	cfg := &config.Config{
 		FSRules:      []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
+		FSLogRules:   nil,
+		NetLogRules:  nil,
 		ManagedPaths: nil,
 	}
 
