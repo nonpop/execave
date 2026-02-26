@@ -3,7 +3,6 @@ package monitor_test
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -11,6 +10,7 @@ import (
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
+	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +23,8 @@ type monitorTestEnv struct {
 
 func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
 	t.Helper()
-	_, err := exec.LookPath("strace")
+
+	stracePath, err := sandbox.ResolveStrace()
 	require.NoError(t, err)
 
 	tmpDir := t.TempDir()
@@ -32,7 +33,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := monitor.New(logger, resolver, nil, false, nil, nil, nil)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil)
 
 	return &monitorTestEnv{
 		t:      t,

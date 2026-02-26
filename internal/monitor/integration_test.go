@@ -14,6 +14,7 @@ import (
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
+	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/seccomp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1785,9 +1786,7 @@ int main(int argc, char *argv[]) {
 // blockedSyscalls is set, a real strace run that intercepts a blocked syscall attempt
 // produces a SYSCALL entry with DENY result and seccomp rule.
 func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t *testing.T) {
-	_, err := exec.LookPath("strace")
-	require.NoError(t, err)
-	_, err = exec.LookPath("python3")
+	_, err := exec.LookPath("python3")
 	require.NoError(t, err)
 
 	if runtime.GOARCH != "amd64" {
@@ -1806,10 +1805,13 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
 	blocked := map[string]bool{"bpf": true}
 	seccompFile, err := seccomp.FilterPipe(nil)
 	require.NoError(t, err)
-	mon := monitor.New(logger, resolver, nil, false, seccompFile, blocked, nil)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, nil)
 
 	// Python invokes the bpf syscall (nr 321 on x86_64) which is in our blocked set.
 	// Without bwrap the seccomp filter is not applied, but strace still emits the
@@ -1835,9 +1837,7 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 // allowedSyscalls is set, a real strace run that intercepts an allowed syscall produces
 // a SYSCALL entry with OK result.
 func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *testing.T) {
-	_, err := exec.LookPath("strace")
-	require.NoError(t, err)
-	_, err = exec.LookPath("python3")
+	_, err := exec.LookPath("python3")
 	require.NoError(t, err)
 
 	if runtime.GOARCH != "amd64" {
@@ -1856,13 +1856,16 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
 	// blockedSyscalls must be non-nil to enable syscall tracing in buildStraceArgs.
 	// In production, both maps are populated from config when seccomp is active.
 	blocked := map[string]bool{}
 	allowed := map[string]bool{"bpf": true}
 	seccompFile, err := seccomp.FilterPipe(allowed)
 	require.NoError(t, err)
-	mon := monitor.New(logger, resolver, nil, false, seccompFile, blocked, allowed)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, allowed)
 
 	exitCode, err := mon.Run(context.Background(), []string{
 		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",

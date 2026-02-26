@@ -31,6 +31,8 @@ const (
 
 // Monitor wraps command execution with strace to log filesystem access.
 type Monitor struct {
+	bwrapPath       string // absolute path to validated bwrap binary; empty when bwrapArgs is empty
+	stracePath      string // absolute path to validated strace binary
 	resolver        *fsrules.AccessResolver
 	logger          *accesslog.Logger
 	bwrapArgs       []string        // strace wraps bwrap
@@ -53,11 +55,15 @@ const (
 )
 
 // New creates a new Monitor.
+// bwrapPath is the validated absolute path to the bwrap binary; must be empty when bwrapArgs is empty.
+// stracePath is the validated absolute path to the strace binary.
 // bwrapArgs configures sandbox integration. If empty, strace traces the command directly.
 // hasNetworkPath indicates whether the sandbox has a network tunnel (adds an extra execve to setup).
 // seccompFile is the read end of the seccomp filter pipe; nil means no filtering.
 // blockedSyscalls and allowedSyscalls control syscall tracing; both must be nil when seccompFile is nil.
 func New(
+	bwrapPath string,
+	stracePath string,
 	logger *accesslog.Logger,
 	resolver *fsrules.AccessResolver,
 	bwrapArgs []string,
@@ -66,10 +72,18 @@ func New(
 	blockedSyscalls map[string]bool,
 	allowedSyscalls map[string]bool,
 ) *Monitor {
+	if len(bwrapArgs) > 0 && bwrapPath == "" {
+		panic("New: bwrapPath must not be empty when bwrapArgs is non-empty")
+	}
+	if len(bwrapArgs) == 0 && bwrapPath != "" {
+		panic("New: bwrapPath must be empty when bwrapArgs is empty")
+	}
 	if seccompFile == nil && (blockedSyscalls != nil || allowedSyscalls != nil) {
 		panic("New: blockedSyscalls and allowedSyscalls must be nil when seccompFile is nil")
 	}
 	return &Monitor{
+		bwrapPath:       bwrapPath,
+		stracePath:      stracePath,
 		logger:          logger,
 		resolver:        resolver,
 		bwrapArgs:       bwrapArgs,
@@ -82,8 +96,8 @@ func New(
 
 // Run executes a command with strace monitoring.
 func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
-	if _, err := exec.LookPath("strace"); err != nil {
-		return 1, fmt.Errorf("strace not found in PATH: %w", err)
+	if m.stracePath == "" {
+		panic("Run: stracePath must not be empty")
 	}
 
 	// Create pipe for strace output: strace writes to straceW, we read from straceR
@@ -105,7 +119,7 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 
 	// Build strace command with pipe write end as ExtraFiles[0] (becomes fd 3 in child)
 	straceArgs := m.buildStraceArgs(command, effectiveBwrapArgs)
-	cmd := exec.CommandContext(ctx, "strace", straceArgs...) // #nosec G204 -- args built from validated config
+	cmd := exec.CommandContext(ctx, m.stracePath, straceArgs...) // #nosec G204 -- args built from validated config
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -228,9 +242,9 @@ func (m *Monitor) buildStraceArgs(command []string, bwrapArgs []string) []string
 	}
 
 	if len(bwrapArgs) > 0 {
-		// strace wraps bwrap: strace [args] -- bwrap [args] -- command
+		// strace wraps bwrap: strace [args] -- /path/to/bwrap [args] -- command
 		// bwrapArgs includes both sandbox config and the command to execute
-		straceArgs = append(straceArgs, "bwrap")
+		straceArgs = append(straceArgs, m.bwrapPath)
 		straceArgs = append(straceArgs, bwrapArgs...)
 	} else {
 		// No sandbox (testing only) - trace command directly

@@ -2,9 +2,12 @@ package e2e_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestE2E_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRules tests that
@@ -114,4 +117,39 @@ func TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
 	s.thenExitCodeNonZero()
 	s.thenStderrContains("loop-a: Too many levels of symbolic links")
 	s.thenWebUIHasEntry("DENY", "symlink-depth-limit-exceeded")
+}
+
+// TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary tests that execave
+// rejects a non-root-owned bwrap binary found earlier in PATH.
+func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary(t *testing.T) {
+	fakeDir := t.TempDir()
+	fakeBwrap := filepath.Join(fakeDir, "bwrap")
+	require.NoError(t, os.WriteFile(fakeBwrap, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
+
+	// Put fake bwrap first in PATH so exec.LookPath finds it before the real one.
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	configPath := writeConfig(t, []string{"fs:ro:/usr"})
+	result := runExecave(t, "", "--config", configPath, "--", "true")
+
+	assert.NotEqual(t, 0, result.ExitCode)
+	assert.Contains(t, result.Stderr, "not owned by root")
+}
+
+// TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary tests that execave
+// rejects a non-root-owned strace binary found earlier in PATH when monitoring is active.
+func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing.T) {
+	fakeDir := t.TempDir()
+	fakeStrace := filepath.Join(fakeDir, "strace")
+	require.NoError(t, os.WriteFile(fakeStrace, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
+
+	// Put fake strace first in PATH so exec.LookPath finds it before the real one.
+	// Keep real bwrap and strace available after the fake directory.
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	configPath := writeConfig(t, []string{"fs:ro:/usr"})
+	result := runExecave(t, "", "--config", configPath, "--monitor=-", "--", "true")
+
+	assert.NotEqual(t, 0, result.ExitCode)
+	assert.Contains(t, result.Stderr, "not owned by root")
 }

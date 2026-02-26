@@ -46,12 +46,7 @@ func ParseTOML(data []byte, configDir, configPath string, managedPaths []string)
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	cfg, err := ParseRules(raw.Rules, configDir, configPath, managedPaths)
-	if err != nil {
-		return nil, err
-	}
-
-	return cfg, nil
+	return ParseRules(raw.Rules, configDir, configPath, managedPaths)
 }
 
 // Load reads and parses a configuration file.

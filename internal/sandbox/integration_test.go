@@ -612,3 +612,56 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 	require.NoError(t, runErr)
 	assert.Equal(t, 0, exitCode)
 }
+
+// --- Requirement: Binary validation ---
+
+func TestIntegration_BinaryValidation_BwrapNotFoundInPATH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := sandbox.ResolveBwrap()
+
+	assert.ErrorContains(t, err, "not found in PATH")
+}
+
+func TestIntegration_BinaryValidation_NonRootOwnedBinaryRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBwrap := filepath.Join(tmpDir, "bwrap")
+	require.NoError(t, os.WriteFile(fakeBwrap, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
+	t.Setenv("PATH", tmpDir)
+
+	_, err := sandbox.ResolveBwrap()
+
+	assert.ErrorContains(t, err, "not owned by root")
+}
+
+func TestIntegration_BinaryValidation_NonRootSymlinkToBinaryRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	target := filepath.Join(tmpDir, "target")
+	require.NoError(t, os.WriteFile(target, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
+	link := filepath.Join(tmpDir, "bwrap")
+	require.NoError(t, os.Symlink(target, link))
+	t.Setenv("PATH", tmpDir)
+
+	_, err := sandbox.ResolveBwrap()
+
+	assert.ErrorContains(t, err, "not owned by root")
+}
+
+func TestIntegration_BinaryValidation_StraceNotFoundInPATH(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := sandbox.ResolveStrace()
+
+	assert.ErrorContains(t, err, "not found in PATH")
+}
+
+func TestIntegration_BinaryValidation_NonRootOwnedStraceRejected(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeStrace := filepath.Join(tmpDir, "strace")
+	require.NoError(t, os.WriteFile(fakeStrace, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
+	t.Setenv("PATH", tmpDir)
+
+	_, err := sandbox.ResolveStrace()
+
+	assert.ErrorContains(t, err, "not owned by root")
+}

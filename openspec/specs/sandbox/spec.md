@@ -139,3 +139,28 @@ Note: ConfigFileDeletionPossibleButAcceptable requires bwrap to verify unlink be
 #### Scenario: Config file already ro stays ro
 - **WHEN** config file is inside a directory with `fs:ro` rule
 - **THEN** BuildBwrapArgs includes `--ro-bind <dir> <dir>` with no separate overlay for the config file
+
+### Requirement: Binary validation
+
+ResolveBwrap and ResolveStrace SHALL resolve their respective binaries from PATH and validate them before use. ValidateBinary checks that the path entry itself (Lstat, no symlink follow) MUST be owned by root (uid 0), blocking symlink injection by non-privileged users. The resolved target (Stat, follows symlinks) MUST be owned by root and not writable by group or others (mode & 0022 == 0). Validation failure SHALL be a hard error that prevents execution. Both bwrap and strace are validated because strace runs outside the sandbox with full host access.
+
+#### Scenario: Bwrap not found in PATH
+- **WHEN** PATH contains no `bwrap` binary
+- **THEN** ResolveBwrap returns an error mentioning "not found in PATH"
+
+#### Scenario: Non-root-owned bwrap rejected
+- **WHEN** PATH resolves to a `bwrap` binary not owned by root
+- **THEN** ResolveBwrap returns an error mentioning "not owned by root"
+
+#### Scenario: Non-root symlink to bwrap rejected
+- **WHEN** PATH resolves to a symlink named `bwrap` not owned by root
+- **THEN** ResolveBwrap returns an error mentioning "not owned by root"
+- **AND** the symlink target is never executed (Lstat check blocks symlink injection)
+
+#### Scenario: Strace not found in PATH
+- **WHEN** PATH contains no `strace` binary
+- **THEN** ResolveStrace returns an error mentioning "not found in PATH"
+
+#### Scenario: Non-root-owned strace rejected
+- **WHEN** PATH resolves to a `strace` binary not owned by root
+- **THEN** ResolveStrace returns an error mentioning "not owned by root"

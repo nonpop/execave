@@ -55,3 +55,21 @@ An adversary creates a symlink loop (A points to B, B points to A) to cause infi
 - **WHEN** the user runs `execave --monitor -- cat /home/user/project/loop-a`
 - **THEN** the read fails
 - **AND** the access log shows the access denied with reason `symlink-depth-limit-exceeded`
+
+### Use Case: PATH injection via fake bwrap binary
+
+An adversary plants a fake `bwrap` binary in a directory earlier in PATH. The binary validation rejects it because the file is not owned by root, preventing execution of an attacker-controlled binary in place of the real sandbox.
+
+- **GIVEN** a fake `bwrap` binary owned by a non-root user exists in a directory
+- **AND** that directory is first in PATH (before the real bwrap)
+- **WHEN** the user runs `execave -- true`
+- **THEN** execave refuses to start and reports that the bwrap binary is not owned by root
+
+### Use Case: PATH injection via fake strace binary
+
+An adversary plants a fake `strace` binary in a directory earlier in PATH. Since strace runs outside the sandbox with full host access, the same binary validation is applied. The fake strace is rejected because the file is not owned by root.
+
+- **GIVEN** a fake `strace` binary owned by a non-root user exists in a directory
+- **AND** that directory is first in PATH (before the real strace)
+- **WHEN** the user runs `execave --monitor -- true`
+- **THEN** execave refuses to start and reports that the strace binary is not owned by root

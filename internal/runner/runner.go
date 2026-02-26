@@ -7,6 +7,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -176,6 +177,16 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 		r.OnLoggerChange(logger)
 	}
 
+	// Resolve and validate bwrap and strace binaries.
+	bwrapPath, err := sandbox.ResolveBwrap()
+	if err != nil {
+		return fmt.Errorf("start monitored run: %w", err)
+	}
+	stracePath, err := sandbox.ResolveStrace()
+	if err != nil {
+		return fmt.Errorf("start monitored run: %w", err)
+	}
+
 	// Build sandbox and monitor
 	sb := sandbox.New(cfg, r.absConfigPath, r.netPath)
 	bwrapArgs := sb.BuildBwrapArgs(command)
@@ -187,7 +198,7 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 		return fmt.Errorf("create seccomp filter for monitored run: %w", err)
 	}
 
-	mon := monitor.New(logger, resolver, bwrapArgs, sb.HasNetworkPath(), seccompPipe, blockedSyscalls, allowedSyscalls)
+	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, sb.HasNetworkPath(), seccompPipe, blockedSyscalls, allowedSyscalls)
 
 	// Create context for this run
 	runCtx, cancel := context.WithCancel(ctx)
@@ -418,16 +429,20 @@ func queryAltScreen() bool {
 		return false
 	}
 
-	// Read response with timeout. Use poll to avoid blocking indefinitely on
-	// terminals that don't support DECRQM. Initial timeout is 100ms; subsequent
-	// polls use 10ms to collect any remaining bytes of the response.
+	return parseAltScreenResponse(readTerminalResponse(stdinFd))
+}
+
+// readTerminalResponse reads a DECRQM response from the terminal with timeout.
+// Uses poll to avoid blocking indefinitely on terminals that don't support DECRQM.
+// Initial timeout is 100ms; subsequent polls use 10ms to collect remaining bytes.
+func readTerminalResponse(stdinFd int) string {
 	var buf [32]byte
 	total := 0
 	pollFds := []unix.PollFd{{Fd: int32(stdinFd), Events: unix.POLLIN}} //nolint:gosec // stdinFd fits in int32
 	timeout := 100
 	for total < len(buf) {
 		n, pollErr := unix.Poll(pollFds, timeout)
-		if pollErr == syscall.EINTR {
+		if errors.Is(pollErr, syscall.EINTR) {
 			continue
 		}
 		if pollErr != nil || n == 0 {
@@ -444,8 +459,7 @@ func queryAltScreen() bool {
 		}
 		timeout = 10
 	}
-
-	return parseAltScreenResponse(string(buf[:total]))
+	return string(buf[:total])
 }
 
 // parseAltScreenResponse parses a DECRQM response for private mode 1049.

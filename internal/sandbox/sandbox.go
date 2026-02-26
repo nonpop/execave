@@ -88,14 +88,90 @@ func (s *Sandbox) HasNetworkPath() bool {
 	return s.netPath != nil
 }
 
+// ResolveBwrap finds and validates the bwrap binary.
+// exec.LookPath resolves "bwrap" from PATH. The resolved path is validated
+// for root ownership and safe permissions before use.
+func ResolveBwrap() (string, error) {
+	path, err := exec.LookPath("bwrap")
+	if err != nil {
+		return "", fmt.Errorf("resolve bwrap: bubblewrap (bwrap) not found in PATH: %w", err)
+	}
+
+	if err := ValidateBinary(path); err != nil {
+		return "", fmt.Errorf("resolve bwrap: %w", err)
+	}
+
+	return path, nil
+}
+
+// ResolveStrace finds and validates the strace binary.
+// exec.LookPath resolves "strace" from PATH. The resolved path is validated
+// for root ownership and safe permissions before use.
+func ResolveStrace() (string, error) {
+	path, err := exec.LookPath("strace")
+	if err != nil {
+		return "", fmt.Errorf("resolve strace: strace not found in PATH: %w", err)
+	}
+
+	if err := ValidateBinary(path); err != nil {
+		return "", fmt.Errorf("resolve strace: %w", err)
+	}
+
+	return path, nil
+}
+
+// ValidateBinary checks that the binary at path is safe to execute.
+//
+// Two checks are performed:
+//  1. Lstat (no symlink follow): the path entry itself must be owned by root.
+//     A non-privileged attacker cannot create root-owned symlinks, so this
+//     prevents symlink-to-real-binary injection attacks.
+//  2. Stat (follows symlinks): the resolved target must be owned by root and
+//     not writable by group or others. Symlink permission bits are always 0777
+//     (meaningless), so we must follow symlinks to check actual file permissions.
+func ValidateBinary(path string) error {
+	// Lstat: check the path entry itself (not following symlinks).
+	linfo, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("validate binary: lstat %s: %w", path, err)
+	}
+	lstat, ok := linfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		panic("validate binary: Stat_t cast failed (non-Linux?)")
+	}
+	if lstat.Uid != 0 {
+		return fmt.Errorf("validate binary: %s not owned by root (uid %d)", path, lstat.Uid)
+	}
+
+	// Stat: check the resolved target for write-bit safety.
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("validate binary: stat %s: %w", path, err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		panic("validate binary: Stat_t cast failed (non-Linux?)")
+	}
+	if stat.Uid != 0 {
+		return fmt.Errorf("validate binary: %s resolved target not owned by root (uid %d)", path, stat.Uid)
+	}
+	const groupOrOtherWritable = 0o022
+	if stat.Mode&groupOrOtherWritable != 0 {
+		return fmt.Errorf("validate binary: %s writable by group or others (mode %04o)", path, stat.Mode)
+	}
+
+	return nil
+}
+
 // Run executes a command in the sandbox and returns its exit code.
 func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 	if len(command) == 0 {
 		return 1, errors.New("no command specified")
 	}
 
-	if _, err := exec.LookPath("bwrap"); err != nil {
-		return 1, fmt.Errorf("bubblewrap (bwrap) not found in PATH: %w", err)
+	bwrapPath, err := ResolveBwrap()
+	if err != nil {
+		return 1, err
 	}
 
 	bwrapArgs := s.BuildBwrapArgs(command)
@@ -117,7 +193,7 @@ func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 	extraFiles = []*os.File{pipe}
 	bwrapArgs = InsertSeccompArg(bwrapArgs, 3)
 
-	cmd := exec.CommandContext(ctx, "bwrap", bwrapArgs...) // #nosec G204 -- args built from validated config
+	cmd := exec.CommandContext(ctx, bwrapPath, bwrapArgs...) // #nosec G204 -- args built from validated config
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

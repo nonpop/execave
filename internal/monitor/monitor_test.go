@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,7 +37,8 @@ type monitorTestEnv struct {
 
 func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
 	t.Helper()
-	_, err := exec.LookPath("strace")
+
+	stracePath, err := sandbox.ResolveStrace()
 	require.NoError(t, err)
 
 	tmpDir := t.TempDir()
@@ -46,7 +46,7 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := New(logger, resolver, nil, false, nil, nil, nil)
+	mon := New("", stracePath, logger, resolver, nil, false, nil, nil, nil)
 
 	return &monitorTestEnv{
 		t:      t,
@@ -99,7 +99,11 @@ func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*M
 	t.Helper()
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	return New(logger, resolver, bwrapArgs, false, nil, nil, nil), logger
+	bwrapPath := ""
+	if len(bwrapArgs) > 0 {
+		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
+	}
+	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil), logger
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -405,7 +409,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := New(nil, nil, nil, false, nil, nil, nil)
+	mon := New("", "", nil, nil, nil, false, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -423,7 +427,7 @@ func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
 	blocked := map[string]bool{"ptrace": true, "mount": true}
 	allowed := map[string]bool{"bpf": true}
 	dummyPipe := dummySeccompFile(t)
-	mon := New(nil, nil, nil, false, dummyPipe, blocked, allowed)
+	mon := New("", "", nil, nil, nil, false, dummyPipe, blocked, allowed)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -450,7 +454,7 @@ func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
 }
 
 func TestBuildStraceArgs_WithoutBlockedSyscalls(t *testing.T) {
-	mon := New(nil, nil, nil, false, nil, nil, nil)
+	mon := New("", "", nil, nil, nil, false, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -474,7 +478,7 @@ func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	dummyPipe := dummySeccompFile(t)
-	mon := New(logger, resolver, nil, false, dummyPipe, blocked, nil)
+	mon := New("", "", logger, resolver, nil, false, dummyPipe, blocked, nil)
 
 	err := mon.processStraceOutput(strings.NewReader(straceLine + "\n"))
 	require.NoError(t, err)
@@ -503,7 +507,7 @@ func TestProcessStraceLine_AllowedSyscall(t *testing.T) {
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	dummyPipe := dummySeccompFile(t)
-	mon := New(logger, resolver, nil, false, dummyPipe, nil, allowed)
+	mon := New("", "", logger, resolver, nil, false, dummyPipe, nil, allowed)
 
 	straceData := strings.NewReader(
 		`12345 ptrace(PTRACE_ATTACH, 999) = 0` + "\n",
@@ -527,7 +531,7 @@ func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
 	defer pipeW.Close() //nolint:errcheck // test cleanup
 
 	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New(nil, nil, bwrapArgs, false, pipeR, nil, nil)
+	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, pipeR, nil, nil)
 
 	// With seccompFile non-nil, Run() will call InsertSeccompArg(bwrapArgs, 4).
 	// Verify by checking that buildStraceArgs receives modified bwrap args
@@ -548,7 +552,7 @@ func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
 
 func TestNew_NilSeccompFile_NoSeccompArgs(t *testing.T) {
 	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New(nil, nil, bwrapArgs, false, nil, nil, nil)
+	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"true"}, mon.bwrapArgs)
 

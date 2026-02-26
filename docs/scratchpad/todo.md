@@ -7,7 +7,6 @@
 
 - maybe just enable a small set of basic dirs like /lib64
 - env var expansion in rules
-- --monitor for stdout/err, --monitor=<path> for file log
 - should use absolute path for bwrap?
 - add commands? run, monitor
 - check public apis are minimal

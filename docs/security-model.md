@@ -67,6 +67,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Read secrets, exfiltrate | Paths don't exist in namespace | Misconfiguration |
 | Delete/corrupt files | Unmounted = inaccessible; ro = unwritable | rw paths can be destroyed |
 | Symlink escape | Target doesn't exist → dangling | None |
+| PATH injection (fake bwrap/strace) | Binary validation: root ownership via Lstat (blocks symlink injection) + not group/world-writable on resolved target; applied to both bwrap and strace because strace is the outermost wrapper (runs outside the sandbox with full host access) | Root-compromised system |
 | Path traversal (`../`) | Normalized before sandbox creation | Normalization bugs (fuzz tested) |
 | TOCTOU race | Kernel enforcement, no userspace check | None |
 | Lateral movement | Separate sandboxes per agent | Shared directory misconfiguration |
@@ -95,6 +96,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Config protection | Future-run escalation | Config validation rejects explicit rw; rule resolver determines inherited permission; synthetic ro rule overlays | Unit tests + e2e tests |
 | Net rule resolution | Wrong allow/deny | Single-dimension target specificity: domains (exact > wildcard), IPs (longer CIDR prefix > shorter) | Fuzz tests + unit tests + e2e tests |
 | Proxy allowlist | Unauthorized access | Default-deny; protocol+target+port matching via net rules | Unit tests + e2e tests |
+| Binary validation | Fake bwrap/strace bypasses sandbox | Lstat root-ownership check (uid 0) on path entry (blocks symlink injection) + Stat root-ownership and write-bit check (mode & 0022 == 0) on resolved target; strace is validated because it wraps bwrap from outside (unsandboxed, full host access) | Unit tests |
 | Seccomp filter | Filter bypass or absent filter | Deny-list BPF program: arch check first, then per-syscall JEQ; KILL_PROCESS on wrong arch | Unit tests |
 | Syscall allow rules | Per-syscall seccomp bypass | `syscall:allow:<name>` removes a syscall from the BPF deny-list; names validated against blocked list at config parse time | Unit tests + integration tests + e2e tests |
 
