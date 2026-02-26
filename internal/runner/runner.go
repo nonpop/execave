@@ -20,6 +20,7 @@ import (
 	"github.com/nonpop/execave/internal/monitor"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/seccomp"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -255,7 +256,7 @@ func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, comm
 
 	// Clear any TUI artifacts left by the killed process.
 	// TUI apps often use alternate screen buffer and don't clean up when killed.
-	clearScreen()
+	conditionalClearScreen()
 
 	commandStr := strings.Join(command, " ")
 	errMsg := ""
@@ -375,25 +376,90 @@ func reclaimForeground() {
 	)
 }
 
-// clearScreen clears TUI artifacts left by killed processes.
-// Many TUI apps use alternate screen buffer and special terminal modes.
-// When killed, they don't clean up, leaving artifacts visible.
-func clearScreen() {
+// conditionalClearScreen clears TUI artifacts left by killed processes, but only
+// when the terminal's alternate screen is actually active. This preserves output
+// from regular commands (ls, git, etc.) that never enter alt screen, while still
+// cleaning up after TUI apps that were killed before they could restore the terminal.
+func conditionalClearScreen() {
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		return
 	}
+	// Always restore these — harmless no-ops for regular apps, necessary for killed TUIs.
+	// Focus reporting and mouse tracking are controlled via escape sequences, not termios
+	// flags, so term.Restore() cannot reset them. CSI ?25h shows cursor, CSI m resets attrs.
+	_, _ = fmt.Fprint(os.Stdout, "\x1b[?25h\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[m")
+	// Only exit alt screen and clear if the terminal reports it is actually active.
+	// If stdin is not a terminal we cannot query, so fall back to unconditional cleanup.
+	if !term.IsTerminal(int(os.Stdin.Fd())) || queryAltScreen() {
+		_, _ = fmt.Fprint(os.Stdout, "\x1b[?1049l\x1b[2J\x1b[H")
+	}
+}
 
-	// Write all escape sequences in one call:
-	// - Exit alternate screen buffer (CSI ?1049l)
-	// - Clear entire screen (CSI 2J)
-	// - Move cursor to home position (CSI H)
-	// - Show cursor if hidden (CSI ?25h)
-	// - Disable focus reporting (CSI ?1004l)
-	// - Disable mouse tracking modes (CSI ?1000l through ?1003l)
-	// - Reset all terminal modes (CSI m)
-	//
-	// Focus reporting and mouse tracking are terminal emulator features
-	// controlled via escape sequences, not termios flags, so
-	// term.Restore() cannot reset them.
-	_, _ = fmt.Fprint(os.Stdout, "\x1b[?1049l\x1b[2J\x1b[H\x1b[?25h\x1b[?1004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[m")
+// queryAltScreen queries the terminal for the alt screen state via DECRQM
+// (DEC Request Mode, CSI ? 1049 $ p). The terminal responds with
+// CSI ? 1049 ; <value> $ y where value 1 = active, 2 = inactive.
+//
+// Returns true if alt screen is active. Returns false on error, timeout,
+// or when stdin is not a terminal. Conservative: favors preserving output.
+func queryAltScreen() bool {
+	stdinFd := int(os.Stdin.Fd())
+	if !term.IsTerminal(stdinFd) {
+		return false
+	}
+
+	oldState, err := term.MakeRaw(stdinFd)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = term.Restore(stdinFd, oldState) }()
+
+	// Send DECRQM query for alt screen (private mode 1049).
+	if _, err := fmt.Fprint(os.Stdout, "\x1b[?1049$p"); err != nil {
+		return false
+	}
+
+	// Read response with timeout. Use poll to avoid blocking indefinitely on
+	// terminals that don't support DECRQM. Initial timeout is 100ms; subsequent
+	// polls use 10ms to collect any remaining bytes of the response.
+	var buf [32]byte
+	total := 0
+	pollFds := []unix.PollFd{{Fd: int32(stdinFd), Events: unix.POLLIN}} //nolint:gosec // stdinFd fits in int32
+	timeout := 100
+	for total < len(buf) {
+		n, pollErr := unix.Poll(pollFds, timeout)
+		if pollErr == syscall.EINTR {
+			continue
+		}
+		if pollErr != nil || n == 0 {
+			break
+		}
+		nr, readErr := syscall.Read(stdinFd, buf[total:])
+		if readErr != nil || nr == 0 {
+			break
+		}
+		total += nr
+		// Response ends with "$y" — stop reading once complete.
+		if total >= 2 && buf[total-2] == '$' && buf[total-1] == 'y' {
+			break
+		}
+		timeout = 10
+	}
+
+	return parseAltScreenResponse(string(buf[:total]))
+}
+
+// parseAltScreenResponse parses a DECRQM response for private mode 1049.
+// Expected format: ESC [ ? 1 0 4 9 ; <value> $ y
+// Returns true if <value> is '1' (set/active) or '3' (permanently set).
+func parseAltScreenResponse(resp string) bool {
+	idx := strings.Index(resp, "?1049;")
+	if idx < 0 {
+		return false
+	}
+	valueIdx := idx + len("?1049;")
+	if valueIdx >= len(resp) {
+		return false
+	}
+	v := resp[valueIdx]
+	return v == '1' || v == '3'
 }

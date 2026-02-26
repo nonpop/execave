@@ -1,7 +1,5 @@
 # execave TODOs
 
-- clearScreen needs fixing. Can detect TUI?
-
 - maybe use a simple "mini-react" library?
 - UI should indicate which config version is currently running
 

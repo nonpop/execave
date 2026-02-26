@@ -119,13 +119,26 @@ When a run exits, the runner SHALL reclaim the terminal's foreground process gro
 
 ### Requirement: TUI cleanup
 
-When a run exits, the runner SHALL clear any TUI artifacts left by the process. This includes exiting alternate screen buffer, clearing the screen, resetting cursor position and visibility, disabling focus reporting, disabling mouse tracking modes, and resetting terminal modes.
+When a run exits, the runner SHALL reset terminal state that TUI apps modify via escape sequences but that `term.Restore()` cannot reset: cursor visibility, focus reporting, mouse tracking modes, and terminal attributes. These resets are always sent and are harmless no-ops for regular apps.
 
-#### Scenario: TUI artifacts cleared on exit
-- **WHEN** a TUI application exits or is stopped
+The runner SHALL exit the alternate screen buffer and clear the screen only if the terminal reports the alternate screen as active. The runner queries the terminal using DECRQM (`CSI ? 1049 $ p`) with a 100ms timeout. If the terminal does not respond within the timeout, the runner assumes the alternate screen is inactive and does not clear. This conservative default preserves output from regular apps (e.g., `ls`, `git`) that never use alternate screen.
+
+#### Scenario: TUI artifacts cleared after killed TUI app
+- **WHEN** a TUI application with active alternate screen is stopped
 - **THEN** the alternate screen buffer is exited
 - **AND** the screen is cleared
 - **AND** the cursor is visible and at home position
 - **AND** focus reporting is disabled
 - **AND** mouse tracking modes are disabled
 - **AND** terminal modes are reset to defaults
+
+#### Scenario: Output preserved after regular command
+- **WHEN** a regular command (e.g., `ls`) exits without using alternate screen
+- **THEN** the screen is NOT cleared
+- **AND** the command's output remains visible
+- **AND** cursor visibility, mouse tracking, and focus reporting are reset (harmless no-ops)
+
+#### Scenario: Output preserved after TUI that exits cleanly
+- **WHEN** a TUI application exits the alternate screen before execave queries the terminal
+- **THEN** the screen is NOT cleared
+- **AND** any summary output printed by the TUI after exiting alternate screen remains visible

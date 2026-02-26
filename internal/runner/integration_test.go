@@ -332,20 +332,38 @@ func TestIntegration_TerminalManagement_BufferedInputDiscardedOnRestart(t *testi
 	// Manual test: Type input after process stops, then restart and verify input not received
 }
 
-// TestIntegration_TerminalManagement_TUIArtifactsClearedOnExit tests the "TUI artifacts cleared on exit" scenario.
-func TestIntegration_TerminalManagement_TUIArtifactsClearedOnExit(t *testing.T) {
+// TestIntegration_TuiCleanup_TuiArtifactsClearedAfterKilledTuiApp tests the "TUI artifacts cleared after killed TUI app" scenario.
+func TestIntegration_TuiCleanup_TuiArtifactsClearedAfterKilledTuiApp(t *testing.T) {
 	t.Skip("needs terminal escape sequence verification - placeholder for manual verification")
 	// This test would verify:
-	// - Run a TUI application (e.g., vim or htop)
-	// - Stop the process
-	// - Verify terminal escape sequences were sent to:
-	//   - Exit alternate screen buffer (\x1b[?1049l)
-	//   - Clear screen (\x1b[2J)
-	//   - Reset cursor (\x1b[H, \x1b[?25h)
-	//   - Disable focus reporting (\x1b[?1004l)
-	//   - Disable mouse tracking (\x1b[?1000l, \x1b[?1002l, \x1b[?1003l)
-	//   - Reset modes (\x1b[m)
-	// Manual test: Run vim in sandbox, stop it, verify no TUI artifacts remain
+	// - Run a TUI application (e.g., vim) that uses alt screen
+	// - Kill the process (alt screen remains active at query time)
+	// - Verify the runner sent: exit alt screen (\x1b[?1049l), clear screen (\x1b[2J),
+	//   cursor home (\x1b[H), show cursor (\x1b[?25h), disable focus (\x1b[?1004l),
+	//   disable mouse tracking (\x1b[?1000l, \x1b[?1002l, \x1b[?1003l), reset modes (\x1b[m)
+	// Manual test: Run vim in sandbox, kill it, verify no TUI artifacts remain
+}
+
+// TestIntegration_TuiCleanup_OutputPreservedAfterRegularCommand tests the "Output preserved after regular command" scenario.
+func TestIntegration_TuiCleanup_OutputPreservedAfterRegularCommand(t *testing.T) {
+	t.Skip("needs terminal escape sequence verification - placeholder for manual verification")
+	// This test would verify:
+	// - Run a regular command (e.g., ls) that produces visible output and never uses alt screen
+	// - After the command exits, verify \x1b[2J (clear screen) and \x1b[?1049l (exit alt screen)
+	//   were NOT sent to the terminal
+	// - Verify the output remains visible and cursor/mouse/focus resets were sent (harmless no-ops)
+	// Manual test: Run ls in sandbox, verify output stays visible after exit
+}
+
+// TestIntegration_TuiCleanup_OutputPreservedAfterTuiThatExitsCleanly tests the "Output preserved after TUI that exits cleanly" scenario.
+func TestIntegration_TuiCleanup_OutputPreservedAfterTuiThatExitsCleanly(t *testing.T) {
+	t.Skip("needs terminal escape sequence verification - placeholder for manual verification")
+	// This test would verify:
+	// - Run a TUI application that exits the alt screen (and optionally prints a summary)
+	//   before execave queries the terminal with DECRQM
+	// - Verify \x1b[2J and \x1b[?1049l were NOT sent (alt screen already inactive at query time)
+	// - Verify any summary output the TUI printed after exiting alt screen remains visible
+	// Manual test: Run vim then :q, verify no spurious screen clear and output preserved
 }
 
 // TestIntegration_TerminalManagement_ForegroundReclaimedAfterKilledProcess tests the "Foreground reclaimed after killed process" scenario.

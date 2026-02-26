@@ -81,7 +81,7 @@ In-memory access log with deduplication and pub/sub notifications. Filters infra
 
 ### Runner (`internal/runner/`)
 
-Manages lifecycle of monitored sandbox executions with start/stop control, status tracking, and automatic cleanup. Creates fresh access logs per run and handles terminal restoration. When seccomp is enabled, creates the seccomp filter pipe and threads it through to the monitor. Bridges web UI and CLI with sandbox+monitor subsystems.
+Manages lifecycle of monitored sandbox executions with start/stop control, status tracking, and automatic cleanup. Creates fresh access logs per run and handles terminal restoration. On exit, always resets escape-sequence-controlled terminal modes (cursor, mouse, focus), then conditionally clears the screen only if the terminal reports the alternate screen as active (DECRQM query). This preserves output from regular commands while cleaning up after killed TUI apps. When seccomp is enabled, creates the seccomp filter pipe and threads it through to the monitor. Bridges web UI and CLI with sandbox+monitor subsystems.
 
 ### Log Filter (`internal/logfilter/`)
 
