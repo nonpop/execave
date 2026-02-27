@@ -49,6 +49,7 @@ flowchart LR
 | Sandboxed process can't share memory with host | IPC namespace isolation |
 | Sandboxed process can't inject terminal input | Kernel TIOCSTI disabling (Linux 6.2+) or `--new-session` fallback (older kernels) |
 | Dangerous syscalls blocked | Seccomp-bpf deny-list (ptrace, BPF, io_uring, namespace manipulation, and other privilege-escalation syscalls) |
+| Dynamic linker available | Auto-detected PT_INTERP read-only bind-mount |
 | No network access by default | Network namespace isolation (`--unshare-all` without `--share-net`) |
 | Network access only via allowlist | Forward proxy on UDS enforces net rules; no NIC inside sandbox |
 | No DNS exfiltration | No DNS resolver reachable from sandbox |
@@ -56,7 +57,7 @@ flowchart LR
 
 ## Default-Deny Model
 
-Execave distinguishes special filesystems (`/dev`, `/proc`, `/tmp`) from filesystem mounts (explicit only: everything else). See architecture.md for details.
+Execave distinguishes managed paths (`/dev`, `/proc`, `/tmp`, and the auto-detected ELF interpreter) from filesystem mounts (explicit only: everything else). See architecture.md for details.
 
 This ensures complete visibility: the config file shows the **entire** filesystem access surface.
 

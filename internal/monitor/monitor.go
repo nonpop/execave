@@ -268,11 +268,18 @@ func (m *Monitor) processStraceOutput(output io.Reader) error {
 		if m.hasNetworkPath {
 			expectedExecves = 3
 		}
-		result, line, ok := skipBwrapSetup(scanner, parser, expectedExecves)
+		result, line, buffered, ok := skipBwrapSetup(scanner, parser, expectedExecves)
 		if ok {
 			resolveCWD(cwdByPid, &result)
 			if err := m.processAccessEntry(result.syscall, result.path, line); err != nil {
 				return err
+			}
+			// Replay lines consumed after the last execve during early-EOF scan.
+			// In the normal case (all expected execves found) buffered is nil.
+			for _, bl := range buffered {
+				if err := m.processStraceLine(parser, cwdByPid, bl); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -338,22 +345,47 @@ func (m *Monitor) processStraceLine(parser *straceParser, cwdByPid map[string]st
 // The strace output contains execve calls for setup: bwrap's own (first),
 // optionally the tunnel (second when net rules present), and the user command
 // (last). Returns the parse result and raw line of the user command's execve.
-func skipBwrapSetup(scanner *bufio.Scanner, parser *straceParser, expectedExecves int) (parseResult, string, bool) {
+//
+// On EOF before expectedExecves, returns the last execve seen if at least 2
+// execves were found (past bwrap's own exec). This handles cases where the
+// tunnel or user command crashes before the full chain completes — the last
+// execve is still processed so its access gets logged. The buffered slice
+// contains raw strace lines consumed after the last execve during the scan;
+// the caller must replay them. In the normal case (all expected execves found)
+// buffered is nil.
+func skipBwrapSetup(scanner *bufio.Scanner, parser *straceParser, expectedExecves int) (parseResult, string, []string, bool) {
 	seenExecves := 0
+	var lastResult parseResult
+	var lastLine string
+	var afterLastExecve []string
 	for scanner.Scan() {
 		line := scanner.Text()
 		result, ok := parser.parseLine(line)
 		if !ok {
+			if seenExecves > 0 {
+				afterLastExecve = append(afterLastExecve, line)
+			}
 			continue
 		}
 		if result.syscall == "execve" || result.syscall == "execveat" {
 			seenExecves++
+			lastResult = result
+			lastLine = line
+			afterLastExecve = nil // reset: only keep lines after the latest execve
+		} else if seenExecves > 0 {
+			afterLastExecve = append(afterLastExecve, line)
 		}
 		if seenExecves >= expectedExecves {
-			return result, line, true
+			return result, line, nil, true
 		}
 	}
-	return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, "", false
+	// EOF before expected execves: return last execve if we got past bwrap's own.
+	// seenExecves >= 2 means bwrap exec'd something (tunnel or user command)
+	// that is worth processing even though the full chain didn't complete.
+	if seenExecves >= 2 { //nolint:mnd // 2 = past bwrap's own execve
+		return lastResult, lastLine, afterLastExecve, true
+	}
+	return parseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, "", nil, false
 }
 
 // resolveCWD tracks per-process working directories and resolves relative paths.

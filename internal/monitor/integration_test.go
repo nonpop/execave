@@ -1883,3 +1883,114 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 	}
 	assert.True(t, found)
 }
+
+// --- Requirement: Bwrap setup phase detection ---
+
+func TestIntegration_BwrapSetupPhaseDetection_SetupPhaseLinesSkippedUntilUserCommandExecve(t *testing.T) {
+	bwrapPath, err := sandbox.ResolveBwrap()
+	if err != nil {
+		t.Skip("bwrap not available: ", err)
+	}
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
+	//nolint:usetesting // Need a path outside /tmp
+	testDir, err := os.MkdirTemp(".", "monitor-integ-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(testDir) })
+
+	absTestDir, err := filepath.Abs(testDir)
+	require.NoError(t, err)
+	testFile := filepath.Join(absTestDir, "file.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("hello"), 0o600))
+
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
+			roRule(absTestDir),
+		},
+	}
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+
+	sb := sandbox.New(cfg, "", nil)
+	bwrapArgs := sb.BuildBwrapArgs([]string{"cat", testFile})
+
+	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, false, nil, nil, nil)
+
+	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	entries := logger.Entries()
+	assert.NotEmpty(t, entries)
+
+	// Bwrap setup operations must not appear in log
+	for _, e := range entries {
+		assert.NotContains(t, e.Target, "newroot")
+		assert.NotContains(t, e.Target, "oldroot")
+	}
+
+	// User command's file access must appear
+	var foundTestFile bool
+	for _, e := range entries {
+		if e.Target == testFile && e.Operation == accesslog.OperationRead {
+			foundTestFile = true
+			assert.Equal(t, accesslog.ResultOK, e.Result)
+		}
+	}
+	assert.True(t, foundTestFile)
+}
+
+func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProducesEntries(t *testing.T) {
+	bwrapPath, err := sandbox.ResolveBwrap()
+	if err != nil {
+		t.Skip("bwrap not available: ", err)
+	}
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
+	//nolint:usetesting // Need a path outside /tmp
+	testDir, err := os.MkdirTemp(".", "monitor-integ-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(testDir) })
+
+	absTestDir, err := filepath.Abs(testDir)
+	require.NoError(t, err)
+	testFile := filepath.Join(absTestDir, "file.txt")
+	require.NoError(t, os.WriteFile(testFile, []byte("hello"), 0o600))
+
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
+			roRule(absTestDir),
+		},
+	}
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+
+	sb := sandbox.New(cfg, "", nil)
+	bwrapArgs := sb.BuildBwrapArgs([]string{"cat", testFile})
+
+	// hasNetworkPath=true expects 3 execves, but no tunnel is configured
+	// in bwrapArgs, so only 2 execves occur (bwrap + user command).
+	// The monitor must still produce entries despite the incomplete chain.
+	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, true, nil, nil, nil)
+
+	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	entries := logger.Entries()
+	assert.NotEmpty(t, entries)
+
+	// User command's file access must still appear despite incomplete execve chain
+	var foundTestFile bool
+	for _, e := range entries {
+		if e.Target == testFile && e.Operation == accesslog.OperationRead {
+			foundTestFile = true
+			assert.Equal(t, accesslog.ResultOK, e.Result)
+		}
+	}
+	assert.True(t, foundTestFile)
+}

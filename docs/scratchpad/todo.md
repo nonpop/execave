@@ -5,7 +5,6 @@
 
 ## easy, probably
 
-- maybe just enable a small set of basic dirs like /lib64
 - env var expansion in rules
 - should use absolute path for bwrap?
 - add commands? run, monitor
@@ -20,7 +19,6 @@
 
 - simplify webui (no SSR, all data reading via SSE)
 - clean up test helpers & duplicate tests
-- bin64 trick
 - require fixed bwrap/strace versions?
 - add pre & post conditions
 - heuristic for determining strace output compatibility?

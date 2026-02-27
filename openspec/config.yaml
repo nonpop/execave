@@ -2,8 +2,8 @@ schema: use-case-driven
 
 context: |
   Security-critical Linux filesystem and network sandbox (bubblewrap + strace). See docs/security-model.md.
-  Tech: Go, Linux namespaces.
-  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, runner, sandbox, monitor, proxy, tunnel, logfilter, webui, textlog.
+  Tech: Go, Linux namespaces. Built with CGO_ENABLED=0 (static binary); required because the tunnel runs inside the sandbox where dynamic libraries may not be mounted.
+  Arch: CLI → rule resolvers → bwrap wrapper → sandboxed process. Core: config, fsrules, netrules, accesslog, runner, sandbox, monitor, proxy, tunnel, logfilter, webui, textlog. ELF interpreter auto-detected from bwrap's PT_INTERP header and auto-mounted read-only as a managed path (filtered from access log, rejected from user rules).
   Config: TOML format. Default filename: execave.toml. FS rules support tilde expansion (~/... → home dir) and relative paths (resolved against config dir).
   Binary validation: bwrap and strace resolved via PATH are validated at startup — Lstat checks root ownership (uid 0) on the path entry itself (blocks symlink injection), Stat checks root ownership and not group/world-writable (mode & 0022 == 0) on the resolved target. Hard error on failure. Both are validated because strace runs outside the sandbox with full host access.
   Network: Default-deny (no NIC). When net rules present or monitoring enabled: forward proxy on UDS + TCP-to-UDS tunnel bridge. Proxy enforces allowlist (deny-all with no net rules).

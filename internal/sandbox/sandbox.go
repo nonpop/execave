@@ -3,6 +3,7 @@ package sandbox
 
 import (
 	"context"
+	"debug/elf"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,47 @@ const tiocSTISysctlPath = "/proc/sys/dev/tty/legacy_tiocsti"
 //
 //nolint:gochecknoglobals // used read-only
 var ManagedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
+
+// InterpreterPath reads the PT_INTERP program header from the ELF binary at
+// bwrapPath and returns the dynamic linker path. Returns empty string for
+// static binaries (no PT_INTERP), non-ELF files, read errors, or non-absolute
+// interpreter paths.
+func InterpreterPath(bwrapPath string) string {
+	f, err := elf.Open(bwrapPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close() //nolint:errcheck // read-only
+
+	for _, prog := range f.Progs {
+		if prog.Type == elf.PT_INTERP {
+			data := make([]byte, prog.Filesz)
+			_, err := prog.ReadAt(data, 0)
+			if err != nil {
+				return ""
+			}
+			// PT_INTERP is a null-terminated string
+			path := strings.TrimRight(string(data), "\x00")
+			if !filepath.IsAbs(path) {
+				return ""
+			}
+			return path
+		}
+	}
+	return ""
+}
+
+// ManagedPathsWith returns ManagedDirs extended with interpreterPath if non-empty.
+// Returns ManagedDirs as-is when interpreterPath is empty.
+func ManagedPathsWith(interpreterPath string) []string {
+	if interpreterPath == "" {
+		return ManagedDirs
+	}
+	paths := make([]string, len(ManagedDirs)+1)
+	copy(paths, ManagedDirs)
+	paths[len(ManagedDirs)] = interpreterPath
+	return paths
+}
 
 const (
 	// sandboxUDSPath is the fixed path where the proxy UDS is mounted inside the sandbox.
@@ -257,6 +299,12 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	args = append(args, "--dev", "/dev")
 	args = append(args, "--proc", "/proc")
 	args = append(args, "--tmpfs", "/tmp")
+
+	// Auto-mount the ELF interpreter (dynamic linker) so dynamically linked
+	// binaries can load. Without this, the kernel can't start the process.
+	if s.cfg.InterpreterPath != "" {
+		args = append(args, "--ro-bind", s.cfg.InterpreterPath, s.cfg.InterpreterPath)
+	}
 
 	writableConfig := false
 	if s.configPath != "" {

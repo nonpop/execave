@@ -7,7 +7,7 @@ Security-critical sandbox application. Subtle bugs cause significant harm.
 ## Commands
 
 ```bash
-go build -o ./bin/execave ./cmd/execave   # Build
+CGO_ENABLED=0 go build -o ./bin/execave ./cmd/execave   # Build
 go test ./...                             # Test
 golangci-lint run --fix                   # Lint
 ./execave --config execave.json -- <command>

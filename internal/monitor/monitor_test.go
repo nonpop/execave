@@ -106,6 +106,19 @@ func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*M
 	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil), logger
 }
 
+// createTestMonitorWithNetwork creates a monitor with hasNetworkPath=true for testing
+// scenarios where the tunnel adds an extra execve to setup.
+func createTestMonitorWithNetwork(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
+	t.Helper()
+	logger := accesslog.New(cfg.ManagedPaths)
+	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	bwrapPath := ""
+	if len(bwrapArgs) > 0 {
+		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
+	}
+	return New(bwrapPath, "", logger, resolver, bwrapArgs, true, nil, nil, nil), logger
+}
+
 // assertLogContainsLine checks that the log contains at least one line
 // that includes all of the given components (in any order).
 func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
@@ -1152,6 +1165,49 @@ func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
 
 	logStr := formatEntries(t, logger.Entries())
 	assertLogContainsLine(t, logStr, "READ", "file.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
+}
+
+// TestMonitor_SetupPhaseEOFBeforeExpectedExecves tests that when EOF is reached
+// before the expected number of execves (e.g., tunnel crashes before user command),
+// the last execve seen is still processed and produces log entries.
+func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
+	cfg := &config.Config{
+		FSRules:           []fsrules.AccessRule{roRule("/usr")},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+	}
+	// hasNetworkPath=true expects 3 execves, but we only provide 2
+	mon, logger := createTestMonitorWithNetwork(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
+
+	straceData := strings.NewReader(strings.Join([]string{
+		// execve 1: bwrap
+		`12345 execve("/usr/bin/bwrap", ""...) = 0`,
+		// bwrap setup noise
+		`12345 openat(AT_FDCWD, "/etc/ld.so.cache", O_RDONLY) = 5`,
+		// execve 2: tunnel binary (but no 3rd execve — tunnel crashed)
+		`12345 execve("/usr/bin/ls", ""...) = 0`,
+		// Lines after the last execve — these are consumed during the scan
+		// and must be replayed by the caller. They represent the tunnel's
+		// runtime activity (library loads, PATH lookups) before it crashed.
+		`12345 openat(AT_FDCWD, "/usr/lib/libc.so.6", O_RDONLY) = 3`,
+		// EOF — no 3rd execve (user command never started)
+	}, "\n") + "\n")
+
+	err := mon.processStraceOutput(straceData)
+	require.NoError(t, err)
+
+	entries := logger.Entries()
+	require.NotEmpty(t, entries)
+
+	logStr := formatEntries(t, entries)
+	// The last execve should be processed as the best-effort user command
+	assertLogContainsLine(t, logStr, "READ", "/usr/bin/ls")
+	// Lines after the last execve should also be replayed and processed
+	assertLogContainsLine(t, logStr, "READ", "/usr/lib/libc.so.6")
 }
 
 // TestMonitor_FchdirUpdatesTrackedCwd tests that fchdir with an fd-annotated

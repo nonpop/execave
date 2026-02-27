@@ -107,9 +107,9 @@ See security-model.md for bwrap arg risks.
 
 #### Automatic vs. Explicit Mounts
 
-**Automatic:** `/dev`, `/proc`, `/tmp` (require special bwrap args)
+**Automatic:** `/dev`, `/proc`, `/tmp` (require special bwrap args), ELF interpreter (auto-detected from bwrap's PT_INTERP header, single file read-only bind-mount)
 
-**Explicit (must be in config):** Everything else—`/usr`, `/lib`, `/lib64`, `/sys`, dynamic linker files, user data. See `execave.toml.example`.
+**Explicit (must be in config):** Everything else—`/usr`, `/lib`, `/lib64`, `/sys`, shared libraries, user data. See `execave.toml.example`.
 
 #### Working Directory
 

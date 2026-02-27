@@ -116,9 +116,9 @@ The user has a config where a rule explicitly grants read-write access to the co
 - **WHEN** the user runs `execave --config /home/user/project/execave.toml -- ls`
 - **THEN** the system exits with an error indicating the config file must not be explicitly writable
 
-### Use Case: Managed paths (`/dev`, `/proc`, `/tmp`) in rules rejected
+### Use Case: Managed paths in rules rejected
 
-The user has a config with a rule targeting a managed path or its descendant. The system rejects it because these paths are mounted automatically by the sandbox and user rules would conflict.
+The user has a config with a rule targeting a managed path or its descendant. The system rejects it because these paths are mounted automatically by the sandbox and user rules would conflict. Managed paths include `/dev`, `/proc`, `/tmp`, and the auto-detected ELF interpreter (dynamic linker).
 
 - **GIVEN** a config with rule `fs:ro:/proc/self/status`
 - **WHEN** the user runs `execave -- ls`

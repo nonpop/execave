@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -251,4 +252,90 @@ func TestHasNetworkPath(t *testing.T) {
 		ExecaveBinary: "/usr/bin/execave",
 	})
 	assert.True(t, sb.HasNetworkPath())
+}
+
+func TestInterpreterPath_DynamicBinary(t *testing.T) {
+	// Use /usr/bin/ls as a well-known dynamically linked binary.
+	path, err := exec.LookPath("ls")
+	require.NoError(t, err)
+
+	interp := sandbox.InterpreterPath(path)
+
+	assert.NotEmpty(t, interp)
+	assert.True(t, filepath.IsAbs(interp))
+	assert.Contains(t, interp, "ld-linux")
+}
+
+func TestInterpreterPath_StaticBinary(t *testing.T) {
+	// Build a static Go binary (CGO_ENABLED=0 produces static binaries).
+	tmpDir := t.TempDir()
+	binPath := filepath.Join(tmpDir, "static")
+	src := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(src, []byte("package main\nfunc main() {}\n"), 0o600))
+
+	cmd := exec.Command("go", "build", "-o", binPath, src)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	out, err := cmd.CombinedOutput()
+	t.Log(string(out))
+	require.NoError(t, err)
+
+	interp := sandbox.InterpreterPath(binPath)
+
+	assert.Empty(t, interp)
+}
+
+func TestInterpreterPath_NonexistentPath(t *testing.T) {
+	interp := sandbox.InterpreterPath("/nonexistent/binary")
+
+	assert.Empty(t, interp)
+}
+
+func TestManagedPathsWith_NonEmpty(t *testing.T) {
+	paths := sandbox.ManagedPathsWith("/lib64/ld-linux-x86-64.so.2")
+
+	assert.Contains(t, paths, "/lib64/ld-linux-x86-64.so.2")
+	// Must also contain all ManagedDirs
+	for _, d := range sandbox.ManagedDirs {
+		assert.Contains(t, paths, d)
+	}
+	assert.Len(t, paths, len(sandbox.ManagedDirs)+1)
+}
+
+func TestManagedPathsWith_Empty(t *testing.T) {
+	paths := sandbox.ManagedPathsWith("")
+
+	assert.Equal(t, sandbox.ManagedDirs, paths)
+}
+
+func TestBuildBwrapArgs_IncludesInterpreterMount(t *testing.T) {
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+		},
+		InterpreterPath: "/lib64/ld-linux-x86-64.so.2",
+	}
+
+	sb := sandbox.New(cfg, "", nil)
+	args := sb.BuildBwrapArgs([]string{"true"})
+
+	assert.True(t, argsContainSequence(args, "--ro-bind", "/lib64/ld-linux-x86-64.so.2", "/lib64/ld-linux-x86-64.so.2"))
+}
+
+func TestBuildBwrapArgs_NoInterpreterWhenEmpty(t *testing.T) {
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+		},
+		InterpreterPath: "",
+	}
+
+	sb := sandbox.New(cfg, "", nil)
+	args := sb.BuildBwrapArgs([]string{"true"})
+
+	// No interpreter-related --ro-bind should appear (other than /usr/bin)
+	for i, a := range args {
+		if a == "--ro-bind" && i+1 < len(args) {
+			assert.NotContains(t, args[i+1], "ld-linux")
+		}
+	}
 }

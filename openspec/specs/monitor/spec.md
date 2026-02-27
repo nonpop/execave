@@ -392,3 +392,26 @@ Read operations to paths that do not exist on the host filesystem SHALL NOT be l
 - **AND** config contains `fs:ro:<tmp>`
 - **AND** sandboxed process attempts to read `<tmp>/restricted/secret.txt`
 - **THEN** log contains `READ <tmp>/restricted/secret.txt DENY` (fail-safe: when in doubt, log it)
+
+### Requirement: Bwrap setup phase detection
+
+When bwrap is used, strace captures bwrap's sandbox setup (namespace, mount, pivot_root, etc.) before the user command starts. The monitor SHALL skip setup lines and begin processing from the user command's execve. Setup operations (mounts, namespace manipulation) SHALL NOT appear in the access log.
+
+When the network tunnel is configured, the monitor SHALL expect an additional execve for the tunnel between bwrap's own execve and the user command's execve (3 total instead of 2).
+
+When the strace output ends before the expected number of execves (e.g., the tunnel or user command crashes during startup), the monitor SHALL still produce log entries for the last process transition and any subsequent operations. This ensures monitoring remains useful for diagnosing startup failures.
+
+#### Scenario: Setup phase lines skipped until user command execve
+
+- **WHEN** monitoring is enabled with bwrap
+- **AND** strace output contains bwrap's setup operations (mount, namespace, etc.)
+- **AND** the user command's execve follows the setup phase
+- **THEN** log entries are produced from the user command's execve onward
+- **AND** bwrap setup operations do not appear in the log
+
+#### Scenario: Incomplete execve chain still produces entries
+
+- **WHEN** monitoring is enabled with bwrap and network tunnel expected
+- **AND** the strace output ends before the user command's execve (e.g., the tunnel crashes)
+- **THEN** log entries are still produced for the last process transition and subsequent operations
+- **AND** the monitor does not produce zero entries

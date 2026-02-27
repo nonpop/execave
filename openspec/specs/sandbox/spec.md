@@ -164,3 +164,17 @@ ResolveBwrap and ResolveStrace SHALL resolve their respective binaries from PATH
 #### Scenario: Non-root-owned strace rejected
 - **WHEN** PATH resolves to a `strace` binary not owned by root
 - **THEN** ResolveStrace returns an error mentioning "not owned by root"
+
+### Requirement: ELF interpreter auto-mount
+
+InterpreterPath SHALL read the PT_INTERP program header from the bwrap binary and return the dynamic linker path. ManagedPathsWith SHALL extend ManagedDirs with the interpreter path. When Config.InterpreterPath is set, BuildBwrapArgs SHALL include a read-only bind-mount for the interpreter. The interpreter path SHALL be a managed path, preventing user rules from targeting it.
+
+#### Scenario: Rule targeting interpreter path rejected
+- **WHEN** the interpreter path is detected from a dynamically linked binary
+- **AND** ManagedPathsWith includes the interpreter path in managed paths
+- **AND** a rule targets the interpreter path
+- **THEN** config validation rejects the rule as targeting a managed path
+
+#### Scenario: Interpreter mounted in bwrap args
+- **WHEN** Config.InterpreterPath is set to the detected interpreter path
+- **THEN** BuildBwrapArgs includes `--ro-bind <interpPath> <interpPath>`

@@ -665,3 +665,47 @@ func TestIntegration_BinaryValidation_NonRootOwnedStraceRejected(t *testing.T) {
 
 	assert.ErrorContains(t, err, "not owned by root")
 }
+
+// --- Requirement: ELF interpreter auto-mount ---
+
+func TestIntegration_InterpreterAutoMount_RuleTargetingInterpreterPathRejected(t *testing.T) {
+	// Detect the real interpreter path from a known dynamic binary.
+	lsPath, err := exec.LookPath("ls")
+	require.NoError(t, err)
+
+	interpPath := sandbox.InterpreterPath(lsPath)
+	require.NotEmpty(t, interpPath)
+
+	managedPaths := sandbox.ManagedPathsWith(interpPath)
+
+	_, err = config.ParseRules(
+		[]string{"fs:ro:" + interpPath},
+		"/",
+		"/config.toml",
+		managedPaths,
+	)
+
+	assert.ErrorContains(t, err, "managed path")
+}
+
+func TestIntegration_InterpreterAutoMount_InterpreterMountedInBwrapArgs(t *testing.T) {
+	// Detect the real interpreter path from a known dynamic binary.
+	lsPath, err := exec.LookPath("ls")
+	require.NoError(t, err)
+
+	interpPath := sandbox.InterpreterPath(lsPath)
+	require.NotEmpty(t, interpPath)
+
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+		},
+		InterpreterPath: interpPath,
+		ManagedPaths:    sandbox.ManagedPathsWith(interpPath),
+	}
+	sb := sandbox.New(cfg, "", nil)
+
+	args := sb.BuildBwrapArgs([]string{"true"})
+
+	assert.True(t, argsContainSequence(args, "--ro-bind", interpPath, interpPath))
+}

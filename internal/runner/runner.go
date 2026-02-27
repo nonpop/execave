@@ -44,6 +44,7 @@ type Runner struct {
 	// Immutable infrastructure (set at construction)
 	absConfigPath    string
 	netPath          *sandbox.NetworkPath
+	interpreterPath  string      // auto-detected ELF interpreter, applied to every cfg in Start
 	initialTermState *term.State // saved at construction for restoration
 
 	// OnLoggerChange is called with the new logger each time Start creates one.
@@ -90,6 +91,7 @@ func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath)
 	return &Runner{
 		absConfigPath:    absConfigPath,
 		netPath:          netPath,
+		interpreterPath:  cfg.InterpreterPath,
 		initialTermState: initialTermState,
 		OnLoggerChange:   nil,
 		mu:               sync.RWMutex{},
@@ -167,6 +169,10 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 	// Drain any buffered input from stdin
 	// This prevents input typed while stopped from leaking into the new run
 	drainStdin()
+
+	// Inject the auto-detected interpreter path. Configs from web UI reload
+	// (ParseTOML) don't include it — the Runner preserves it from startup.
+	cfg.InterpreterPath = r.interpreterPath
 
 	// Create fresh logger and resolver
 	logger := accesslog.New(cfg.ManagedPaths)

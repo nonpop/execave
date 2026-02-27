@@ -23,6 +23,7 @@ type Config struct {
 	SyscallAllowRules []string              // Syscall names allowed via syscall:allow rules.
 	SyscallNologRules []string              // Syscall names hidden via syscall:nolog rules.
 	ManagedPaths      []string              // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
+	InterpreterPath   string                // Auto-detected ELF interpreter (dynamic linker) path.
 }
 
 // HasNetRules reports whether the configuration contains any network rules.

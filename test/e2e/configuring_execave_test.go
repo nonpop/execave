@@ -123,7 +123,7 @@ func TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.
 }
 
 // TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected tests that rules targeting managed
-// paths (/dev, /proc, /tmp) or their descendants are rejected.
+// paths (/dev, /proc, /tmp, auto-detected ELF interpreter) or their descendants are rejected.
 func TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected(t *testing.T) {
 	s := newScenario(t)
 	s.givenRulesOnly("fs:ro:/proc/self/status")

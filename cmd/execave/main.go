@@ -133,10 +133,20 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, n
 func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, noOpen, showAllowed, showNolog bool) (int, error) {
 	command := extractCommand(cmd, args)
 
-	cfg, err := config.Load(configPath, sandbox.ManagedDirs)
+	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
+	// bwrap is mandatory and re-validated at sandbox launch; if unavailable
+	// here, skip interpreter auto-detection only.
+	var interpPath string
+	if bwrapPath, resolveErr := sandbox.ResolveBwrap(); resolveErr == nil {
+		interpPath = sandbox.InterpreterPath(bwrapPath)
+	}
+	managedPaths := sandbox.ManagedPathsWith(interpPath)
+
+	cfg, err := config.Load(configPath, managedPaths)
 	if err != nil {
 		return 0, fmt.Errorf("load config from %s: %w", configPath, err)
 	}
+	cfg.InterpreterPath = interpPath
 
 	absConfigPath, err := filepath.Abs(configPath)
 	if err != nil {
@@ -178,7 +188,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 	// When monitoring is enabled, the runner manages the logger lifecycle
 	// and updates the proxy via OnLoggerChange. Pass nil logger to the proxy.
 	monitorEnabled := monitor != ""
-	logger := setupAccessLog(monitorEnabled)
+	logger := setupAccessLog(monitorEnabled, cfg.ManagedPaths)
 	proxyLogger := logger
 	if monitorEnabled {
 		proxyLogger = nil
@@ -233,11 +243,11 @@ func extractCommand(cmd *cobra.Command, args []string) []string {
 }
 
 // setupAccessLog initializes the access logger if monitoring is enabled.
-func setupAccessLog(monitorEnabled bool) *accesslog.Logger {
+func setupAccessLog(monitorEnabled bool, managedPaths []string) *accesslog.Logger {
 	if !monitorEnabled {
 		return nil
 	}
-	logger := accesslog.New(sandbox.ManagedDirs)
+	logger := accesslog.New(managedPaths)
 	return logger
 }
 
@@ -331,7 +341,7 @@ func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath stri
 		return 0, fmt.Errorf("read config %s: %w", absConfigPath, err)
 	}
 
-	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), sandbox.ManagedDirs, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
+	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), cfg.ManagedPaths, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
 	server.SetLogResolvers(fsRes, netRes, syscallNolog)
 
 	// Wire config changes to update the proxy's net rules resolver
