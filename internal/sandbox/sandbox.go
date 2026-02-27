@@ -34,13 +34,13 @@ var ManagedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
 // static binaries (no PT_INTERP), non-ELF files, read errors, or non-absolute
 // interpreter paths.
 func InterpreterPath(bwrapPath string) string {
-	f, err := elf.Open(bwrapPath)
+	elfFile, err := elf.Open(bwrapPath)
 	if err != nil {
 		return ""
 	}
-	defer f.Close() //nolint:errcheck // read-only
+	defer elfFile.Close() //nolint:errcheck // read-only
 
-	for _, prog := range f.Progs {
+	for _, prog := range elfFile.Progs {
 		if prog.Type == elf.PT_INTERP {
 			data := make([]byte, prog.Filesz)
 			_, err := prog.ReadAt(data, 0)

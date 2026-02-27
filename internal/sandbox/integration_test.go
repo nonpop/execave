@@ -27,6 +27,7 @@ func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -48,6 +49,7 @@ func TestIntegration_DefaultDenyFilesystem_AllowedPathAccessible(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -71,6 +73,7 @@ func TestIntegration_ReadOnlyAccess_ReadAllowed(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -92,6 +95,7 @@ func TestIntegration_ReadOnlyAccess_WriteDeniedOnReadOnlyPath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -117,6 +121,7 @@ func TestIntegration_ReadWriteAccess_ReadAllowedOnReadWritePath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -138,6 +143,7 @@ func TestIntegration_ReadWriteAccess_WriteAllowedOnReadWritePath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -164,6 +170,7 @@ func TestIntegration_NoAccessRule_ReadDeniedByNoneRule(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -188,6 +195,7 @@ func TestIntegration_NoAccessRule_WriteDeniedByNoneRule(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -212,6 +220,7 @@ func TestIntegration_NoAccessRule_NoneDirectoryInaccessible(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -239,6 +248,7 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -264,6 +274,7 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -284,6 +295,7 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -306,6 +318,7 @@ func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *tes
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -332,6 +345,7 @@ func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *test
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/test-proxy.sock",
@@ -355,6 +369,7 @@ func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *te
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -380,6 +395,7 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFai
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -405,6 +421,7 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -430,6 +447,7 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *test
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -451,6 +469,7 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithNetRules(t *testing
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -485,6 +504,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *t
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      sandbox.ManagedDirs,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -510,6 +530,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblin
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      sandbox.ManagedDirs,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -538,6 +559,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      sandbox.ManagedDirs,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -563,6 +585,7 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      sandbox.ManagedDirs,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -602,6 +625,7 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      sandbox.ManagedDirs,
+		InterpreterPath:   "",
 	}
 	sb := sandbox.New(cfg, "", nil)
 	ctx := context.Background()
@@ -700,8 +724,13 @@ func TestIntegration_InterpreterAutoMount_InterpreterMountedInBwrapArgs(t *testi
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		InterpreterPath: interpPath,
-		ManagedPaths:    sandbox.ManagedPathsWith(interpPath),
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		InterpreterPath:   interpPath,
+		ManagedPaths:      sandbox.ManagedPathsWith(interpPath),
 	}
 	sb := sandbox.New(cfg, "", nil)
 

@@ -413,6 +413,7 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:   "",
 	}
 
 	absConfigPath := filepath.Join(tmpDir, "execave.json")

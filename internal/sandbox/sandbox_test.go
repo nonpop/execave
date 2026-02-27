@@ -46,6 +46,7 @@ func TestBuildBwrapArgs(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "/tmp/execave-test.json", nil)
@@ -100,6 +101,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -127,6 +129,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -152,6 +155,7 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -173,6 +177,7 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -191,6 +196,7 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	netPath := &sandbox.NetworkPath{
@@ -218,6 +224,7 @@ func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -273,7 +280,7 @@ func TestInterpreterPath_StaticBinary(t *testing.T) {
 	src := filepath.Join(tmpDir, "main.go")
 	require.NoError(t, os.WriteFile(src, []byte("package main\nfunc main() {}\n"), 0o600))
 
-	cmd := exec.Command("go", "build", "-o", binPath, src)
+	cmd := exec.Command("go", "build", "-o", binPath, src) // #nosec G204 -- binPath and src are constructed from t.TempDir()
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	out, err := cmd.CombinedOutput()
 	t.Log(string(out))
@@ -312,7 +319,13 @@ func TestBuildBwrapArgs_IncludesInterpreterMount(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		InterpreterPath: "/lib64/ld-linux-x86-64.so.2",
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "/lib64/ld-linux-x86-64.so.2",
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -326,7 +339,13 @@ func TestBuildBwrapArgs_NoInterpreterWhenEmpty(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		InterpreterPath: "",
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 
 	sb := sandbox.New(cfg, "", nil)

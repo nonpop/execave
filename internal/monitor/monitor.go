@@ -264,23 +264,8 @@ func (m *Monitor) processStraceOutput(output io.Reader) error {
 	// mount, pivot_root) before the user command starts. Skip setup lines
 	// and process the user command's execve (the final setup execve).
 	if len(m.bwrapArgs) > 0 {
-		expectedExecves := 2
-		if m.hasNetworkPath {
-			expectedExecves = 3
-		}
-		result, line, buffered, ok := skipBwrapSetup(scanner, parser, expectedExecves)
-		if ok {
-			resolveCWD(cwdByPid, &result)
-			if err := m.processAccessEntry(result.syscall, result.path, line); err != nil {
-				return err
-			}
-			// Replay lines consumed after the last execve during early-EOF scan.
-			// In the normal case (all expected execves found) buffered is nil.
-			for _, bl := range buffered {
-				if err := m.processStraceLine(parser, cwdByPid, bl); err != nil {
-					return err
-				}
-			}
+		if err := m.processBwrapSetup(scanner, parser, cwdByPid); err != nil {
+			return err
 		}
 	}
 
@@ -294,6 +279,30 @@ func (m *Monitor) processStraceOutput(output io.Reader) error {
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("scan strace output: %w", err)
+	}
+	return nil
+}
+
+// processBwrapSetup skips the bwrap initialization syscalls and processes
+// any access entry and buffered lines that follow them.
+func (m *Monitor) processBwrapSetup(scanner *bufio.Scanner, parser *straceParser, cwdByPid map[string]string) error {
+	expectedExecves := 2
+	if m.hasNetworkPath {
+		expectedExecves = 3
+	}
+	result, line, buffered, ok := skipBwrapSetup(scanner, parser, expectedExecves)
+	if !ok {
+		return nil
+	}
+
+	resolveCWD(cwdByPid, &result)
+	if err := m.processAccessEntry(result.syscall, result.path, line); err != nil {
+		return err
+	}
+	for _, bl := range buffered {
+		if err := m.processStraceLine(parser, cwdByPid, bl); err != nil {
+			return err
+		}
 	}
 	return nil
 }

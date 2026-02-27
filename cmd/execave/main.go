@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/netrules"
@@ -153,9 +152,9 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 		return 0, fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
 	}
 
-	// Prevent SIGINT from terminating the Go process so the processing goroutine
-	// can drain remaining pipe data and write final access log entries after the
-	// child exits.
+	// Prevent SIGINT from terminating the Go process. This serves two purposes:
+	// 1. In all modes: allows deferred cleanup (terminal restore, proxy shutdown) to run.
+	// 2. In web UI mode: sigCh is read to trigger graceful shutdown after child exits.
 	// See fix-sigint-access-log/design.md for why we use signal.Notify instead of signal.Ignore.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
@@ -185,16 +184,9 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 
 	ctx := context.Background()
 
-	// When monitoring is enabled, the runner manages the logger lifecycle
-	// and updates the proxy via OnLoggerChange. Pass nil logger to the proxy.
 	monitorEnabled := monitor != ""
-	logger := setupAccessLog(monitorEnabled, cfg.ManagedPaths)
-	proxyLogger := logger
-	if monitorEnabled {
-		proxyLogger = nil
-	}
 
-	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, proxyLogger, monitorEnabled)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, monitorEnabled)
 	if err != nil {
 		return 0, err
 	}
@@ -202,12 +194,11 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 		defer proxyCleanup()
 	}
 
-	sb := sandbox.New(cfg, absConfigPath, netPath)
-
 	if monitorEnabled {
 		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, noOpen, showAllowed, showNolog, sigCh)
 	}
 
+	sb := sandbox.New(cfg, absConfigPath, netPath)
 	exitCode, err := sb.Run(ctx, command)
 	if err != nil {
 		return 0, fmt.Errorf("run sandbox: %w", err)
@@ -242,24 +233,15 @@ func extractCommand(cmd *cobra.Command, args []string) []string {
 	return args[argsLenAtDash:]
 }
 
-// setupAccessLog initializes the access logger if monitoring is enabled.
-func setupAccessLog(monitorEnabled bool, managedPaths []string) *accesslog.Logger {
-	if !monitorEnabled {
-		return nil
-	}
-	logger := accesslog.New(managedPaths)
-	return logger
-}
-
 // setupNetworking initializes the proxy and network path if net rules are present
 // or if monitoring is enabled. When monitoring is enabled without net rules, the
 // proxy starts with an empty rule set (deny-all) so that HTTP-proxy-aware
 // programs' network access attempts are logged.
-func setupNetworking(cfg *config.Config, logger *accesslog.Logger, monitorEnabled bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
+func setupNetworking(cfg *config.Config, monitorEnabled bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
 	if !cfg.HasNetRules() && !monitorEnabled {
 		return nil, nil, nil, nil
 	}
-	netPath, proxyInstance, err := startProxy(cfg, logger)
+	netPath, proxyInstance, tmpDir, err := startProxy(cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -267,31 +249,34 @@ func setupNetworking(cfg *config.Config, logger *accesslog.Logger, monitorEnable
 		if err := proxyInstance.Stop(); err != nil {
 			fmt.Fprintf(os.Stderr, "execave: stop proxy: %v\n", err)
 		}
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: remove proxy temp dir: %v\n", err)
+		}
 	}
 	return netPath, proxyInstance, cleanup, nil
 }
 
-func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkPath, *proxy.Proxy, error) {
+func startProxy(cfg *config.Config) (*sandbox.NetworkPath, *proxy.Proxy, string, error) {
 	tmpDir, err := os.MkdirTemp("", "execave-proxy-*")
 	if err != nil {
-		return nil, nil, fmt.Errorf("create proxy temp dir: %w", err)
+		return nil, nil, "", fmt.Errorf("create proxy temp dir: %w", err)
 	}
 
 	udsPath := filepath.Join(tmpDir, "proxy.sock")
 
 	netResolver := netrules.NewAccessResolver(cfg.NetRules)
-	httpProxy := proxy.New(netResolver, logger)
+	httpProxy := proxy.New(netResolver, nil)
 
 	if err := httpProxy.Start(udsPath); err != nil {
 		_ = os.RemoveAll(tmpDir)
-		return nil, nil, fmt.Errorf("start proxy: %w", err)
+		return nil, nil, "", fmt.Errorf("start proxy: %w", err)
 	}
 
 	execaveBinary, err := os.Executable()
 	if err != nil {
 		_ = httpProxy.Stop()
 		_ = os.RemoveAll(tmpDir)
-		return nil, nil, fmt.Errorf("resolve execave binary path: %w", err)
+		return nil, nil, "", fmt.Errorf("resolve execave binary path: %w", err)
 	}
 
 	netPath := &sandbox.NetworkPath{
@@ -299,7 +284,16 @@ func startProxy(cfg *config.Config, logger *accesslog.Logger) (*sandbox.NetworkP
 		ExecaveBinary: execaveBinary,
 	}
 
-	return netPath, httpProxy, nil
+	return netPath, httpProxy, tmpDir, nil
+}
+
+// logContext holds the log classification resources shared by web UI and text log modes.
+type logContext struct {
+	homeDir      string
+	configDir    string
+	fsRes        *fsrules.LogResolver
+	netRes       *netrules.LogResolver
+	syscallNolog map[string]bool
 }
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
@@ -318,31 +312,36 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 	if err != nil {
 		return 0, fmt.Errorf("resolve user home directory: %w", err)
 	}
-	configDir := filepath.Dir(absConfigPath)
 
-	fsRes := fsrules.NewLogResolver(cfg.FSLogRules)
-	netRes := netrules.NewLogResolver(cfg.NetLogRules)
 	syscallNolog := make(map[string]bool, len(cfg.SyscallNologRules))
 	for _, name := range cfg.SyscallNologRules {
 		syscallNolog[name] = true
 	}
 
-	if monitorMode == "web" {
-		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, homeDir, configDir, command, noOpen, showAllowed, showNolog, fsRes, netRes, syscallNolog, sigCh)
+	lctx := logContext{
+		homeDir:      homeDir,
+		configDir:    filepath.Dir(absConfigPath),
+		fsRes:        fsrules.NewLogResolver(cfg.FSLogRules),
+		netRes:       netrules.NewLogResolver(cfg.NetLogRules),
+		syscallNolog: syscallNolog,
 	}
-	return runMonitoredText(ctx, cfg, rnr, homeDir, configDir, command, monitorMode, showAllowed, showNolog, fsRes, netRes, syscallNolog)
+
+	if monitorMode == "web" {
+		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, lctx, command, noOpen, showAllowed, showNolog, sigCh)
+	}
+	return runMonitoredText(ctx, cfg, rnr, lctx, command, monitorMode, showAllowed, showNolog)
 }
 
 // runMonitoredWeb runs the command under strace monitoring with a web UI.
-func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, homeDir, configDir string, command []string, noOpen, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool, sigCh chan os.Signal) (int, error) {
+func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, lctx logContext, command []string, noOpen, showAllowed, showNolog bool, sigCh chan os.Signal) (int, error) {
 	// Read raw config file content for the web UI editor
 	configContent, err := os.ReadFile(absConfigPath) // #nosec G304 -- absConfigPath is validated as absolute path
 	if err != nil {
 		return 0, fmt.Errorf("read config %s: %w", absConfigPath, err)
 	}
 
-	server := webui.New(rnr, command, homeDir, configDir, absConfigPath, string(configContent), cfg.ManagedPaths, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
-	server.SetLogResolvers(fsRes, netRes, syscallNolog)
+	server := webui.New(rnr, command, lctx.homeDir, lctx.configDir, absConfigPath, string(configContent), cfg.ManagedPaths, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
+	server.SetLogResolvers(lctx.fsRes, lctx.netRes, lctx.syscallNolog)
 
 	// Wire config changes to update the proxy's net rules resolver
 	server.OnConfigChange = func(newCfg *config.Config) {
@@ -386,7 +385,7 @@ func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath stri
 
 // runMonitoredText runs the command under strace monitoring with text log output.
 // monitorPath is the output file path or "-" to buffer to stderr after process exit.
-func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, homeDir, configDir string, command []string, monitorPath string, showAllowed, showNolog bool, fsRes *fsrules.LogResolver, netRes *netrules.LogResolver, syscallNolog map[string]bool) (_ int, err error) {
+func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, lctx logContext, command []string, monitorPath string, showAllowed, showNolog bool) (_ int, err error) {
 	var out io.Writer
 	var buf *bytes.Buffer
 
@@ -406,7 +405,7 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 		out = logFile
 	}
 
-	logWriter := textlog.New(out, homeDir, configDir, showAllowed, showNolog, fsRes, netRes, syscallNolog)
+	logWriter := textlog.New(out, lctx.homeDir, lctx.configDir, showAllowed, showNolog, lctx.fsRes, lctx.netRes, lctx.syscallNolog)
 
 	if err := rnr.Start(ctx, cfg, command); err != nil {
 		return 0, fmt.Errorf("start initial run: %w", err)

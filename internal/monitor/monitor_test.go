@@ -161,6 +161,7 @@ func TestMonitor_Integration(t *testing.T) {
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -220,6 +221,7 @@ func TestMonitor_WriteOperation(t *testing.T) {
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -247,6 +249,7 @@ func TestMonitor_Deduplication(t *testing.T) {
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -348,6 +351,7 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	// Non-nil bwrapArgs enables setup phase detection
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -597,7 +601,7 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil}
+	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil, InterpreterPath: ""}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
@@ -657,6 +661,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -717,6 +722,7 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -769,6 +775,7 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      []string{managedDir},
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -818,6 +825,7 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -879,6 +887,7 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -932,6 +941,7 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -970,6 +980,7 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
 
@@ -1007,6 +1018,7 @@ func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -1038,6 +1050,7 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -1092,6 +1105,7 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -1126,6 +1140,7 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -1179,6 +1194,7 @@ func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	// hasNetworkPath=true expects 3 execves, but we only provide 2
 	mon, logger := createTestMonitorWithNetwork(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -1224,6 +1240,7 @@ func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 

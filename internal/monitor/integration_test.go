@@ -45,6 +45,7 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -107,6 +108,7 @@ func TestIntegration_OperationTypeMapping_QueryingFileMetadataLoggedAsRead(t *te
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -144,6 +146,7 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -193,6 +196,7 @@ func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *te
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -256,6 +260,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkLog
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -314,6 +319,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInI
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -369,6 +375,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountReso
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -426,6 +433,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinM
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -484,6 +492,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -541,6 +550,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPoin
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -597,6 +607,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -656,6 +667,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtD
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -717,6 +729,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediateP
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -773,6 +786,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughS
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -829,6 +843,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToR
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -884,6 +899,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySy
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -938,6 +954,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExcee
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -986,6 +1003,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDe
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1027,6 +1045,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_NonExistentPathNotReso
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1069,6 +1088,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedP
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      []string{managedDir},
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1109,6 +1129,7 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentReadFilteredFro
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1143,6 +1164,7 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1192,6 +1214,7 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1232,6 +1255,7 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1329,6 +1353,7 @@ func roRuleEnv(t *testing.T, absTestDir string) *monitorTestEnv {
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 }
@@ -1387,6 +1412,7 @@ func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t
 			SyscallAllowRules: nil,
 			SyscallNologRules: nil,
 			ManagedPaths:      nil,
+			InterpreterPath:   "",
 		}
 	})
 
@@ -1801,6 +1827,7 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
@@ -1852,6 +1879,7 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
@@ -1909,6 +1937,13 @@ func TestIntegration_BwrapSetupPhaseDetection_SetupPhaseLinesSkippedUntilUserCom
 			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
 			roRule(absTestDir),
 		},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
@@ -1965,6 +2000,13 @@ func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProduces
 			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
 			roRule(absTestDir),
 		},
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	logger := accesslog.New(cfg.ManagedPaths)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)

@@ -130,6 +130,7 @@ func ParseRules(rawRules []string, configDir, configPath string, managedPaths []
 		SyscallAllowRules: parsed.syscallAllow,
 		SyscallNologRules: parsed.syscallNolog,
 		ManagedPaths:      managedPaths,
+		InterpreterPath:   "",
 	}, nil
 }
 

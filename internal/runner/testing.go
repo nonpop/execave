@@ -17,6 +17,7 @@ func NewTestRunner() *Runner {
 		SyscallAllowRules: nil,
 		SyscallNologRules: nil,
 		ManagedPaths:      nil,
+		InterpreterPath:   "",
 	}
 	return New(cfg, "/tmp/test-config.json", &sandbox.NetworkPath{UDSPath: "", ExecaveBinary: ""})
 }
