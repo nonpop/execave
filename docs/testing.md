@@ -92,9 +92,6 @@ Given (setup):
 When (action):
 - `s.whenRun(args...)` — runs execave with config, resets result
 - `s.whenRunWithDefaultConfig(workDir, args...)` — runs without `--config`
-- `s.whenRunMonitored(args...)` — runs with `--monitor`, fetches web UI, sends SIGINT
-- `s.whenRunMonitoredWithInterrupt(args...)` — sends SIGINT during execution
-- `s.whenRunMonitoredWithFlags(flags, args...)` — monitored with extra CLI flags
 - `s.whenRunTextLog(monitorArg, args...)` — runs with `--monitor=<file or ->`
 - `s.whenRunTextLogWithFlags(monitorArg, flags, args...)` — text log with extra flags
 
@@ -102,9 +99,9 @@ Then (assertions on last `whenRun*` result):
 - `s.thenExitCode(n)` / `s.thenExitCodeNonZero()`
 - `s.thenStdoutContains(sub)` / `s.thenStderrContains(sub)` / `s.thenStderrNotContains(sub)`
 - `s.thenFileContains(path, sub)`
-- `s.thenWebUIHasEntry(substrings...)` / `s.thenWebUIContains(sub)` / `s.thenWebUINotContains(sub)` / `s.thenWebUICountOf(sub)`
+- `s.thenStderrHasEntry(substrings...)` — asserts a single stderr line contains all given substrings
 
-**Edge cases** — some tests still use low-level helpers directly when they need raw `exec.Cmd` access (e.g., SIGWINCH test, long-running process tests in iterating-config).
+**Edge cases** — some tests still use low-level helpers directly when they need raw `exec.Cmd` access (e.g., SIGWINCH test, long-running process tests).
 
 ## Security Testing
 

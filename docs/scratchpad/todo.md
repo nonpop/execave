@@ -1,10 +1,9 @@
 # execave TODOs
 
-- maybe use a simple "mini-react" library?
-- UI should indicate which config version is currently running
-
 ## easy, probably
 
+- config sections [fs], [net], ...
+- rules for disabling commands: `cmd:deny:gh` looks up gh -> /usr/bin/gh and adds `fs:deny:/usr/bin/gh`
 - env var expansion in rules
 - should use absolute path for bwrap?
 - add commands? run, monitor
@@ -17,7 +16,6 @@
 
 ## medium, probably
 
-- simplify webui (no SSR, all data reading via SSE)
 - clean up test helpers & duplicate tests
 - require fixed bwrap/strace versions?
 - add pre & post conditions

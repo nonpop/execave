@@ -24,19 +24,13 @@
 
 - [x] 5.1 Add `--allow-all-syscalls` bool flag to root command in `cmd/execave/main.go`. Thread through to `sandbox.New()` (direct path) and `runner.New()` (monitored path).
 
-## 6. Web UI
+## 6. Documentation
 
-- [x] 6.1 Add `allowAllSyscalls bool` field to `webui.Server`. Read `allow-all-syscalls` query param in `handleStart`. Call `runner.SetAllowAllSyscalls()` before starting run. Include `allowAllSyscalls` in SSE status event JSON.
-- [x] 6.2 Add "Allow all syscalls" checkbox to `templates/index.html`. Default unchecked (or checked if server field is true). On Start/Restart: append `?allow-all-syscalls=1` if checked. Sync from SSE status event on reconnect.
-- [x] 6.3 Add web UI integration tests: start with `?allow-all-syscalls=1` sets runner flag; start without param clears flag; SSE status includes field.
+- [x] 6.1 Update `docs/security-model.md`: add seccomp row to guarantees table, add to security-critical code table, add `--allow-all-syscalls` to limitations.
+- [x] 6.2 Update `docs/architecture.md` if it references security layers.
 
-## 7. Documentation
+## 7. E2E tests (SKIP THESE TASKS FOR NOW)
 
-- [x] 7.1 Update `docs/security-model.md`: add seccomp row to guarantees table, add to security-critical code table, add `--allow-all-syscalls` to limitations.
-- [x] 7.2 Update `docs/architecture.md` if it references security layers.
-
-## 8. E2E tests (SKIP THESE TASKS FOR NOW)
-
-- [ ] 8.1 Add E2E test: default seccomp blocks a dangerous syscall (EPERM).
-- [ ] 8.2 Add E2E test: `--allow-all-syscalls` disables seccomp filtering.
-- [ ] 8.3 Add E2E test: namespace escape via unshare blocked by seccomp.
+- [ ] 7.1 Add E2E test: default seccomp blocks a dangerous syscall (EPERM).
+- [ ] 7.2 Add E2E test: `--allow-all-syscalls` disables seccomp filtering.
+- [ ] 7.3 Add E2E test: namespace escape via unshare blocked by seccomp.

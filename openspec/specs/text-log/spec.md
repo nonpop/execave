@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The text-log capability provides a text-based access log output as an alternative to the web UI. It writes formatted access log entries to a file or stderr, useful when TUI apps cover the terminal or when no browser is available.
+The text-log capability provides text-based access log output. It writes formatted access log entries to a file or stderr.
 
 ## Requirements
 
@@ -27,7 +27,7 @@ The text log writer SHALL format each entry as a single line: `RESULT  OP  targe
 
 ### Requirement: Path shortening in text output
 
-The text log writer SHALL shorten absolute filesystem target paths for display using the same logic as the web UI: relative to configDir if under configDir, tilde form if under homeDir, otherwise absolute. Non-filesystem targets (HTTP entries) SHALL NOT be shortened.
+The text log writer SHALL shorten absolute filesystem target paths for display using the first applicable form in priority order: relative to configDir if under configDir, tilde form if under homeDir, otherwise absolute. Non-filesystem targets (HTTP entries) SHALL NOT be shortened.
 
 #### Scenario: Filesystem path shortened to relative form
 
@@ -64,7 +64,7 @@ The text log writer SHALL hide entries with result OK by default. When `showAllo
 
 ### Requirement: Nolog filter
 
-The text log writer SHALL hide entries matching nolog rules by default (using the same resolution as the web UI). When `showNolog` is true, nolog entries SHALL be included in the output.
+The text log writer SHALL hide entries matching nolog rules by default. When `showNolog` is true, nolog entries SHALL be included in the output.
 
 #### Scenario: Nolog entries hidden by default
 

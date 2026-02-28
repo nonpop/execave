@@ -1,12 +1,6 @@
-# Monitoring Access — Observing what sandboxed commands access
+## MODIFIED Use Cases
 
-## Purpose
-
-The user enables monitoring to see what resources a sandboxed command accesses. The access log records filesystem reads/writes and network requests with their outcomes, helping the user understand and audit the command's behavior.
-
-## Use Cases
-
-### Use Case: View access log in text output
+### Use Case: View access log in web UI
 
 The user runs with `--monitor` to view access log entries in text format on stderr or in a file, with operation type, target, result, and matched rule columns. Filesystem target paths are displayed in shortened form. By default, only DENY and UNKNOWN entries are shown; the user can include OK entries with `--show-allowed`.
 
@@ -20,7 +14,7 @@ The user runs with `--monitor` to view access log entries in text format on stde
 - **AND** paths outside the home directory are shown as absolute (e.g., `/usr/lib/libc.so`)
 - **AND** rules are shown verbatim as written in the config (e.g., `fs:rw:~/project`)
 
-### Use Case: Real-time streaming to file
+### Use Case: Real-time streaming via web UI
 
 The user writes the access log to a file and tails it in real time as the sandboxed command runs.
 
@@ -231,47 +225,7 @@ Network log rules use the same specificity ranking as access rules. Exact domain
 - **THEN** entries for `cdn.example.com:443` are suppressed (matches wildcard nolog)
 - **AND** entries for `api.example.com:443` are displayed (exact match log overrides wildcard nolog)
 
-### Use Case: Write access log to file
-
-The user writes the access log to a file, useful when TUI apps cover the terminal.
-
-- **GIVEN** a config at `/home/user/project/execave.toml` with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
-- **WHEN** the user runs `execave --monitor=access.log -- vim src/main.go`
-- **AND** the sandboxed command accesses files
-- **THEN** `access.log` is created in the current directory
-- **AND** entries are written to the file as they occur (tailable with `tail -f access.log`)
-- **AND** each line contains result, operation, target path (shortened), and matched rule
-- **AND** by default only DENY and UNKNOWN entries are written (OK entries are hidden)
-- **AND** entries matching nolog rules are hidden by default
-- **AND** filesystem paths are shortened (relative to config dir, or `~/` form)
-
-### Use Case: Write access log to stderr after process exits
-
-The user writes the access log to stderr, which is buffered until the sandboxed process exits to avoid interleaving with the command's output.
-
-- **GIVEN** a config with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
-- **WHEN** the user runs `execave --monitor -- ls /usr/lib`
-- **AND** the sandboxed command exits
-- **THEN** the accumulated access log entries are printed to stderr after the process exits
-- **AND** by default only DENY and UNKNOWN entries are shown
-
-### Use Case: Show allowed entries in text log
-
-The user includes OK entries in the text log output using the `--show-allowed` flag.
-
-- **GIVEN** a config with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
-- **WHEN** the user runs `execave --monitor=access.log --show-allowed -- ls /usr/lib`
-- **THEN** `access.log` contains both OK and DENY/UNKNOWN entries
-
-### Use Case: Show nolog entries in text log
-
-The user includes entries suppressed by nolog rules using the `--show-nolog` flag.
-
-- **GIVEN** a config with rules `fs:ro:/home/user/project` and `fs:nolog:/home/user/project/cache`
-- **WHEN** the user runs `execave --monitor=access.log --show-nolog -- myapp`
-- **THEN** `access.log` contains entries for paths under `/home/user/project/cache` that would normally be hidden by the nolog rule
-
-### Use Case: Filter flags control text log output
+### Use Case: Filter flags set initial web UI checkbox state
 
 The user uses `--show-allowed` and `--show-nolog` to include OK and nolog entries in text log output.
 
@@ -280,21 +234,29 @@ The user uses `--show-allowed` and `--show-nolog` to include OK and nolog entrie
 - **THEN** the text log includes OK entries (not just denied)
 - **AND** the text log includes entries that match nolog rules
 
-### Use Case: Text log applies both filters independently
+## REMOVED Use Cases
 
-Both the denied-only and nolog filters operate independently in text log output.
+### Use Case: Web UI survives sandbox exit
+**Reason**: Web UI removed. Text log is written in real-time to file or buffered to stderr.
+**Migration**: Use `--monitor=access.log` and `tail -f access.log` for post-exit review, or `--monitor` for stderr output after exit.
 
-- **GIVEN** a config with rules `fs:ro:/usr/lib`, `fs:rw:/home/user/project`, and `fs:nolog:/usr/lib`
-- **WHEN** the user runs `execave --monitor=access.log --show-allowed -- ls /usr/lib /home/user/project`
-- **THEN** `access.log` contains OK entries for `/home/user/project` (passes both filters)
-- **AND** `access.log` does not contain entries for `/usr/lib` (passes mode filter but blocked by nolog)
+### Use Case: SIGINT after sandbox exit stops web UI
+**Reason**: Web UI removed. In text log mode, execave exits when the sandboxed command exits.
+**Migration**: No action needed — execave exits automatically after the process exits and the log is written.
 
-### Use Case: Text log survives SIGINT
+### Use Case: Run status shown in web UI
+**Reason**: Web UI removed. Run status is not displayed in text log mode.
+**Migration**: The user observes the process directly via the terminal.
 
-The user interrupts a long-running command and the text log contains all entries logged before the signal.
+### Use Case: No entries lost on page refresh
+**Reason**: Web UI removed. No browser page to refresh.
+**Migration**: Text log to file is append-only; re-reading the file shows all entries.
 
-- **GIVEN** a config with rules `fs:ro:/home/user/data`
-- **WHEN** the user runs `execave --monitor=access.log -- long-running-command`
-- **AND** sends SIGINT (Ctrl-C) while the command is running
-- **THEN** `access.log` contains entries for all operations that occurred before the signal
-- **AND** execave exits with the command's exit code
+## RENAMED Use Cases
+
+- FROM: View access log in web UI
+  TO: View access log in text output
+- FROM: Real-time streaming via web UI
+  TO: Real-time streaming to file
+- FROM: Filter flags set initial web UI checkbox state
+  TO: Filter flags control text log output

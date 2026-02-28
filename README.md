@@ -26,7 +26,7 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 **Network rules:** `net:<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
-**Log visibility rules:** Control which entries appear in the monitor web UI. `fs:log:<path>` / `fs:nolog:<path>` show/hide filesystem entries; `net:log:<target>:<port>` / `net:nolog:<target>:<port>` show/hide network entries. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
+**Log visibility rules:** Control which entries appear in the monitor output. `fs:log:<path>` / `fs:nolog:<path>` show/hide filesystem entries; `net:log:<target>:<port>` / `net:nolog:<target>:<port>` show/hide network entries. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
 
 ```toml
 rules = [
@@ -59,15 +59,14 @@ See `execave.toml.example` for a comprehensive config that supports most standar
 
 ### Building your config with --monitor
 
-You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access. Three output modes are available:
+You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access. Two output modes are available:
 
 ```bash
-execave --monitor -- your-command            # web UI (opens browser)
+execave --monitor -- your-command            # text log to stderr (buffered until exit)
 execave --monitor=access.log -- your-command # text log to file (real-time, tailable)
-execave --monitor=- -- your-command          # text log to stderr (buffered until exit)
 ```
 
-**Web UI mode** (`--monitor` without a value) opens the browser automatically and streams entries in real-time:
+Both modes write one entry per line:
 
 | Operation | Target | Result | Rule |
 |-----------|--------|--------|------|
@@ -77,23 +76,13 @@ execave --monitor=- -- your-command          # text log to stderr (buffered unti
 | HTTP | api.example.com:443 | OK | net:http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
-**Text log mode** writes one entry per line to a file or stderr. The file mode (`--monitor=<path>`) is real-time and tailable. The stderr mode (`--monitor=-`) buffers until the process exits, then writes to stderr.
+The file mode (`--monitor=<path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (`--monitor` or `--monitor=-`) buffers until the process exits, then writes to stderr.
 
-**Filter flags** control which entries appear in the output (apply to both web UI and text modes):
+**Filter flags** control which entries appear in the output:
 - `--show-allowed`: include OK (allowed) entries. Default: denied only.
 - `--show-nolog`: include entries matching `nolog` rules. Default: hidden.
 
-In web UI mode these flags set the initial checkbox state.
-
-**Real-time updates (web UI):** Entries stream to the browser as syscalls happen. The server stays running after the command exits so you can review the full log. Press Ctrl-C to stop the monitor and exit.
-
-**Filtering (web UI):** By default the web UI shows only denied entries ("Denied only" is checked). Uncheck it to see all entries. If nolog rules are configured, matching entries are also hidden; uncheck "Apply nolog rules" to reveal them.
-
-**Config editor:** The web UI includes an editable TOML textarea. Edit the config and click Start to restart the sandbox with the new rules. Click Save to write the config to disk, or Revert to reset to the last saved version.
-
-**Authentication:** The monitor URL includes a random access token (`?token=...`). Only requests with the correct token are served.
-
-**Workflow:** Start with `execave.toml.example`, run with `--monitor`, check for DENY entries in the web UI (filesystem paths are shown in shortened form relative to the config directory or home), edit the config in-browser, grant only what's necessary, repeat. Use `--no-open` to suppress the automatic browser launch.
+**Workflow:** Start with `execave.toml.example`, run with `--monitor`, check for DENY entries (filesystem paths are shown in shortened form relative to the config directory or home), edit the config, grant only what's necessary, repeat.
 
 ## Seccomp
 

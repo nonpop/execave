@@ -2,7 +2,7 @@
 
 The seccomp BPF filter blocks ~34 dangerous syscalls with SECCOMP_RET_ERRNO (EPERM). The monitor traces only filesystem syscalls (`strace -e trace=file,fchdir`), so blocked syscall attempts are invisible. The `--allow-all-syscalls` flag is all-or-nothing.
 
-Current data flow: strace output → parser (regex-based) → `processAccessEntry` (path resolution + rule checking) → `accesslog.Logger` → web UI / text log.
+Current data flow: strace output → parser (regex-based) → `processAccessEntry` (path resolution + rule checking) → `accesslog.Logger` → text log.
 
 The parser expects file-oriented syscall formats (`syscall("path"...)`) and panics on unknown syscall names. Blocked syscalls like `ptrace(PTRACE_TRACEME)` have no path argument and aren't in the strace trace expression.
 

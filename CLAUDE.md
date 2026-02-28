@@ -16,7 +16,7 @@ golangci-lint run --fix                   # Lint
 ## Structure
 
 - `cmd/execave/` - CLI entrypoint
-- `internal/{config,fsrules,netrules,accesslog,sandbox,monitor,proxy,tunnel,webui}/` - Core logic
+- `internal/{config,fsrules,netrules,accesslog,sandbox,monitor,proxy,tunnel}/` - Core logic
 
 ## Documentation
 

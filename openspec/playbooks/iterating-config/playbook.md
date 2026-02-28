@@ -1,154 +1,27 @@
-# Iterating Config — Editing and testing sandbox configs via the web UI
+# Iterating Config — Editing and testing sandbox configs via the CLI
 
 ## Purpose
 
-The user starts a monitored run via the web UI, observes the access log, edits the TOML config in the textarea, and restarts the process to re-observe with updated rules. This is the interactive config editing loop.
+The user edits their TOML config file in an external editor and runs execave with monitoring to observe the access log, adjusting rules between runs. This is the interactive config editing loop.
 
 ## Use Cases
 
-### Use Case: Edit config alongside the access log
+### Use Case: Edit config and re-run with monitor
 
-The user views and edits their raw TOML config in a textarea in the web UI while observing access log entries, so they can adjust rules without switching to an external editor.
+The user edits their TOML config file in an external editor and runs execave with monitoring to observe the access log, adjusting rules between runs.
 
-- **GIVEN** a config file containing rules `fs:ro:/usr/lib` and `fs:rw:/tmp`
+- **GIVEN** a config file containing rules `fs:ro:/usr/lib` and `fs:rw:/home/user/workspace`
 - **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **WHEN** the user opens the web UI
-- **THEN** the page displays an editable textarea containing the verbatim TOML config file (including comments)
-- **AND** the access log entries are displayed alongside in a separate pane
+- **WHEN** the process exits and the text log is printed to stderr
+- **THEN** the user reviews denied entries in the text log
+- **AND** edits the config file in their editor to add a missing allow rule
+- **AND** re-runs `execave --monitor -- ls /usr/lib` to verify denied entries are resolved
 
-### Use Case: Save edited config to disk
+### Use Case: Invalid config rejected on start
 
-The user saves the edited config from the textarea to the original config file on disk.
+The user sees a validation error when attempting to run with a config that contains invalid TOML or invalid rules.
 
-- **GIVEN** a config file at `~/myproject/execave.toml` containing `rules = ["fs:ro:/usr/lib"]`
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the user has edited the textarea to add `"fs:rw:/tmp"` to the rules array
-- **WHEN** the user clicks the "Save" button in the web UI
-- **THEN** the file `~/myproject/execave.toml` is updated with the textarea content
-- **AND** the modified indicator disappears
-
-### Use Case: Revert config to last-saved
-
-The user discards unsaved changes in the textarea, reverting to the last-saved config content.
-
-- **GIVEN** a config file containing `rules = ["fs:ro:/usr/lib"]`
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the user has edited the textarea to add `"fs:rw:/tmp"` to the rules array
-- **AND** the modified indicator is visible
-- **WHEN** the user clicks the "Revert" button in the web UI
-- **THEN** the textarea content is reset to the last-saved config (without `"fs:rw:/tmp"`)
-- **AND** the modified indicator disappears
-
-### Use Case: Modified indicator shows unsaved changes
-
-The user sees a visual indicator when the textarea content differs from the last-saved config, so they know whether they have unsaved changes.
-
-- **GIVEN** a config file containing `rules = ["fs:ro:/usr/lib"]`
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the textarea shows the saved config (no modified indicator)
-- **WHEN** the user edits the textarea to change a rule
-- **THEN** a modified indicator appears in the web UI
-- **AND** the "Revert" button becomes enabled
-
-### Use Case: Invalid config rejected on start or save
-
-The user sees a validation error when attempting to start a run or save a config that contains invalid TOML or invalid rules.
-
-- **GIVEN** a valid config file
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the user has edited the textarea to contain `rules = ["badprefix:something"]`
-- **WHEN** the user clicks the "Start" button in the web UI
-- **THEN** the run does not start
-- **AND** an error message containing "unknown resource type" is displayed in the web UI
-
-### Use Case: Access token required for all web UI requests
-
-Every HTTP request to the web UI server requires a valid access token, protecting against unauthorized access when the port is accidentally exposed.
-
-- **GIVEN** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the server has printed a URL with a token to stderr (e.g., `http://127.0.0.1:54321?token=abc123`)
-- **WHEN** a request is made to the server without the `?token=` query parameter
-- **THEN** the server responds with 403 Forbidden
-- **AND** when the same request is made with the correct `?token=abc123` parameter, the server responds normally
-
-### Use Case: Config editor syncs on SSE reconnect
-
-When the browser's SSE connection drops and reconnects within the same session, the config textarea is repopulated with the current server-side draft and saved state.
-
-- **GIVEN** a config file containing `rules = ["fs:ro:/usr/lib"]`
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the user has edited the textarea and started a run with the edited config
-- **WHEN** the SSE connection drops and automatically reconnects
-- **THEN** the textarea is repopulated with the current draft config from the server
-- **AND** the modified indicator reflects whether the draft differs from the saved config
-
-### Use Case: Browser auto-opened to monitor URL
-
-When the user starts execave with `--monitor`, the browser is automatically opened to the monitor URL (including the access token). A `--no-open` flag disables this.
-
-- **GIVEN** a valid config file
+- **GIVEN** a config file containing `rules = ["badprefix:something"]`
 - **WHEN** the user runs `execave --monitor -- ls /usr/lib`
-- **THEN** the server prints the full URL (with token) to stderr
-- **AND** the default browser is opened to that URL
-
-### Use Case: Start a run from the web UI
-
-The user starts a monitored sandbox run from the web UI after the initial CLI-launched run has exited. The run uses the config currently in the textarea.
-
-- **GIVEN** a config with rule `fs:ro:/usr/lib`
-- **AND** the user has started `execave --monitor -- ls /usr/lib`
-- **AND** the initial run has exited
-- **AND** the user has edited the textarea to add `"fs:rw:/tmp"` to the rules
-- **WHEN** the user clicks the "Start" button in the web UI
-- **THEN** a new monitored sandbox run starts with the edited config (including the `fs:rw:/tmp` rule)
-- **AND** the access log is cleared and shows entries from the new run
-- **AND** the run status shows the process as running
-
-### Use Case: Stop a running process from the web UI
-
-The user stops a long-running sandboxed process from the web UI without killing the monitor.
-
-- **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **AND** the user has started `execave --monitor -- long-running-command`
-- **AND** the process is running
-- **WHEN** the user clicks the stop button in the web UI
-- **THEN** the sandboxed process is terminated
-- **AND** the run status shows the process as exited
-- **AND** the web UI remains accessible with the access log entries from the run
-
-### Use Case: Restart replaces the active run
-
-When a process is running, the button shows "Restart" instead of "Start". Clicking it stops the active run and starts a new one using the config currently in the textarea.
-
-- **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **AND** the user has started `execave --monitor -- long-running-command`
-- **AND** the process is running
-- **AND** the user has edited the textarea to change `fs:ro:/home/user/data` to `fs:rw:/home/user/data`
-- **WHEN** the user clicks the "Restart" button in the web UI
-- **THEN** the active process is stopped
-- **AND** a new run starts with the edited config (using `fs:rw:/home/user/data`)
-- **AND** a fresh access log replaces entries from the previous run
-
-### Use Case: Button states update in real-time
-
-The user sees button labels and disabled states update automatically as the run status changes, without refreshing the page.
-
-- **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **AND** the user has started `execave --monitor -- long-running-command`
-- **AND** the process is running
-- **AND** the web UI shows a "Restart" button and an enabled "Stop" button
-- **WHEN** the process exits
-- **THEN** the "Restart" button label changes to "Start" without page refresh
-- **AND** the "Stop" button becomes disabled without page refresh
-
-### Use Case: Access log clears on new run session
-
-When a new run starts, the browser's access log table clears and shows entries from the new run, without a page refresh.
-
-- **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **AND** the user has started `execave --monitor -- ls /home/user/data`
-- **AND** the initial run has exited
-- **AND** the access log table shows entries from the initial run
-- **WHEN** the user starts a new run
-- **THEN** the access log table in the browser is cleared without page refresh
-- **AND** entries from the new run appear in real-time
+- **THEN** execave exits with an error containing "unknown resource type"
+- **AND** no sandbox is started

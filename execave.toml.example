@@ -78,4 +78,5 @@ rules = [
   # Scoped to one directory; everything outside remains inaccessible. The
   # sandboxed process must read and write project files.
   "fs:rw:.",
+  "fs:ro:.git",
 ]

@@ -129,12 +129,12 @@ These **defense-in-depth** syscalls remain in the BPF filter (reducing attack su
 
 ## Log Visibility Rules
 
-`fs:log`/`fs:nolog`, `net:log`/`net:nolog`, and `syscall:nolog` rules control which entries are displayed in the web UI. They are **display-only** and have no effect on:
+`fs:log`/`fs:nolog`, `net:log`/`net:nolog`, and `syscall:nolog` rules control which entries are displayed in text log output. They are **display-only** and have no effect on:
 - Access enforcement (bwrap mounts, proxy allow/deny)
 - The Logger (all entries are stored unconditionally)
 - The sandbox boundary or bwrap invocation
 
-These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress entries does not grant or restrict access to that path; the underlying `fs:ro`/`fs:none`/etc. access rule still applies. Users can always toggle off "Apply nolog rules" in the web UI to see suppressed entries.
+These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress entries does not grant or restrict access to that path; the underlying `fs:ro`/`fs:none`/etc. access rule still applies. Use `--show-nolog` to see suppressed entries.
 
 ## Limitations
 

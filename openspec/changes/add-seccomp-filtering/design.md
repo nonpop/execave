@@ -13,7 +13,6 @@ The seccomp filter must work in both paths.
 **Goals:**
 - Block ~32 dangerous syscalls by default via seccomp-bpf deny-list
 - Provide `--allow-all-syscalls` CLI flag to disable filtering
-- Web UI checkbox to toggle per-run
 - Graceful failure (EPERM, not SIGKILL) for blocked syscalls
 - Support both amd64 and arm64
 
@@ -63,13 +62,7 @@ The fd passes through strace to bwrap because strace fork/exec's its child, and 
 
 **Why**: If it were in config, a process that can modify the config file (despite protection) could disable seccomp for subsequent runs. CLI-only means the user explicitly chooses to relax security at invocation time.
 
-### 6. Web UI checkbox with per-run granularity
-
-**Decision**: Add "Allow all syscalls" checkbox (default off) in the web UI controls. On Start/Restart, the checkbox state is sent as a query parameter `?allow-all-syscalls=1` on POST `/api/start`. The runner has a mutable `SetAllowAllSyscalls(bool)` method.
-
-**Why**: The web UI already supports per-run config changes. The checkbox follows the same pattern as filter checkboxes. Query parameter avoids changing the request body format (which is raw TOML).
-
-### 7. BPF program structure
+### 6. BPF program structure
 
 ```
 LD [4]                        # Load seccomp_data.arch

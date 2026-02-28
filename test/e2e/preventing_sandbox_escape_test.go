@@ -43,12 +43,12 @@ func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t
 
 	s.givenRules("fs:ro:" + mount.String())
 
-	s.whenRunMonitored("cat", hop1)
+	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", hop1)
 
 	s.thenExitCodeNonZero()
-	s.thenWebUIHasEntry("READ", mount.rel("hop1"), "OK", "fs:ro:"+mount.String())
-	s.thenWebUIHasEntry("READ", nomatch.rel("hop2"), "DENY", "no-matching-rule")
-	assert.NotContains(t, s.lastWebUI, secretFile)
+	s.thenStderrHasEntry("READ", mount.rel("hop1"), "OK", "fs:ro:"+mount.String())
+	s.thenStderrHasEntry("READ", nomatch.rel("hop2"), "DENY", "no-matching-rule")
+	s.thenStderrNotContains(secretFile)
 }
 
 // TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented tests that the config file
@@ -112,11 +112,11 @@ func TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
 
 	s.givenRules("fs:ro:" + mount.String())
 
-	s.whenRunMonitored("cat", loopA)
+	s.whenRunTextLog("-", "cat", loopA)
 
 	s.thenExitCodeNonZero()
 	s.thenStderrContains("loop-a: Too many levels of symbolic links")
-	s.thenWebUIHasEntry("DENY", "symlink-depth-limit-exceeded")
+	s.thenStderrHasEntry("DENY", "symlink-depth-limit-exceeded")
 }
 
 // TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary tests that execave

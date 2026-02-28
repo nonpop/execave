@@ -1,5 +1,5 @@
 // Package logfilter provides shared log filtering and display logic
-// for access log consumers (web UI, text log).
+// for access log consumers.
 package logfilter
 
 import (

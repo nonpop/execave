@@ -17,12 +17,3 @@ The user needs to run a program that requires a normally-blocked syscall (e.g., 
 - **WHEN** the user runs `execave --allow-all-syscalls -- <program-that-calls-blocked-syscall>`
 - **THEN** the blocked syscall is not blocked by seccomp (may still fail due to namespace restrictions)
 
-### Use Case: Toggle syscall filtering in web UI
-
-The user is running with the web UI monitor and wants to allow all syscalls for a specific run without restarting execave.
-
-- **GIVEN** the user is running `execave --monitor -- <command>`
-- **AND** the web UI is open
-- **WHEN** the user checks the "Allow all syscalls" checkbox and clicks Start/Restart
-- **THEN** the new run executes without seccomp filtering
-- **AND** unchecking the checkbox and restarting re-enables seccomp filtering

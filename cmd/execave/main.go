@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -21,7 +20,6 @@ import (
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/textlog"
 	"github.com/nonpop/execave/internal/tunnel"
-	"github.com/nonpop/execave/internal/webui"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -40,7 +38,6 @@ func main() {
 func newRootCommand() *cobra.Command {
 	var configPath string
 	var monitor string
-	var noOpen bool
 	var showAllowed bool
 	var showNolog bool
 	cmd := &cobra.Command{
@@ -71,16 +68,15 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitor, noOpen, showAllowed, showNolog)
+			return runCommand(c, args, configPath, monitor, showAllowed, showNolog)
 		},
 	}
 
 	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
-	cmd.Flags().StringVar(&monitor, "monitor", "", "Enable access monitoring. Without a value starts the web UI (opens browser). With a path writes text log to that file. With - writes text log to stderr after process exits.")
-	cmd.Flags().Lookup("monitor").NoOptDefVal = "web"
-	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Do not open the browser when --monitor is enabled")
-	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only). Also sets the initial 'Denied only' checkbox state in web UI mode.")
-	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden). Also sets the initial 'Apply nolog rules' checkbox state in web UI mode.")
+	cmd.Flags().StringVar(&monitor, "monitor", "", "Enable access monitoring. Without a value writes text log to stderr after process exits. With a path writes text log to that file in real-time.")
+	cmd.Flags().Lookup("monitor").NoOptDefVal = "-"
+	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only).")
+	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden).")
 	cmd.AddCommand(newNetworkTunnelCommand())
 
 	return cmd
@@ -120,8 +116,8 @@ func newNetworkTunnelCommand() *cobra.Command {
 	}
 }
 
-func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, noOpen, showAllowed, showNolog bool) error {
-	exitCode, err := runSandboxed(cmd, args, configPath, monitor, noOpen, showAllowed, showNolog)
+func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitor, showAllowed, showNolog)
 	if err != nil {
 		return err
 	}
@@ -129,7 +125,7 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, n
 	return nil
 }
 
-func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, noOpen, showAllowed, showNolog bool) (int, error) {
+func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool) (int, error) {
 	command := extractCommand(cmd, args)
 
 	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
@@ -152,9 +148,8 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 		return 0, fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
 	}
 
-	// Prevent SIGINT from terminating the Go process. This serves two purposes:
-	// 1. In all modes: allows deferred cleanup (terminal restore, proxy shutdown) to run.
-	// 2. In web UI mode: sigCh is read to trigger graceful shutdown after child exits.
+	// Prevent SIGINT from terminating the Go process: allows deferred cleanup
+	// (terminal restore, proxy shutdown) to run.
 	// See fix-sigint-access-log/design.md for why we use signal.Notify instead of signal.Ignore.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
@@ -195,7 +190,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 	}
 
 	if monitorEnabled {
-		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, noOpen, showAllowed, showNolog, sigCh)
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, showAllowed, showNolog)
 	}
 
 	sb := sandbox.New(cfg, absConfigPath, netPath)
@@ -287,7 +282,7 @@ func startProxy(cfg *config.Config) (*sandbox.NetworkPath, *proxy.Proxy, string,
 	return netPath, httpProxy, tmpDir, nil
 }
 
-// logContext holds the log classification resources shared by web UI and text log modes.
+// logContext holds the log classification resources for text log monitoring.
 type logContext struct {
 	homeDir      string
 	configDir    string
@@ -297,9 +292,8 @@ type logContext struct {
 }
 
 // runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring, dispatching to web UI or text log mode.
-func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, noOpen, showAllowed, showNolog bool, sigCh chan os.Signal) (int, error) {
-	// Shared setup
+// access monitoring, writing a text log to monitorMode (file path or "-" for stderr).
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, showAllowed, showNolog bool) (int, error) {
 	rnr := runner.New(cfg, absConfigPath, netPath)
 
 	// Wire logger lifecycle: when the runner creates a fresh logger on each Start,
@@ -326,61 +320,7 @@ func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string,
 		syscallNolog: syscallNolog,
 	}
 
-	if monitorMode == "web" {
-		return runMonitoredWeb(ctx, cfg, absConfigPath, rnr, httpProxy, lctx, command, noOpen, showAllowed, showNolog, sigCh)
-	}
 	return runMonitoredText(ctx, cfg, rnr, lctx, command, monitorMode, showAllowed, showNolog)
-}
-
-// runMonitoredWeb runs the command under strace monitoring with a web UI.
-func runMonitoredWeb(ctx context.Context, cfg *config.Config, absConfigPath string, rnr *runner.Runner, httpProxy *proxy.Proxy, lctx logContext, command []string, noOpen, showAllowed, showNolog bool, sigCh chan os.Signal) (int, error) {
-	// Read raw config file content for the web UI editor
-	configContent, err := os.ReadFile(absConfigPath) // #nosec G304 -- absConfigPath is validated as absolute path
-	if err != nil {
-		return 0, fmt.Errorf("read config %s: %w", absConfigPath, err)
-	}
-
-	server := webui.New(rnr, command, lctx.homeDir, lctx.configDir, absConfigPath, string(configContent), cfg.ManagedPaths, webui.FilterDefaults{ShowAllowed: showAllowed, ShowNolog: showNolog})
-	server.SetLogResolvers(lctx.fsRes, lctx.netRes, lctx.syscallNolog)
-
-	// Wire config changes to update the proxy's net rules resolver
-	server.OnConfigChange = func(newCfg *config.Config) {
-		if httpProxy != nil {
-			httpProxy.SetResolver(netrules.NewAccessResolver(newCfg.NetRules))
-		}
-	}
-
-	if err := server.Start(ctx); err != nil {
-		return 0, fmt.Errorf("start web UI server: %w", err)
-	}
-	url := server.URL()
-	fmt.Fprintf(os.Stderr, "execave: monitor running at %s\n", url)
-	if !noOpen {
-		// Ignore errors: xdg-open may not be available on all systems
-		_ = exec.CommandContext(ctx, "xdg-open", url).Start() // #nosec G204 -- url is constructed from server address and token
-	}
-
-	if err := rnr.Start(ctx, cfg, command); err != nil {
-		return 0, fmt.Errorf("start initial run: %w", err)
-	}
-
-	// Wait for SIGINT
-	<-sigCh
-
-	// Wait for the active run to finish. The child already received SIGINT
-	// via the process group and is dying — don't call Stop() which would
-	// escalate to SIGKILL via context cancellation.
-	statusCh := rnr.Subscribe()
-	for rnr.Status().Running {
-		<-statusCh
-	}
-	rnr.Unsubscribe(statusCh)
-
-	status := rnr.Status()
-	if status.Error != "" {
-		return status.ExitCode, fmt.Errorf("run monitor+sandbox: %s", status.Error)
-	}
-	return status.ExitCode, nil
 }
 
 // runMonitoredText runs the command under strace monitoring with text log output.

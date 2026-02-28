@@ -91,7 +91,7 @@ func Load(path string, managedPaths []string) (*Config, error) {
 // and log rule validation (duplicate paths for fs, duplicate identity and mixed port
 // patterns for net).
 // Use Load when reading from a file; use ParseRules when the rule strings are
-// already in memory (e.g., user-edited draft in the web UI).
+// already in memory.
 func ParseRules(rawRules []string, configDir, configPath string, managedPaths []string) (*Config, error) {
 	if !filepath.IsAbs(configPath) {
 		panic(fmt.Sprintf("ParseRules: configPath must be absolute, got %q", configPath))

@@ -65,6 +65,7 @@ type Runner struct {
 // New creates a new Runner with the given configuration infrastructure.
 //
 // The absConfigPath and netPath are immutable and used for all runs.
+// netPath may be nil when no network proxy/tunnel is configured.
 // The cfg parameter is not stored — it's passed to Start for each run to support
 // future config editing.
 func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath) *Runner {
@@ -74,10 +75,6 @@ func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath)
 	if absConfigPath == "" {
 		panic("New: absConfigPath must not be empty")
 	}
-	if netPath == nil {
-		panic("New: netPath must not be nil")
-	}
-
 	// Save initial terminal state for restoration between runs
 	var initialTermState *term.State
 	stdinFd := int(os.Stdin.Fd())
@@ -170,8 +167,8 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 	// This prevents input typed while stopped from leaking into the new run
 	drainStdin()
 
-	// Inject the auto-detected interpreter path. Configs from web UI reload
-	// (ParseTOML) don't include it — the Runner preserves it from startup.
+	// Inject the auto-detected interpreter path. Configs loaded via ParseTOML
+	// don't include it — the Runner preserves it from startup.
 	cfg.InterpreterPath = r.interpreterPath
 
 	// Create fresh logger and resolver
@@ -265,10 +262,8 @@ func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, comm
 	// Restore terminal state immediately after the child exits.
 	// The child may have left the terminal in raw mode (ISIG disabled),
 	// which prevents Ctrl-C from generating SIGINT. This happens when:
-	// - The stop button kills the child with SIGKILL (no cleanup chance)
+	// - Stop() kills the child with SIGKILL (no cleanup chance)
 	// - The child exits without restoring terminal settings
-	// Without this, the "Press Ctrl-C to exit" prompt is a lie — the user
-	// can't actually Ctrl-C because raw mode swallows it as a byte (0x03).
 	r.restoreTerminal()
 
 	// Clear any TUI artifacts left by the killed process.
@@ -293,8 +288,6 @@ func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, comm
 	} else {
 		fmt.Fprintf(os.Stderr, "\n[execave: process stopped (exit code: %d)]\n", exitCode)
 	}
-	fmt.Fprintf(os.Stderr, "[execave: monitor still running. Press Ctrl-C to exit]\n")
-
 	r.notifyStatus()
 }
 

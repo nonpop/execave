@@ -75,7 +75,7 @@ func TestE2E_TextLog_ShowAllowedIncludesOKEntries(t *testing.T) {
 	s.thenExitCode(0)
 	s.thenStderrNotContains(data.rel("data.txt"))
 
-	s.whenRunTextLogWithFlags("-", []string{"--show-allowed"}, "cat", allowedFile)
+	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", allowedFile)
 
 	s.thenExitCode(0)
 	s.thenStderrContains("OK")
@@ -97,50 +97,26 @@ func TestE2E_TextLog_ShowNologIncludesNologEntries(t *testing.T) {
 	s.thenExitCode(0)
 	s.thenStderrNotContains(project.rel("cache/data.bin"))
 
-	s.whenRunTextLogWithFlags("-", []string{"--show-nolog", "--show-allowed"}, "cat", cacheFile)
+	s.whenRunTextLogWithFlags([]string{"--show-nolog", "--show-allowed"}, "cat", cacheFile)
 
 	s.thenExitCode(0)
 	s.thenStderrContains(project.rel("cache/data.bin"))
 }
 
-// TestE2E_TextLog_BareMonitorStartsWebUI tests that bare --monitor (without a value)
-// still starts the web UI — backward compatibility.
-func TestE2E_TextLog_BareMonitorStartsWebUI(t *testing.T) {
+// TestE2E_TextLog_BareMonitorWritesToStderr tests that bare --monitor (without a value)
+// writes denied entries to stderr after process exits.
+func TestE2E_TextLog_BareMonitorWritesToStderr(t *testing.T) {
 	s := newScenario(t)
+	data := s.givenDir("data")
+	deniedFile := data.file("secret.txt", "secret")
 
-	s.givenRules()
+	s.givenRules("fs:none:" + deniedFile)
 
-	s.whenRunMonitored("true")
+	s.whenRunTextLog("-", "cat", deniedFile)
 
-	s.thenExitCode(0)
-	s.thenStderrContains("monitor running at http://")
-	s.thenWebUIContains("<html")
-}
-
-// TestE2E_TextLog_ShowAllowedSetsWebUICheckboxState tests that --show-allowed sets the
-// "Denied only" checkbox to unchecked in the web UI initial state.
-func TestE2E_TextLog_ShowAllowedSetsWebUICheckboxState(t *testing.T) {
-	s := newScenario(t)
-
-	s.givenRules()
-
-	s.whenRunMonitoredWithFlags([]string{"--show-allowed"}, "true")
-
-	s.thenWebUINotContains(`id="denied-only-checkbox" checked`)
-	s.thenWebUIContains(`id="apply-nolog-checkbox" checked`)
-}
-
-// TestE2E_TextLog_ShowNologSetsWebUICheckboxState tests that --show-nolog sets the
-// "Apply nolog rules" checkbox to unchecked in the web UI initial state.
-func TestE2E_TextLog_ShowNologSetsWebUICheckboxState(t *testing.T) {
-	s := newScenario(t)
-
-	s.givenRules()
-
-	s.whenRunMonitoredWithFlags([]string{"--show-nolog"}, "true")
-
-	s.thenWebUINotContains(`id="apply-nolog-checkbox" checked`)
-	s.thenWebUIContains(`id="denied-only-checkbox" checked`)
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("DENY")
+	s.thenStderrContains(data.rel("secret.txt"))
 }
 
 // TestE2E_TextLog_OutputFormatContainsAllColumns tests that text log lines contain

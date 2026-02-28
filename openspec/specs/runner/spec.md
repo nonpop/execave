@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The runner manages the lifecycle of monitored sandbox executions — starting, stopping, tracking status, and providing the current access log. It enables programmatic run control from the web UI.
+The runner manages the lifecycle of monitored sandbox executions — starting, stopping, tracking status, and providing the current access log.
 
 ## Requirements
 

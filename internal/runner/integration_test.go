@@ -131,7 +131,7 @@ func TestIntegration_AccessLogging_LoggerIsReplacedOnStart(t *testing.T) {
 	env.waitForIdle()
 
 	logger1 := env.runner.Logger()
-	require.NotNil(t, logger1, "First run should have created a logger")
+	require.NotNil(t, logger1)
 
 	// AND Start is called again
 	command2 := []string{"false"}
@@ -211,8 +211,7 @@ func TestIntegration_StatusReporting_StatusReflectsExitState(t *testing.T) {
 	// THEN Status returns Running=false
 	status := env.runner.Status()
 	assert.False(t, status.Running)
-	// ExitCode is set (should ideally be 0 for `true` command, but might be non-zero if sandbox setup fails)
-	t.Logf("Exit code: %d, Error: %s", status.ExitCode, status.Error)
+	assert.Equal(t, 0, status.ExitCode)
 }
 
 // TestIntegration_StatusReporting_StatusReflectsNonZeroExit tests the "Status reflects non-zero exit" scenario.
@@ -374,7 +373,7 @@ func TestIntegration_TerminalManagement_ForegroundReclaimedAfterKilledProcess(t 
 	// - Stop the process
 	// - Verify execave reclaimed the foreground process group
 	// - Verify Ctrl-C (SIGINT) is delivered to execave
-	// Manual test: Run bash in sandbox, stop it via webui, verify Ctrl-C still works
+	// Manual test: Run bash in sandbox, stop it, verify Ctrl-C still works
 }
 
 // runnerTestEnv provides test infrastructure for runner integration tests.
@@ -417,7 +416,7 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 	}
 
 	absConfigPath := filepath.Join(tmpDir, "execave.json")
-	netPath := &sandbox.NetworkPath{UDSPath: "", ExecaveBinary: ""}
+	var netPath *sandbox.NetworkPath
 
 	rnr := runner.New(cfg, absConfigPath, netPath)
 
