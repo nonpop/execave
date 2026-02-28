@@ -36,6 +36,8 @@ const (
 	ResultDeny ResultType = "DENY"
 	// ResultUnknown indicates the result could not be determined (e.g., unresolved relative path).
 	ResultUnknown ResultType = "UNKNOWN"
+	// ResultUnenforced indicates the access was observed but no sandbox enforcement was active.
+	ResultUnenforced ResultType = "UNENFORCED"
 )
 
 const (
@@ -43,6 +45,8 @@ const (
 	RuleUnresolvedRelativePath = "unresolved-relative-path"
 	// RuleNoMatch is used when no matching rule was found for a path.
 	RuleNoMatch = "no-matching-rule"
+	// RuleSeccomp is used for syscalls denied by the active seccomp filter.
+	RuleSeccomp = "seccomp"
 	// RuleSymlinkTargetUnresolvable is used when a symlink chain enters a managed path
 	// where host-side resolution is unreliable (e.g., sandbox tmpfs).
 	RuleSymlinkTargetUnresolvable = "symlink-target-unresolvable"
@@ -57,7 +61,7 @@ type Entry struct {
 	Operation OperationType
 	// Target is the absolute path for filesystem ops, host:port for network ops.
 	Target string
-	// Result is the outcome of the access check (OK, DENY, or UNKNOWN).
+	// Result is the outcome of the access check (OK, DENY, UNKNOWN, or UNENFORCED).
 	Result ResultType
 	// Rule is the rule that matched or a reason string for why access was denied.
 	Rule string
@@ -77,17 +81,21 @@ type Logger struct {
 	entries     []Entry
 	seen        map[accessKey]bool
 	managed     []string
+	unenforced  bool
 	subscribers map[chan struct{}]bool
 }
 
 // New creates a new Logger.
 // managedPaths contains infrastructure paths (/dev, /proc, /tmp) that should not be logged.
-func New(managedPaths []string) *Logger {
+// When unenforced is true, the Result of every logged entry is overridden to ResultUnenforced,
+// regardless of the result supplied by the caller.
+func New(managedPaths []string, unenforced bool) *Logger {
 	return &Logger{
 		mu:          sync.Mutex{},
 		entries:     make([]Entry, 0),
 		seen:        make(map[accessKey]bool),
 		managed:     managedPaths,
+		unenforced:  unenforced,
 		subscribers: make(map[chan struct{}]bool),
 	}
 }
@@ -95,6 +103,7 @@ func New(managedPaths []string) *Logger {
 // Log stores an access log entry if it passes all filters:
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
+// When the logger is in unenforced mode, the entry's Result is overridden to ResultUnenforced.
 // After storing the entry, notifies all subscribers via non-blocking send.
 func (l *Logger) Log(entry Entry) {
 	l.mu.Lock()
@@ -102,6 +111,10 @@ func (l *Logger) Log(entry Entry) {
 
 	if l.isManagedPath(entry.Target) {
 		return
+	}
+
+	if l.unenforced {
+		entry.Result = ResultUnenforced
 	}
 
 	key := accessKey{

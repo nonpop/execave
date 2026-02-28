@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -380,4 +381,171 @@ func TestE2E_MonitoringAccess_FsLogOverridesNolog(t *testing.T) {
 	// Entry appears because log rule overrides nolog
 	s.thenExitCode(0)
 	s.thenStderrHasEntry("READ", project.rel("secret/key.pem"), "OK")
+}
+
+// TestE2E_NoSandbox_UnenforcedEntriesAppearInLog verifies that --no-sandbox --monitor
+// produces UNENFORCED entries (not DENY) for all accesses.
+// TestE2E_MonitoringAccess_ObserveNativeNetworkAccessesWithoutIsolation verifies that in
+// --no-sandbox --monitor mode, proxy-aware network requests are forwarded (not blocked)
+// even when no net rule matches, and logged as UNENFORCED.
+func TestE2E_MonitoringAccess_ObserveNativeNetworkAccessesWithoutIsolation(t *testing.T) {
+	failIfNoStrace(t)
+	s := newScenario(t)
+	s.givenCurl()
+
+	srv := s.givenHTTPServer("NATIVE_NET_OK")
+
+	// No net rules — proxy starts with deny-all, but in no-sandbox mode it must not block.
+	s.givenRules()
+
+	s.whenRunNoSandboxMonitorFile("-",
+		"curl", "-sf", fmt.Sprintf("http://%s/", srv.hostPort()))
+
+	// Request must succeed (not blocked with 403).
+	s.thenExitCode(0)
+	s.thenStdoutContains("NATIVE_NET_OK")
+	// Network access must be logged as UNENFORCED.
+	s.thenStderrHasEntry("HTTP", srv.addr(), "UNENFORCED")
+}
+
+// TestE2E_NoSandbox_UnenforcedEntriesAppearInLog verifies that --no-sandbox --monitor
+// produces UNENFORCED entries (not DENY) for all accesses.
+func TestE2E_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
+	failIfNoStrace(t)
+	s := newScenario(t)
+	data := s.givenDir("data")
+	data.file("allowed.txt", "allowed")
+	blocked := s.givenDir("blocked")
+	blocked.file("secret.txt", "secret")
+
+	// Only allow the data directory; blocked directory has no rule.
+	s.givenRules("fs:ro:" + data.String())
+
+	s.whenRunNoSandboxMonitorFile("-", "cat", blocked.join("secret.txt"))
+
+	// In no-sandbox mode the process is not blocked; cat still reads the file.
+	s.thenExitCode(0)
+	// Result must be UNENFORCED, not DENY — sandbox was not active.
+	s.thenStderrHasEntry("READ", blocked.rel("secret.txt"), "UNENFORCED")
+}
+
+// TestE2E_NoSandbox_WithoutMonitorExitsError verifies that --no-sandbox without
+// --monitor exits with a non-zero code and does not execute the command.
+func TestE2E_NoSandbox_WithoutMonitorExitsError(t *testing.T) {
+	s := newScenario(t)
+	s.givenRules()
+	s.whenRunNoSandbox("true")
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("--no-sandbox requires --monitor")
+}
+
+// TestE2E_NoSandbox_WritesLogToFile verifies that --no-sandbox --monitor=<file>
+// writes the access log to the specified file.
+func TestE2E_NoSandbox_WritesLogToFile(t *testing.T) {
+	failIfNoStrace(t)
+	s := newScenario(t)
+	blocked := s.givenDir("blocked")
+	blocked.file("secret.txt", "secret")
+	s.givenRules()
+
+	logFile := filepath.Join(t.TempDir(), "access.log")
+
+	s.whenRunNoSandboxMonitorFile(logFile, "cat", blocked.join("secret.txt"))
+
+	content, err := os.ReadFile(logFile) //nolint:gosec // test-controlled path
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "UNENFORCED")
+}
+
+// bpfPythonCmd is the python3 one-liner that invokes the bpf syscall (nr 321 on x86_64).
+const bpfPythonCmd = "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"
+
+// bpfRebootPythonCmd invokes bpf and reboot (nr 169) with invalid magic (safe: returns EINVAL).
+const bpfRebootPythonCmd = "import ctypes; l=ctypes.CDLL(None); l.syscall(321,0,0,0); l.syscall(169,0,0,0)"
+
+// requireAMD64 skips the test on non-x86_64 architectures where syscall numbers are different.
+func requireAMD64(t *testing.T) {
+	t.Helper()
+	if runtime.GOARCH != "amd64" {
+		t.Skipf("test requires amd64 (got %s)", runtime.GOARCH)
+	}
+}
+
+// TestE2E_MonitoringAccess_ViewSeccompDeniedSyscallAttemptsInAccessLog tests that when
+// seccomp filtering is active, a blocked syscall attempt appears as a SYSCALL DENY entry.
+func TestE2E_MonitoringAccess_ViewSeccompDeniedSyscallAttemptsInAccessLog(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules()
+
+	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+}
+
+// TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntries tests that
+// SYSCALL entries appear when seccomp is active and disappear with --allow-all-syscalls.
+func TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntries(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules()
+
+	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+
+	s.whenRunTextLogWithFlags([]string{"--allow-all-syscalls"}, "python3", "-c", bpfPythonCmd)
+	s.thenStderrNotContains("SYSCALL")
+}
+
+// TestE2E_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated tests that repeated
+// attempts of the same blocked syscall produce exactly one SYSCALL entry in the log.
+func TestE2E_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules()
+
+	s.whenRunTextLog("-", "python3", "-c",
+		"import ctypes; l=ctypes.CDLL(None); l.syscall(321,0,0,0); l.syscall(321,0,0,0)")
+
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+	var count int
+	for line := range strings.SplitSeq(s.lastResult.Stderr, "\n") {
+		if strings.Contains(line, "SYSCALL") && strings.Contains(line, "bpf") {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count)
+}
+
+// TestE2E_MonitoringAccess_SuppressExpectedSyscallDenialsWithSyscallNolog tests that a
+// syscall:nolog rule hides the DENY entry by default and reveals it with --show-nolog.
+func TestE2E_MonitoringAccess_SuppressExpectedSyscallDenialsWithSyscallNolog(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules("syscall:nolog:bpf")
+
+	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+	s.thenStderrNotContains("bpf")
+
+	s.whenRunTextLogWithFlags([]string{"--show-nolog"}, "python3", "-c", bpfPythonCmd)
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY")
+}
+
+// TestE2E_MonitoringAccess_AllowedSyscallLoggedAsOk tests that a syscall:allow rule causes
+// the syscall to appear as SYSCALL OK when --show-allowed is used.
+func TestE2E_MonitoringAccess_AllowedSyscallLoggedAsOk(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules("syscall:allow:bpf")
+
+	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+	s.thenStderrNotContains("bpf")
+
+	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "python3", "-c", bpfPythonCmd)
+	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "syscall:allow:bpf")
 }

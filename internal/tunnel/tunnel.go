@@ -19,6 +19,34 @@ import (
 	"syscall"
 )
 
+// StartBridge starts a host-side TCP-to-UDS bridge goroutine.
+// udsPath is the path to the proxy's Unix domain socket.
+// Returns the TCP port on 127.0.0.1, a stop function, and any error.
+// The stop function closes the TCP listener and waits for in-flight relays to drain.
+func StartBridge(ctx context.Context, udsPath string) (int, func(), error) {
+	var lc net.ListenConfig
+	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, nil, fmt.Errorf("bind to loopback: %w", err)
+	}
+
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		panic("StartBridge: TCP listener returned non-TCP address")
+	}
+	port := tcpAddr.Port
+
+	var relayWg sync.WaitGroup
+	go acceptLoop(ctx, listener, udsPath, &relayWg)
+
+	stop := func() {
+		_ = listener.Close()
+		relayWg.Wait()
+	}
+
+	return port, stop, nil
+}
+
 // Run starts the tunnel and runs the user command.
 // udsPath is the path to the proxy's Unix domain socket.
 // args is the user command and its arguments.
@@ -28,53 +56,33 @@ func Run(udsPath string, args []string) (int, error) {
 		return 1, errors.New("no command specified")
 	}
 
-	var lc net.ListenConfig
-	listener, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	port, stop, err := StartBridge(context.Background(), udsPath)
 	if err != nil {
-		return 1, fmt.Errorf("bind to loopback: %w", err)
+		return 1, err
 	}
-	defer func() { _ = listener.Close() }()
+	defer stop()
 
-	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		panic("tunnel: TCP listener returned non-TCP address")
-	}
-	port := tcpAddr.Port
 	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-
-	var relayWg sync.WaitGroup
-
-	// Accept connections and relay to UDS
-	go acceptLoop(listener, udsPath, &relayWg)
-
-	exitCode, err := runCommand(args, proxyURL)
-
-	// Close listener to stop accepting new connections
-	_ = listener.Close()
-
-	// Wait for in-flight relays to complete
-	relayWg.Wait()
-
-	return exitCode, err
+	return runCommand(args, proxyURL)
 }
 
-func acceptLoop(listener net.Listener, udsPath string, wg *sync.WaitGroup) {
+func acceptLoop(ctx context.Context, listener net.Listener, udsPath string, wg *sync.WaitGroup) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
 		wg.Go(func() {
-			relayToUDS(conn, udsPath)
+			relayToUDS(ctx, conn, udsPath)
 		})
 	}
 }
 
-func relayToUDS(tcpConn net.Conn, udsPath string) {
+func relayToUDS(ctx context.Context, tcpConn net.Conn, udsPath string) {
 	defer func() { _ = tcpConn.Close() }()
 
 	var dialer net.Dialer
-	udsConn, err := dialer.DialContext(context.Background(), "unix", udsPath)
+	udsConn, err := dialer.DialContext(ctx, "unix", udsPath)
 	if err != nil {
 		return
 	}

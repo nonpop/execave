@@ -359,6 +359,26 @@ func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	s.lastResult = &result
 }
 
+// whenRunNoSandbox executes execave with --no-sandbox but without --monitor.
+func (s *scenario) whenRunNoSandbox(args ...string) {
+	s.t.Helper()
+	execArgs := make([]string, 0, 4+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--no-sandbox", "--")
+	execArgs = append(execArgs, args...)
+	result := runExecave(s.t, "", execArgs...)
+	s.lastResult = &result
+}
+
+// whenRunNoSandboxMonitorFile executes execave with --no-sandbox --monitor=<file>.
+func (s *scenario) whenRunNoSandboxMonitorFile(monitorFile string, args ...string) {
+	s.t.Helper()
+	execArgs := make([]string, 0, 5+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "--no-sandbox", "--monitor="+monitorFile, "--")
+	execArgs = append(execArgs, args...)
+	result := runExecave(s.t, "", execArgs...)
+	s.lastResult = &result
+}
+
 // givenCurl fails the test if curl is not available.
 func (s *scenario) givenCurl() {
 	s.t.Helper()

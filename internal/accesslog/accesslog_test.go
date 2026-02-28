@@ -12,7 +12,7 @@ import (
 )
 
 func TestLogger_LogEntry(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -32,7 +32,7 @@ func TestLogger_LogEntry(t *testing.T) {
 }
 
 func TestLogger_ConcurrentAccess(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	const numGoroutines = 10
 	const entriesPerGoroutine = 20
@@ -77,7 +77,7 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 }
 
 func TestLogger_Deduplication(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -101,7 +101,7 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 	err := os.WriteFile(testFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
-	logger := New(nil)
+	logger := New(nil, false)
 
 	readEntry := Entry{
 		Operation: OperationRead,
@@ -156,7 +156,7 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create new logger for each test to avoid deduplication issues
-			logger := New(managedPaths)
+			logger := New(managedPaths, false)
 
 			entry := Entry{
 				Operation: OperationRead,
@@ -179,7 +179,7 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 
 func TestLogger_NonExistentReadLogged(t *testing.T) {
 	tmpDir := t.TempDir()
-	logger := New(nil)
+	logger := New(nil, false)
 
 	// File that doesn't exist — logger logs it regardless.
 	// Non-existent path filtering is the resolver/monitor's responsibility.
@@ -204,7 +204,7 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 	err := os.WriteFile(existingFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -221,7 +221,7 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 
 func TestIsManagedPath(t *testing.T) {
 	managedPaths := []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
-	logger := New(managedPaths)
+	logger := New(managedPaths, false)
 
 	tests := []struct {
 		name     string
@@ -263,7 +263,7 @@ func TestIsManagedPath(t *testing.T) {
 }
 
 func TestLogger_LogFormat(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationWrite,
@@ -283,7 +283,7 @@ func TestLogger_LogFormat(t *testing.T) {
 }
 
 func TestLogger_HTTPSEntry(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -303,7 +303,7 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 }
 
 func TestLogger_HTTPEntry(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -321,7 +321,7 @@ func TestLogger_HTTPEntry(t *testing.T) {
 }
 
 func TestLogger_HTTPSDenied(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -341,7 +341,7 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 }
 
 func TestLogger_HTTPSDeduplication(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -360,7 +360,7 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 }
 
 func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	// CONNECT and plain HTTP to the same host:port now both log as OperationHTTP.
 	// A second identical entry (same operation, target, result) deduplicates.
@@ -379,7 +379,7 @@ func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
 }
 
 func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
-	logger := New([]string{"/dev", "/proc", "/tmp"})
+	logger := New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -394,7 +394,7 @@ func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
 }
 
 func TestLogger_SyscallEntryLogged(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -414,7 +414,7 @@ func TestLogger_SyscallEntryLogged(t *testing.T) {
 }
 
 func TestLogger_SyscallEntryDeduplicated(t *testing.T) {
-	logger := New(nil)
+	logger := New(nil, false)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -430,7 +430,7 @@ func TestLogger_SyscallEntryDeduplicated(t *testing.T) {
 }
 
 func TestLogger_SyscallEntryNotFilteredByManagedPaths(t *testing.T) {
-	logger := New([]string{"/dev", "/proc", "/tmp"})
+	logger := New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -465,7 +465,7 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 			err := os.WriteFile(testFile, []byte("test"), 0o600)
 			require.NoError(t, err)
 
-			logger := New(nil)
+			logger := New(nil, false)
 
 			entry := Entry{
 				Operation: OperationWrite, // Use WRITE so non-existent path filtering doesn't apply

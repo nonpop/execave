@@ -1829,7 +1829,7 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 		ManagedPaths:      nil,
 		InterpreterPath:   "",
 	}
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	stracePath, err := sandbox.ResolveStrace()
@@ -1838,7 +1838,7 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 	blocked := map[string]bool{"bpf": true}
 	seccompFile, err := seccomp.FilterPipe(nil)
 	require.NoError(t, err)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, nil)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, nil, nil)
 
 	// Python invokes the bpf syscall (nr 321 on x86_64) which is in our blocked set.
 	// Without bwrap the seccomp filter is not applied, but strace still emits the
@@ -1854,7 +1854,7 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 		if e.Operation == accesslog.OperationSyscall && e.Target == "bpf" {
 			found = true
 			assert.Equal(t, accesslog.ResultDeny, e.Result)
-			assert.Equal(t, accesslog.RuleNoMatch, e.Rule)
+			assert.Equal(t, accesslog.RuleSeccomp, e.Rule)
 		}
 	}
 	assert.True(t, found)
@@ -1881,7 +1881,7 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 		ManagedPaths:      nil,
 		InterpreterPath:   "",
 	}
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	stracePath, err := sandbox.ResolveStrace()
@@ -1893,7 +1893,7 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 	allowed := map[string]bool{"bpf": true}
 	seccompFile, err := seccomp.FilterPipe(allowed)
 	require.NoError(t, err)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, allowed)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, allowed, nil)
 
 	exitCode, err := mon.Run(context.Background(), []string{
 		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",
@@ -1945,13 +1945,13 @@ func TestIntegration_BwrapSetupPhaseDetection_SetupPhaseLinesSkippedUntilUserCom
 		ManagedPaths:      nil,
 		InterpreterPath:   "",
 	}
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	sb := sandbox.New(cfg, "", nil)
 	bwrapArgs := sb.BuildBwrapArgs([]string{"cat", testFile})
 
-	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, false, nil, nil, nil)
+	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, false, nil, nil, nil, nil)
 
 	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
 	require.NoError(t, err)
@@ -2008,7 +2008,7 @@ func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProduces
 		ManagedPaths:      nil,
 		InterpreterPath:   "",
 	}
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	sb := sandbox.New(cfg, "", nil)
@@ -2017,7 +2017,7 @@ func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProduces
 	// hasNetworkPath=true expects 3 execves, but no tunnel is configured
 	// in bwrapArgs, so only 2 execves occur (bwrap + user command).
 	// The monitor must still produce entries despite the incomplete chain.
-	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, true, nil, nil, nil)
+	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, true, nil, nil, nil, nil)
 
 	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
 	require.NoError(t, err)
@@ -2035,4 +2035,61 @@ func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProduces
 		}
 	}
 	assert.True(t, foundTestFile)
+}
+
+// --- Requirement: Extra environment injection ---
+
+func TestIntegration_ExtraEnvInjection_InjectedVarsAppearInTracedCommand(t *testing.T) {
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		FSRules:           nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "",
+	}
+	logger := accesslog.New(nil, false)
+	resolver := fsrules.NewAccessResolver(nil, nil)
+	extraEnv := []string{"EXECAVE_TEST_INJECTED=hello123"}
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil, extraEnv)
+
+	// The traced command prints the env var; if injected, it exits 0
+	exitCode, err := mon.Run(context.Background(), []string{"sh", "-c", `test "$EXECAVE_TEST_INJECTED" = "hello123"`})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	_ = cfg
+}
+
+func TestIntegration_ExtraEnvInjection_NilExtraEnvInheritsParentEnv(t *testing.T) {
+	stracePath, err := sandbox.ResolveStrace()
+	require.NoError(t, err)
+
+	t.Setenv("EXECAVE_TEST_PARENT_VAR", "parentval")
+
+	cfg := &config.Config{
+		FSRules:           nil,
+		NetRules:          nil,
+		FSLogRules:        nil,
+		NetLogRules:       nil,
+		SyscallAllowRules: nil,
+		SyscallNologRules: nil,
+		ManagedPaths:      nil,
+		InterpreterPath:   "",
+	}
+	logger := accesslog.New(nil, false)
+	resolver := fsrules.NewAccessResolver(nil, nil)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil, nil)
+
+	// With nil extraEnv, the command inherits parent env unchanged
+	exitCode, err := mon.Run(context.Background(), []string{"sh", "-c", `test "$EXECAVE_TEST_PARENT_VAR" = "parentval"`})
+	require.NoError(t, err)
+	assert.Equal(t, 0, exitCode)
+
+	_ = cfg
 }

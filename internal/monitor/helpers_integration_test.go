@@ -31,9 +31,9 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 
 	cfg := setupConfig(tmpDir)
 
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil)
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil, nil)
 
 	return &monitorTestEnv{
 		t:      t,

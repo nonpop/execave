@@ -11,7 +11,7 @@ import (
 // --- Requirement: Log format ---
 
 func TestIntegration_LogFormat_AllowedReadLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -29,7 +29,7 @@ func TestIntegration_LogFormat_AllowedReadLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_DeniedWriteLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationWrite,
@@ -47,7 +47,7 @@ func TestIntegration_LogFormat_DeniedWriteLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_NoAccessRuleLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -65,7 +65,7 @@ func TestIntegration_LogFormat_NoAccessRuleLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_NoMatchingRuleLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -83,7 +83,7 @@ func TestIntegration_LogFormat_NoMatchingRuleLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_UnresolvedRelativePathLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -101,7 +101,7 @@ func TestIntegration_LogFormat_UnresolvedRelativePathLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_AllowedHttpsRequestLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
@@ -119,7 +119,7 @@ func TestIntegration_LogFormat_AllowedHttpsRequestLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_DeniedHttpsRequestLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
@@ -137,7 +137,7 @@ func TestIntegration_LogFormat_DeniedHttpsRequestLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_AllowedHttpRequestLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
@@ -155,7 +155,7 @@ func TestIntegration_LogFormat_AllowedHttpRequestLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_DeniedHttpRequestLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
@@ -175,7 +175,7 @@ func TestIntegration_LogFormat_DeniedHttpRequestLogged(t *testing.T) {
 // --- Requirement: Log format (SYSCALL) ---
 
 func TestIntegration_LogFormat_SeccompDeniedSyscallLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationSyscall,
@@ -193,7 +193,7 @@ func TestIntegration_LogFormat_SeccompDeniedSyscallLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_AllowedSyscallLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationSyscall,
@@ -211,7 +211,7 @@ func TestIntegration_LogFormat_AllowedSyscallLogged(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_SyscallEntriesDeduplicated(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationSyscall,
@@ -226,7 +226,7 @@ func TestIntegration_LogFormat_SyscallEntriesDeduplicated(t *testing.T) {
 }
 
 func TestIntegration_LogFormat_SyscallEntriesNotFilteredByManagedPaths(t *testing.T) {
-	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationSyscall,
@@ -243,7 +243,7 @@ func TestIntegration_LogFormat_SyscallEntriesNotFilteredByManagedPaths(t *testin
 // --- Requirement: Log deduplication ---
 
 func TestIntegration_LogDeduplication_RepeatedReadsDeduplicated(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -259,7 +259,7 @@ func TestIntegration_LogDeduplication_RepeatedReadsDeduplicated(t *testing.T) {
 }
 
 func TestIntegration_LogDeduplication_ReadAndWriteBothLogged(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -278,7 +278,7 @@ func TestIntegration_LogDeduplication_ReadAndWriteBothLogged(t *testing.T) {
 }
 
 func TestIntegration_LogDeduplication_RepeatedHttpsRequestsDeduplicated(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationHTTP,
@@ -294,7 +294,7 @@ func TestIntegration_LogDeduplication_RepeatedHttpsRequestsDeduplicated(t *testi
 }
 
 func TestIntegration_LogDeduplication_RepeatedWritesDeduplicated(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 
 	entry := accesslog.Entry{
 		Operation: accesslog.OperationWrite,
@@ -312,7 +312,7 @@ func TestIntegration_LogDeduplication_RepeatedWritesDeduplicated(t *testing.T) {
 // --- Requirement: Infrastructure path filtering ---
 
 func TestIntegration_InfrastructurePathFiltering_InfrastructurePathsNotLogged(t *testing.T) {
-	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -325,7 +325,7 @@ func TestIntegration_InfrastructurePathFiltering_InfrastructurePathsNotLogged(t 
 }
 
 func TestIntegration_InfrastructurePathFiltering_InfrastructureWritesNotLogged(t *testing.T) {
-	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationWrite,
@@ -338,7 +338,7 @@ func TestIntegration_InfrastructurePathFiltering_InfrastructureWritesNotLogged(t
 }
 
 func TestIntegration_InfrastructurePathFiltering_NonInfrastructurePathsStillLogged(t *testing.T) {
-	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"})
+	logger := accesslog.New([]string{"/dev", "/proc", "/tmp"}, false)
 
 	logger.Log(accesslog.Entry{
 		Operation: accesslog.OperationRead,
@@ -350,4 +350,51 @@ func TestIntegration_InfrastructurePathFiltering_NonInfrastructurePathsStillLogg
 	entries := logger.Entries()
 	require.Len(t, entries, 1)
 	assert.Equal(t, "/usr/bin/bash", entries[0].Target)
+}
+
+// --- Requirement: Unenforced mode ---
+
+func TestIntegration_UnenforcedMode_ResultOverriddenToUnenforced(t *testing.T) {
+	logger := accesslog.New(nil, true)
+
+	logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/file.txt",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	})
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.ResultUnenforced, entries[0].Result)
+}
+
+func TestIntegration_UnenforcedMode_OKResultOverriddenToUnenforced(t *testing.T) {
+	logger := accesslog.New(nil, true)
+
+	logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationHTTP,
+		Target:    "api.example.com:443",
+		Result:    accesslog.ResultOK,
+		Rule:      "net:http:api.example.com:443",
+	})
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.ResultUnenforced, entries[0].Result)
+}
+
+func TestIntegration_NormalMode_ResultPreserved(t *testing.T) {
+	logger := accesslog.New(nil, false)
+
+	logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/file.txt",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	})
+
+	entries := logger.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
 }

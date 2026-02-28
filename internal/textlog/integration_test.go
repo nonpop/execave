@@ -20,7 +20,7 @@ func runWriterWithBuf(t *testing.T, showAllowed, showNolog bool, fsRes *fsrules.
 	var buf bytes.Buffer
 	wtr := textlog.New(&buf, "/home/user", "/home/user/project", showAllowed, showNolog, fsRes, nil, nil)
 
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan error, 1)
@@ -124,7 +124,7 @@ func TestIntegration_TextLog_FinalDrainOnContextCancellation(t *testing.T) {
 	var buf bytes.Buffer
 	wtr := textlog.New(&buf, "", "", true, false, nil, nil, nil)
 
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 	ctx, cancel := context.WithCancel(t.Context())
 
 	// Cancel before writing entries to verify final drain picks them up
@@ -157,4 +157,67 @@ func TestIntegration_TextLog_OutputFormatContainsAllColumns(t *testing.T) {
 	assert.Contains(t, lines[0], "READ")
 	assert.Contains(t, lines[0], "/etc/secret")
 	assert.Contains(t, lines[0], "(no-matching-rule)")
+}
+
+// --- UNENFORCED result handling ---
+
+func TestIntegration_TextLog_UnenforcedEntryFormattedCorrectly(t *testing.T) {
+	var buf bytes.Buffer
+	wtr := textlog.New(&buf, "/home/user", "/home/user/project", false, false, nil, nil, nil)
+
+	logger := accesslog.New(nil, true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- wtr.Run(ctx, logger)
+	}()
+
+	logger.Log(accesslog.Entry{
+		Operation: accesslog.OperationRead,
+		Target:    "/home/user/.ssh/id_rsa",
+		Result:    accesslog.ResultDeny,
+		Rule:      accesslog.RuleNoMatch,
+	})
+
+	cancel()
+	require.NoError(t, <-done)
+
+	out := buf.String()
+	assert.Contains(t, out, "UNENFORCED")
+	assert.Contains(t, out, "READ")
+	assert.Contains(t, out, "~/.ssh/id_rsa")
+}
+
+func TestIntegration_TextLog_UnenforcedEntryShownWhenShowAllowedFalse(t *testing.T) {
+	entries := []accesslog.Entry{
+		{Operation: accesslog.OperationRead, Target: "/usr/bin/cat", Result: accesslog.ResultOK, Rule: "fs:ro:/usr"},
+		{Operation: accesslog.OperationRead, Target: "/etc/secret", Result: accesslog.ResultDeny, Rule: accesslog.RuleNoMatch},
+		{Operation: accesslog.OperationRead, Target: "/home/user/file.txt", Result: accesslog.ResultDeny, Rule: accesslog.RuleNoMatch},
+	}
+
+	// Build the logger in unenforced mode — all entries become UNENFORCED.
+	var buf bytes.Buffer
+	wtr := textlog.New(&buf, "/home/user", "/home/user/project", false, false, nil, nil, nil)
+
+	logger := accesslog.New(nil, true)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- wtr.Run(ctx, logger)
+	}()
+
+	for _, e := range entries {
+		logger.Log(e)
+	}
+
+	cancel()
+	require.NoError(t, <-done)
+
+	out := buf.String()
+	// All three UNENFORCED entries must appear even with showAllowed=false.
+	assert.Contains(t, out, "/usr/bin/cat")
+	assert.Contains(t, out, "/etc/secret")
+	assert.Contains(t, out, "file.txt")
+	assert.NotContains(t, out, string(accesslog.ResultOK))
+	assert.NotContains(t, out, string(accesslog.ResultDeny))
 }

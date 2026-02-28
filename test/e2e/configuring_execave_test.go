@@ -200,3 +200,73 @@ rules = [
 	s.thenExitCode(0)
 	s.thenStdoutContains("hello")
 }
+
+// TestE2E_ConfiguringExecave_SelectivelyAllowABlockedSyscall tests that syscall:allow
+// permits a specific blocked syscall, which then returns a kernel error (not EPERM from seccomp).
+func TestE2E_ConfiguringExecave_SelectivelyAllowABlockedSyscall(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules("syscall:allow:bpf")
+
+	// With syscall:allow:bpf the seccomp filter passes bpf through; the kernel returns EINVAL
+	// (invalid args), not EPERM (which would indicate seccomp denial).
+	s.whenRun("python3", "-c",
+		"import ctypes,ctypes.util;lib=ctypes.CDLL(ctypes.util.find_library('c'),use_errno=True);lib.syscall(321,0,0,0);print(ctypes.get_errno())")
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("22") // EINVAL, not 1 (EPERM from seccomp)
+}
+
+// TestE2E_ConfiguringExecave_InvalidSyscallNameRejectedAtConfigParse tests that a misspelled
+// syscall name in a syscall:allow rule causes execave to exit with an error.
+func TestE2E_ConfiguringExecave_InvalidSyscallNameRejectedAtConfigParse(t *testing.T) {
+	result := runExecave(t, "", "--config", writeConfig(t, []string{"syscall:allow:ptraec"}), "--", "ls")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "ptraec")
+}
+
+// TestE2E_ConfiguringExecave_DefenseInDepthSyscallRejectedAtConfigParse tests that a syscall
+// already blocked by the kernel inside the sandbox (defense-in-depth) is rejected at parse time.
+func TestE2E_ConfiguringExecave_DefenseInDepthSyscallRejectedAtConfigParse(t *testing.T) {
+	result := runExecave(t, "", "--config", writeConfig(t, []string{"syscall:allow:syslog"}), "--", "ls")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "syslog")
+}
+
+// TestE2E_ConfiguringExecave_MultipleSyscallRules tests that multiple syscall:allow rules
+// can coexist and each permitted syscall appears as OK in the access log.
+func TestE2E_ConfiguringExecave_MultipleSyscallRules(t *testing.T) {
+	requireAMD64(t)
+	s := newScenario(t)
+	s.givenPython3()
+	s.givenRules("syscall:allow:bpf", "syscall:allow:reboot")
+
+	// Invoke both syscalls; reboot uses invalid magic (0,0,0) so it returns EINVAL, not actually rebooting.
+	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "python3", "-c", bpfRebootPythonCmd)
+
+	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "syscall:allow:bpf")
+	s.thenStderrHasEntry("SYSCALL", "reboot", "OK", "syscall:allow:reboot")
+}
+
+// TestE2E_ConfiguringExecave_DuplicateSyscallAllowRulesRejected tests that duplicate
+// syscall:allow rules are rejected with an error at config parse time.
+func TestE2E_ConfiguringExecave_DuplicateSyscallAllowRulesRejected(t *testing.T) {
+	rules := []string{"syscall:allow:ptrace", "syscall:allow:ptrace"}
+	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "ls")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "duplicate")
+}
+
+// TestE2E_ConfiguringExecave_DuplicateSyscallNologRulesRejected tests that duplicate
+// syscall:nolog rules are rejected with an error at config parse time.
+func TestE2E_ConfiguringExecave_DuplicateSyscallNologRulesRejected(t *testing.T) {
+	rules := []string{"syscall:nolog:ptrace", "syscall:nolog:ptrace"}
+	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "ls")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "duplicate")
+}

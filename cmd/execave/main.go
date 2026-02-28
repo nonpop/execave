@@ -40,6 +40,7 @@ func newRootCommand() *cobra.Command {
 	var monitor string
 	var showAllowed bool
 	var showNolog bool
+	var noSandbox bool
 	cmd := &cobra.Command{
 		Use:   "execave [flags] [--] <command>",
 		Short: "Filesystem sandbox for command execution",
@@ -68,7 +69,7 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitor, showAllowed, showNolog)
+			return runCommand(c, args, configPath, monitor, showAllowed, showNolog, noSandbox)
 		},
 	}
 
@@ -77,6 +78,7 @@ Wraps command execution with bubblewrap to enforce filesystem access rules.`,
 	cmd.Flags().Lookup("monitor").NoOptDefVal = "-"
 	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only).")
 	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden).")
+	cmd.Flags().BoolVar(&noSandbox, "no-sandbox", false, "Run without bwrap sandbox (strace monitoring only). Requires --monitor.")
 	cmd.AddCommand(newNetworkTunnelCommand())
 
 	return cmd
@@ -116,8 +118,8 @@ func newNetworkTunnelCommand() *cobra.Command {
 	}
 }
 
-func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool) error {
-	exitCode, err := runSandboxed(cmd, args, configPath, monitor, showAllowed, showNolog)
+func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool, noSandbox bool) error {
+	exitCode, err := runSandboxed(cmd, args, configPath, monitor, showAllowed, showNolog, noSandbox)
 	if err != nil {
 		return err
 	}
@@ -125,8 +127,12 @@ func runCommand(cmd *cobra.Command, args []string, configPath, monitor string, s
 	return nil
 }
 
-func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool) (int, error) {
+func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string, showAllowed, showNolog bool, noSandbox bool) (int, error) {
 	command := extractCommand(cmd, args)
+
+	if noSandbox && monitor == "" {
+		return 0, errors.New("--no-sandbox requires --monitor")
+	}
 
 	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
 	// bwrap is mandatory and re-validated at sandbox launch; if unavailable
@@ -181,7 +187,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 
 	monitorEnabled := monitor != ""
 
-	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, monitorEnabled)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, monitorEnabled, noSandbox)
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +196,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 	}
 
 	if monitorEnabled {
-		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, showAllowed, showNolog)
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, showAllowed, showNolog, noSandbox)
 	}
 
 	sb := sandbox.New(cfg, absConfigPath, netPath)
@@ -231,12 +237,13 @@ func extractCommand(cmd *cobra.Command, args []string) []string {
 // setupNetworking initializes the proxy and network path if net rules are present
 // or if monitoring is enabled. When monitoring is enabled without net rules, the
 // proxy starts with an empty rule set (deny-all) so that HTTP-proxy-aware
-// programs' network access attempts are logged.
-func setupNetworking(cfg *config.Config, monitorEnabled bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
+// programs' network access attempts are logged. When noSandbox is true, the proxy
+// does not block connections — rules are evaluated for logging only.
+func setupNetworking(cfg *config.Config, monitorEnabled bool, noSandbox bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
 	if !cfg.HasNetRules() && !monitorEnabled {
 		return nil, nil, nil, nil
 	}
-	netPath, proxyInstance, tmpDir, err := startProxy(cfg)
+	netPath, proxyInstance, tmpDir, err := startProxy(cfg, noSandbox)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -251,7 +258,7 @@ func setupNetworking(cfg *config.Config, monitorEnabled bool) (*sandbox.NetworkP
 	return netPath, proxyInstance, cleanup, nil
 }
 
-func startProxy(cfg *config.Config) (*sandbox.NetworkPath, *proxy.Proxy, string, error) {
+func startProxy(cfg *config.Config, noEnforce bool) (*sandbox.NetworkPath, *proxy.Proxy, string, error) {
 	tmpDir, err := os.MkdirTemp("", "execave-proxy-*")
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("create proxy temp dir: %w", err)
@@ -261,6 +268,7 @@ func startProxy(cfg *config.Config) (*sandbox.NetworkPath, *proxy.Proxy, string,
 
 	netResolver := netrules.NewAccessResolver(cfg.NetRules)
 	httpProxy := proxy.New(netResolver, nil)
+	httpProxy.SetNoEnforce(noEnforce)
 
 	if err := httpProxy.Start(udsPath); err != nil {
 		_ = os.RemoveAll(tmpDir)
@@ -291,10 +299,11 @@ type logContext struct {
 	syscallNolog map[string]bool
 }
 
-// runMonitored runs the command inside a sandbox with strace-based filesystem
-// access monitoring, writing a text log to monitorMode (file path or "-" for stderr).
-func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, showAllowed, showNolog bool) (int, error) {
-	rnr := runner.New(cfg, absConfigPath, netPath)
+// runMonitored runs the command under strace-based filesystem access monitoring.
+// When noSandbox is true, bwrap and seccomp are skipped; when false the command
+// runs inside the bwrap sandbox as usual.
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, showAllowed, showNolog bool, noSandbox bool) (int, error) {
+	rnr := runner.New(cfg, absConfigPath, netPath, noSandbox)
 
 	// Wire logger lifecycle: when the runner creates a fresh logger on each Start,
 	// update the proxy so network access entries go to the same logger.

@@ -42,6 +42,7 @@ type Proxy struct {
 	wg        sync.WaitGroup
 	server    *http.Server
 	transport *http.Transport
+	noEnforce bool // when true, rules are evaluated for logging only; all connections are forwarded
 }
 
 // New creates a new Proxy with the given net rules resolver and access logger.
@@ -59,6 +60,7 @@ func New(resolver *netrules.AccessResolver, logger *accesslog.Logger) *Proxy {
 		wg:        sync.WaitGroup{},
 		server:    nil,
 		transport: &http.Transport{},
+		noEnforce: false,
 	}
 	proxy.resolver.Store(resolver)
 	if logger != nil {
@@ -80,6 +82,13 @@ func (p *Proxy) SetResolver(resolver *netrules.AccessResolver) {
 // logger may be nil to disable access logging.
 func (p *Proxy) SetLogger(logger *accesslog.Logger) {
 	p.logger.Store(logger)
+}
+
+// SetNoEnforce configures whether the proxy enforces access rules.
+// When true, rules are evaluated for logging only; all connections are forwarded regardless of result.
+// Must be called before Start.
+func (p *Proxy) SetNoEnforce(noEnforce bool) {
+	p.noEnforce = noEnforce
 }
 
 // Start creates the UDS at the given path and begins accepting connections.
@@ -150,7 +159,7 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
 	p.logAccess(accesslog.OperationHTTP, r.Host, result)
 
-	if !result.Allowed {
+	if !result.Allowed && !p.noEnforce {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -200,7 +209,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
 	p.logAccess(accesslog.OperationHTTP, hostPort, result)
 
-	if !result.Allowed {
+	if !result.Allowed && !p.noEnforce {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}

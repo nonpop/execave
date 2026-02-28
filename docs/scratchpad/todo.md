@@ -1,5 +1,9 @@
 # execave TODOs
 
+- --no-sandbox should have a way of logging only those entries which would be denied
+- bells don't get through the sandbox?
+- actually do log noncustomizable syscalls, too. But when added to config, error with "kernel won't allow in sandboxes". Allow in syscall:nolog, though.
+
 ## easy, probably
 
 - config sections [fs], [net], ...

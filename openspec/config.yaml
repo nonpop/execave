@@ -8,6 +8,7 @@ context: |
   Binary validation: bwrap and strace resolved via PATH are validated at startup — Lstat checks root ownership (uid 0) on the path entry itself (blocks symlink injection), Stat checks root ownership and not group/world-writable (mode & 0022 == 0) on the resolved target. Hard error on failure. Both are validated because strace runs outside the sandbox with full host access.
   Network: Default-deny (no NIC). When net rules present or monitoring enabled: forward proxy on UDS + TCP-to-UDS tunnel bridge. Proxy enforces allowlist (deny-all with no net rules).
   Monitoring: --monitor modes: (default=- stderr) =<path> writes text log in real-time; =- buffers to stderr on exit; bare --monitor behaves as --monitor=-. Runner creates fresh access log per run. Paths shortened via logfilter.ShortenPath (relative to config dir or tilde form).
+  No-sandbox mode: --no-sandbox (requires --monitor) skips bwrap and seccomp entirely; strace traces the command directly on the host. When netPath is non-nil, a host-side TCP bridge is started and HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy injected into the traced process's environment. Intended for diagnostic use (observing accesses without confinement). Not a security boundary.
   Filter flags: --show-allowed includes OK entries (default: denied-only). --show-nolog includes nolog-rule entries (default: hidden). Applied to text log output at startup.
   E2E tests: scenario DSL in test/e2e/helpers_test.go — newScenario(t) creates a builder with dir/file/rule/run/assert methods. testDir named string enables rule concatenation and ~/‑relative paths for monitor assertions.
   Log visibility rules: fs:log/fs:nolog, net:log/net:nolog, and syscall:nolog control display filtering (display-only, no security impact). Default (no match) = show. All entries stored in Logger regardless of log rules.
@@ -44,3 +45,4 @@ rules:
     - "E2E tests for new use cases, integration tests for new spec scenarios. If scenarios or use-cases have changed/removed, update corresponding existing tests."
     - "Follow docs/error-handling.md. Config format breaks need migration examples."
     - "When adding fuzz tests or changing code covered by existing ones, run affected fuzz targets for at least 30 seconds to catch regressions."
+    - "Modifying use cases requires updating the corresponding E2E tests. Removing a use case requires removing the corresponding E2E test."

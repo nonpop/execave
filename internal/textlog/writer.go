@@ -3,7 +3,7 @@
 //
 // Filtering: by default, OK entries are hidden (denied-only) and entries matching
 // nolog rules are hidden. Both behaviours can be overridden via showAllowed and
-// showNolog constructor parameters.
+// showNolog constructor parameters. UNENFORCED entries are always shown.
 package textlog
 
 import (
@@ -96,12 +96,12 @@ func (w *Writer) writeIfVisible(entry accesslog.Entry) error {
 }
 
 // formatEntry formats a single entry as a line of text.
-// Format: %-7s %-5s  %s  (%s)
-// Example: DENY    READ   ~/.ssh/id_rsa  (no-matching-rule).
+// Format: %-10s %-7s  %s  (%s)
+// Example: UNENFORCED READ     ~/.ssh/id_rsa  (no-matching-rule).
 func (w *Writer) formatEntry(entry accesslog.Entry) string {
 	target := entry.Target
 	if (entry.Operation == accesslog.OperationRead || entry.Operation == accesslog.OperationWrite) && filepath.IsAbs(target) {
 		target = logfilter.ShortenPath(target, w.homeDir, w.configDir)
 	}
-	return fmt.Sprintf("%-7s %-5s  %s  (%s)", entry.Result, entry.Operation, target, entry.Rule)
+	return fmt.Sprintf("%-10s %-7s  %s  (%s)", entry.Result, entry.Operation, target, entry.Rule)
 }

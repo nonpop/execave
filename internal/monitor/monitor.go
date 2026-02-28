@@ -37,9 +37,10 @@ type Monitor struct {
 	logger          *accesslog.Logger
 	bwrapArgs       []string        // strace wraps bwrap
 	hasNetworkPath  bool            // tunnel adds an extra execve to setup
-	seccompFile     *os.File        // seccomp filter fd; nil means no filtering
-	blockedSyscalls map[string]bool // syscalls still blocked by seccomp (non-nil when seccomp active)
+	seccompFile     *os.File        // seccomp filter fd; nil means no enforcement
+	blockedSyscalls map[string]bool // syscalls to trace and log as denied; non-nil enables tracing even without seccomp
 	allowedSyscalls map[string]bool // syscalls allowed via syscall:allow rules
+	extraEnv        []string        // extra env vars to inject into traced command; nil means inherit parent env unchanged
 }
 
 // OperationType classifies filesystem operations as read or write.
@@ -60,7 +61,10 @@ const (
 // bwrapArgs configures sandbox integration. If empty, strace traces the command directly.
 // hasNetworkPath indicates whether the sandbox has a network tunnel (adds an extra execve to setup).
 // seccompFile is the read end of the seccomp filter pipe; nil means no filtering.
-// blockedSyscalls and allowedSyscalls control syscall tracing; both must be nil when seccompFile is nil.
+// blockedSyscalls and allowedSyscalls control syscall tracing and logging. When seccompFile is nil
+// (no-sandbox mode), they are used for observation-only logging without enforcement.
+// extraEnv is a list of additional KEY=VALUE env vars injected into the traced command; nil means inherit unchanged.
+// extraEnv is a list of additional KEY=VALUE env vars injected into the traced command; nil means inherit unchanged.
 func New(
 	bwrapPath string,
 	stracePath string,
@@ -71,15 +75,13 @@ func New(
 	seccompFile *os.File,
 	blockedSyscalls map[string]bool,
 	allowedSyscalls map[string]bool,
+	extraEnv []string,
 ) *Monitor {
 	if len(bwrapArgs) > 0 && bwrapPath == "" {
 		panic("New: bwrapPath must not be empty when bwrapArgs is non-empty")
 	}
 	if len(bwrapArgs) == 0 && bwrapPath != "" {
 		panic("New: bwrapPath must be empty when bwrapArgs is empty")
-	}
-	if seccompFile == nil && (blockedSyscalls != nil || allowedSyscalls != nil) {
-		panic("New: blockedSyscalls and allowedSyscalls must be nil when seccompFile is nil")
 	}
 	return &Monitor{
 		bwrapPath:       bwrapPath,
@@ -91,6 +93,7 @@ func New(
 		seccompFile:     seccompFile,
 		blockedSyscalls: blockedSyscalls,
 		allowedSyscalls: allowedSyscalls,
+		extraEnv:        extraEnv,
 	}
 }
 
@@ -106,24 +109,7 @@ func (m *Monitor) Run(ctx context.Context, command []string) (int, error) {
 		return 1, fmt.Errorf("create pipe for strace output: %w", err)
 	}
 
-	// Build effective bwrap args: insert --seccomp 4 when filter is active.
-	// fd 3 = strace pipe (ExtraFiles[0]), fd 4 = seccomp pipe (ExtraFiles[1]).
-	effectiveBwrapArgs := m.bwrapArgs
-	extraFiles := []*os.File{straceW}
-	if m.seccompFile != nil {
-		if len(m.bwrapArgs) > 0 {
-			effectiveBwrapArgs = sandbox.InsertSeccompArg(m.bwrapArgs, seccompFilterFD)
-		}
-		extraFiles = append(extraFiles, m.seccompFile)
-	}
-
-	// Build strace command with pipe write end as ExtraFiles[0] (becomes fd 3 in child)
-	straceArgs := m.buildStraceArgs(command, effectiveBwrapArgs)
-	cmd := exec.CommandContext(ctx, m.stracePath, straceArgs...) // #nosec G204 -- args built from validated config
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = extraFiles
+	cmd := m.buildCommand(ctx, command, straceW)
 
 	if err := cmd.Start(); err != nil {
 		_ = straceR.Close()
@@ -187,6 +173,32 @@ func (m *Monitor) closeParentPipes(straceW *os.File) {
 			panic("close seccomp filter pipe: " + err.Error())
 		}
 	}
+}
+
+// buildCommand assembles the strace exec.Cmd, wiring up bwrap args, seccomp filter,
+// extra files, and environment variables.
+func (m *Monitor) buildCommand(ctx context.Context, command []string, straceW *os.File) *exec.Cmd {
+	// Build effective bwrap args: insert --seccomp 4 when filter is active.
+	// fd 3 = strace pipe (ExtraFiles[0]), fd 4 = seccomp pipe (ExtraFiles[1]).
+	effectiveBwrapArgs := m.bwrapArgs
+	extraFiles := []*os.File{straceW}
+	if m.seccompFile != nil {
+		if len(m.bwrapArgs) > 0 {
+			effectiveBwrapArgs = sandbox.InsertSeccompArg(m.bwrapArgs, seccompFilterFD)
+		}
+		extraFiles = append(extraFiles, m.seccompFile)
+	}
+
+	straceArgs := m.buildStraceArgs(command, effectiveBwrapArgs)
+	cmd := exec.CommandContext(ctx, m.stracePath, straceArgs...) // #nosec G204 -- args built from validated config
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.ExtraFiles = extraFiles
+	if m.extraEnv != nil {
+		cmd.Env = append(os.Environ(), m.extraEnv...)
+	}
+	return cmd
 }
 
 // extractExitCode determines the exit code from a command error.
@@ -334,11 +346,15 @@ func (m *Monitor) processStraceLine(parser *straceParser, cwdByPid map[string]st
 		return nil
 	}
 	if m.blockedSyscalls[result.syscall] {
+		rule := accesslog.RuleNoMatch
+		if m.seccompFile != nil {
+			rule = accesslog.RuleSeccomp
+		}
 		m.logger.Log(accesslog.Entry{
 			Operation: accesslog.OperationSyscall,
 			Target:    result.syscall,
 			Result:    accesslog.ResultDeny,
-			Rule:      accesslog.RuleNoMatch,
+			Rule:      rule,
 		})
 		return nil
 	}

@@ -44,9 +44,9 @@ func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Con
 	tmpDir := t.TempDir()
 	cfg := setupConfig(tmpDir)
 
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := New("", stracePath, logger, resolver, nil, false, nil, nil, nil)
+	mon := New("", stracePath, logger, resolver, nil, false, nil, nil, nil, nil)
 
 	return &monitorTestEnv{
 		t:      t,
@@ -97,26 +97,26 @@ func roRule(path string) fsrules.AccessRule {
 // Returns the monitor and the logger.
 func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
 	t.Helper()
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	bwrapPath := ""
 	if len(bwrapArgs) > 0 {
 		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
 	}
-	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil), logger
+	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil, nil), logger
 }
 
 // createTestMonitorWithNetwork creates a monitor with hasNetworkPath=true for testing
 // scenarios where the tunnel adds an extra execve to setup.
 func createTestMonitorWithNetwork(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
 	t.Helper()
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	bwrapPath := ""
 	if len(bwrapArgs) > 0 {
 		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
 	}
-	return New(bwrapPath, "", logger, resolver, bwrapArgs, true, nil, nil, nil), logger
+	return New(bwrapPath, "", logger, resolver, bwrapArgs, true, nil, nil, nil, nil), logger
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -426,7 +426,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := New("", "", nil, nil, nil, false, nil, nil, nil)
+	mon := New("", "", nil, nil, nil, false, nil, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -444,7 +444,7 @@ func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
 	blocked := map[string]bool{"ptrace": true, "mount": true}
 	allowed := map[string]bool{"bpf": true}
 	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", nil, nil, nil, false, dummyPipe, blocked, allowed)
+	mon := New("", "", nil, nil, nil, false, dummyPipe, blocked, allowed, nil)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -471,7 +471,7 @@ func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
 }
 
 func TestBuildStraceArgs_WithoutBlockedSyscalls(t *testing.T) {
-	mon := New("", "", nil, nil, nil, false, nil, nil, nil)
+	mon := New("", "", nil, nil, nil, false, nil, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
 
@@ -492,10 +492,10 @@ func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
 	t.Helper()
 	blocked := map[string]bool{syscallName: true}
 	cfg := new(config.Config)
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", logger, resolver, nil, false, dummyPipe, blocked, nil)
+	mon := New("", "", logger, resolver, nil, false, dummyPipe, blocked, nil, nil)
 
 	err := mon.processStraceOutput(strings.NewReader(straceLine + "\n"))
 	require.NoError(t, err)
@@ -505,7 +505,7 @@ func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
 	assert.Equal(t, accesslog.OperationSyscall, entries[0].Operation)
 	assert.Equal(t, syscallName, entries[0].Target)
 	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
-	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
+	assert.Equal(t, accesslog.RuleSeccomp, entries[0].Rule)
 }
 
 func TestProcessStraceLine_BlockedSyscall(t *testing.T) {
@@ -521,10 +521,10 @@ func TestProcessStraceLine_BlockedSyscall_FileGroup(t *testing.T) {
 func TestProcessStraceLine_AllowedSyscall(t *testing.T) {
 	allowed := map[string]bool{"ptrace": true}
 	cfg := new(config.Config)
-	logger := accesslog.New(cfg.ManagedPaths)
+	logger := accesslog.New(cfg.ManagedPaths, false)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", logger, resolver, nil, false, dummyPipe, nil, allowed)
+	mon := New("", "", logger, resolver, nil, false, dummyPipe, nil, allowed, nil)
 
 	straceData := strings.NewReader(
 		`12345 ptrace(PTRACE_ATTACH, 999) = 0` + "\n",
@@ -548,7 +548,7 @@ func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
 	defer pipeW.Close() //nolint:errcheck // test cleanup
 
 	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, pipeR, nil, nil)
+	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, pipeR, nil, nil, nil)
 
 	// With seccompFile non-nil, Run() will call InsertSeccompArg(bwrapArgs, 4).
 	// Verify by checking that buildStraceArgs receives modified bwrap args
@@ -569,7 +569,7 @@ func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
 
 func TestNew_NilSeccompFile_NoSeccompArgs(t *testing.T) {
 	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, nil, nil, nil)
+	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, nil, nil, nil, nil)
 
 	args := mon.buildStraceArgs([]string{"true"}, mon.bwrapArgs)
 

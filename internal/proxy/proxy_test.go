@@ -161,7 +161,7 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	host, port := hostPort(t, tlsServer.Listener.Addr().String())
 	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 	resolver := newTestResolver(t, ruleBody)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
@@ -182,7 +182,7 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 }
 
 func TestProxy_AccessLogDenied(t *testing.T) {
-	logger := accesslog.New(nil)
+	logger := accesslog.New(nil, false)
 	resolver := newTestResolver(t, "http:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")

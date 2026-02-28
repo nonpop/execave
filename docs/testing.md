@@ -20,7 +20,7 @@ Use Go's native fuzz testing for input parsing and security-sensitive code. Seed
 Integration tests verify spec scenarios against a package's public API. They live alongside unit tests in the package directory.
 
 - **File**: `internal/<package>/integration_test.go` (uses `package <pkg>_test`)
-- **1-1 mapping required**: Every spec scenario in `openspec/specs/<package>/spec.md` (or `openspec/changes/<change>/specs/<package>/spec.md`) must have exactly one corresponding integration test in `internal/<package>/integration_test.go`. The integration test file must contain only tests for spec scenarios — no additional tests.
+- **1-1 mapping required**: Every spec scenario in `openspec/specs/<package>/spec.md` (or `openspec/changes/<change>/specs/<package>/spec.md`) must have exactly one corresponding integration test in `internal/<package>/integration_test.go`. The integration test file must contain only tests for spec scenarios — no additional tests. When a spec scenario is modified, the corresponding integration test must be updated to match. When a spec scenario is removed, the corresponding integration test must be removed.
 
 Test name format — convert kebab-case names to PascalCase:
 
@@ -39,7 +39,7 @@ E2E tests live in `test/e2e/` and test the full binary.
 
 ### Openspec use case tests
 
-- **1-1 mapping required**: Every use case in `openspec/playbooks/<playbook>/playbook.md` (or `openspec/changes/<change>/playbooks/<playbook>/playbook.md`) must have exactly one corresponding E2E test in `test/e2e/<playbook_name>_test.go`. The E2E test file must contain only tests for playbook use cases from that playbook — no additional tests.
+- **1-1 mapping required**: Every use case in `openspec/playbooks/<playbook>/playbook.md` (or `openspec/changes/<change>/playbooks/<playbook>/playbook.md`) must have exactly one corresponding E2E test in `test/e2e/<playbook_name>_test.go`. The E2E test file must contain only tests for playbook use cases from that playbook — no additional tests. When a use case is modified, the corresponding E2E test must be updated to match. When a use case is removed, the corresponding E2E test must be removed.
 
 - **File**: `test/e2e/<playbook_name>_test.go` (underscores, not hyphens)
 

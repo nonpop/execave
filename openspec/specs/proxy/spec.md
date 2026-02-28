@@ -128,6 +128,31 @@ The proxy SHALL record each request in the access log with: operation `HTTP` (fo
 - **AND** a CONNECT request for `api.example.com:443` is received after SetResolver returns
 - **THEN** the request is denied with 403
 
+### Requirement: SetNoEnforce
+
+`proxy.SetNoEnforce(true)` configures the proxy to forward all connections regardless of rule resolution result. Rules are still evaluated and the result is passed to the access logger, but the proxy SHALL NOT return `403 Forbidden` based on the result. Must be called before `Start`.
+
+#### Scenario: HTTP request forwarded despite no matching rule
+
+- **WHEN** SetNoEnforce(true) is configured
+- **AND** the resolver has no rules (deny-all)
+- **AND** an HTTP GET request is made to a local server
+- **THEN** the request is forwarded (HTTP 200 received, not 403)
+
+#### Scenario: CONNECT request tunneled despite no matching rule
+
+- **WHEN** SetNoEnforce(true) is configured
+- **AND** the resolver has no rules (deny-all)
+- **AND** a CONNECT request is made to a local TLS server
+- **THEN** the connection is tunneled (HTTP 200 received, not 403)
+
+#### Scenario: Deny rule does not block request
+
+- **WHEN** SetNoEnforce(true) is configured
+- **AND** the resolver has an explicit deny rule matching the target
+- **AND** an HTTP GET request is made to that target
+- **THEN** the request is forwarded (not blocked with 403)
+
 ### Requirement: Proxy lifecycle
 
 The proxy SHALL be startable and stoppable. Starting the proxy creates the UDS and begins accepting connections. Stopping the proxy closes the listener and removes the UDS.

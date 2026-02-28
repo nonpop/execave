@@ -8,22 +8,22 @@ The text-log capability provides text-based access log output. It writes formatt
 
 ### Requirement: Text log entry format
 
-The text log writer SHALL format each entry as a single line: `RESULT  OP  target  (rule)` followed by a newline. RESULT SHALL be left-padded to 7 characters (longest: `UNKNOWN`). OP SHALL be left-padded to 5 characters (longest: `WRITE`). The target and rule fields are unpadded.
+The text log writer SHALL format each entry as a single line: `RESULT  OP  target  (rule)` followed by a newline. RESULT SHALL be left-padded to 10 characters (longest: `UNENFORCED`). OP SHALL be left-padded to 5 characters (longest: `WRITE`). The target and rule fields are unpadded.
 
 #### Scenario: Deny entry formatted
 
 - **WHEN** Writer receives entry (READ, `/home/user/.ssh/id_rsa`, DENY, `no-matching-rule`)
-- **THEN** the output line is `DENY    READ   /home/user/.ssh/id_rsa  (no-matching-rule)`
+- **THEN** the output line is `DENY       READ   /home/user/.ssh/id_rsa  (no-matching-rule)`
 
 #### Scenario: OK entry formatted
 
 - **WHEN** Writer receives entry (HTTP, `api.example.com:443`, OK, `net:http:api.example.com:443`)
-- **THEN** the output line is `OK      HTTP   api.example.com:443  (net:http:api.example.com:443)`
+- **THEN** the output line is `OK         HTTP   api.example.com:443  (net:http:api.example.com:443)`
 
 #### Scenario: Unknown entry formatted
 
 - **WHEN** Writer receives entry (READ, `foo/bar.txt`, UNKNOWN, `unresolved-relative-path`)
-- **THEN** the output line is `UNKNOWN READ   foo/bar.txt  (unresolved-relative-path)`
+- **THEN** the output line is `UNKNOWN    READ   foo/bar.txt  (unresolved-relative-path)`
 
 ### Requirement: Path shortening in text output
 

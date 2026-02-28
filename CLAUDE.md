@@ -47,8 +47,8 @@ golangci-lint run --fix                   # Lint
 - Strict TDD: failing test first, then implement
 - Integration/E2E tests: black-box (`package_test`), public API only
 - Unit tests: white-box (same package), direct access to internals
-- Integration tests: every spec scenario must have corresponding test in `<package>/integration_test.go`
-- E2E tests: every playbook use case must have corresponding test in `test/e2e/<playbook_name>_test.go`
+- Integration tests: every spec scenario must have a corresponding test in `<package>/integration_test.go`; update the test when the scenario changes, remove it when the scenario is removed
+- E2E tests: every playbook use case must have a corresponding test in `test/e2e/<playbook_name>_test.go`; update the test when the use case changes, remove it when the use case is removed
 
 ## Git
 

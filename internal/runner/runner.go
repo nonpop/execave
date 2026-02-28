@@ -21,6 +21,7 @@ import (
 	"github.com/nonpop/execave/internal/monitor"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/seccomp"
+	"github.com/nonpop/execave/internal/tunnel"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
@@ -46,6 +47,7 @@ type Runner struct {
 	netPath          *sandbox.NetworkPath
 	interpreterPath  string      // auto-detected ELF interpreter, applied to every cfg in Start
 	initialTermState *term.State // saved at construction for restoration
+	noSandbox        bool        // when true, skip bwrap/seccomp and trace command directly on host
 
 	// OnLoggerChange is called with the new logger each time Start creates one.
 	// This enables external components sharing the logger (e.g., network proxy)
@@ -66,9 +68,10 @@ type Runner struct {
 //
 // The absConfigPath and netPath are immutable and used for all runs.
 // netPath may be nil when no network proxy/tunnel is configured.
+// noSandbox skips bwrap and seccomp; the command runs directly on the host under strace.
 // The cfg parameter is not stored — it's passed to Start for each run to support
 // future config editing.
-func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath) *Runner {
+func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, noSandbox bool) *Runner {
 	if cfg == nil {
 		panic("New: cfg must not be nil")
 	}
@@ -90,6 +93,7 @@ func New(cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath)
 		netPath:          netPath,
 		interpreterPath:  cfg.InterpreterPath,
 		initialTermState: initialTermState,
+		noSandbox:        noSandbox,
 		OnLoggerChange:   nil,
 		mu:               sync.RWMutex{},
 		status:           RunStatus{Running: false, ExitCode: 0, Error: "", Command: ""},
@@ -171,8 +175,8 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 	// don't include it — the Runner preserves it from startup.
 	cfg.InterpreterPath = r.interpreterPath
 
-	// Create fresh logger and resolver
-	logger := accesslog.New(cfg.ManagedPaths)
+	// Create fresh logger and resolver; in no-sandbox mode all entries carry UNENFORCED result.
+	logger := accesslog.New(cfg.ManagedPaths, r.noSandbox)
 	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
 
 	// Notify external components (e.g., network proxy) about the new logger
@@ -180,28 +184,26 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 		r.OnLoggerChange(logger)
 	}
 
-	// Resolve and validate bwrap and strace binaries.
-	bwrapPath, err := sandbox.ResolveBwrap()
-	if err != nil {
-		return fmt.Errorf("start monitored run: %w", err)
-	}
+	// Resolve and validate strace binary (always needed).
 	stracePath, err := sandbox.ResolveStrace()
 	if err != nil {
 		return fmt.Errorf("start monitored run: %w", err)
 	}
 
-	// Build sandbox and monitor
-	sb := sandbox.New(cfg, r.absConfigPath, r.netPath)
-	bwrapArgs := sb.BuildBwrapArgs(command)
+	var mon *monitor.Monitor
+	var bridgeStop func()
 
-	// Build syscall allow/block maps and seccomp filter.
-	allowedSyscalls, blockedSyscalls := buildSyscallMaps(cfg)
-	seccompPipe, err := seccomp.FilterPipe(allowedSyscalls)
-	if err != nil {
-		return fmt.Errorf("create seccomp filter for monitored run: %w", err)
+	if r.noSandbox {
+		mon, bridgeStop, err = r.buildNoSandboxMonitor(ctx, cfg, stracePath, logger, resolver)
+		if err != nil {
+			return err
+		}
+	} else {
+		mon, err = r.buildSandboxedMonitor(cfg, stracePath, logger, resolver, command)
+		if err != nil {
+			return err
+		}
 	}
-
-	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, sb.HasNetworkPath(), seccompPipe, blockedSyscalls, allowedSyscalls)
 
 	// Create context for this run
 	runCtx, cancel := context.WithCancel(ctx)
@@ -221,7 +223,7 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 	r.notifyStatus()
 
 	// Start run in background
-	go r.runInBackground(runCtx, mon, command, done)
+	go r.runInBackground(runCtx, mon, command, bridgeStop, done)
 
 	return nil
 }
@@ -245,11 +247,61 @@ func (r *Runner) Stop() {
 	<-done
 }
 
+// buildNoSandboxMonitor creates a Monitor and optional bridge stop function for no-sandbox mode.
+// Unsandboxed mode: trace command directly on the host without bwrap or seccomp.
+// Syscall maps are still built and passed so blocked syscalls are traced and logged.
+func (r *Runner) buildNoSandboxMonitor(ctx context.Context, cfg *config.Config, stracePath string, logger *accesslog.Logger, resolver *fsrules.AccessResolver) (*monitor.Monitor, func(), error) {
+	allowedSyscalls, blockedSyscalls := buildSyscallMaps(cfg)
+	var extraEnv []string
+	var bridgeStop func()
+	if r.netPath != nil {
+		port, stop, err := tunnel.StartBridge(ctx, r.netPath.UDSPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("start bridge for no-sandbox run: %w", err)
+		}
+		bridgeStop = stop
+		proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+		extraEnv = []string{
+			"HTTP_PROXY=" + proxyURL,
+			"HTTPS_PROXY=" + proxyURL,
+			"http_proxy=" + proxyURL,
+			"https_proxy=" + proxyURL,
+		}
+	}
+	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, blockedSyscalls, allowedSyscalls, extraEnv)
+	return mon, bridgeStop, nil
+}
+
+// buildSandboxedMonitor creates a Monitor for sandboxed mode.
+// Sandboxed mode: resolve bwrap, build sandbox args and seccomp filter.
+func (r *Runner) buildSandboxedMonitor(cfg *config.Config, stracePath string, logger *accesslog.Logger, resolver *fsrules.AccessResolver, command []string) (*monitor.Monitor, error) {
+	bwrapPath, err := sandbox.ResolveBwrap()
+	if err != nil {
+		return nil, fmt.Errorf("start monitored run: %w", err)
+	}
+
+	sb := sandbox.New(cfg, r.absConfigPath, r.netPath)
+	bwrapArgs := sb.BuildBwrapArgs(command)
+
+	allowedSyscalls, blockedSyscalls := buildSyscallMaps(cfg)
+	seccompPipe, err := seccomp.FilterPipe(allowedSyscalls)
+	if err != nil {
+		return nil, fmt.Errorf("create seccomp filter for monitored run: %w", err)
+	}
+
+	return monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, sb.HasNetworkPath(), seccompPipe, blockedSyscalls, allowedSyscalls, nil), nil
+}
+
 // runInBackground runs the monitor and updates status when complete.
-func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, command []string, done chan struct{}) {
+// bridgeStop, if non-nil, is called after mon.Run returns to stop the host-side TCP bridge.
+func (r *Runner) runInBackground(ctx context.Context, mon *monitor.Monitor, command []string, bridgeStop func(), done chan struct{}) {
 	defer close(done)
 
 	exitCode, err := mon.Run(ctx, command)
+
+	if bridgeStop != nil {
+		bridgeStop()
+	}
 
 	// Reclaim the foreground process group before any terminal operations.
 	// Without --new-session (Linux 6.2+), the sandboxed process can call
