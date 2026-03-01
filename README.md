@@ -22,28 +22,31 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 ## Configuration
 
-**Filesystem rules:** `fs:<permission>:<path>` where permission is `ro`, `rw`, or `none`. More specific paths win. Paths may use `~/...` (expanded to the current user's home directory) or be relative to the config file location.
+**Filesystem rules:** `<permission>:<path>` where permission is `ro`, `rw`, or `none`. More specific paths win. Paths may use `~/...` (expanded to the current user's home directory) or be relative to the config file location.
 
-**Network rules:** `net:<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
+**Network rules:** `<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
-**Log visibility rules:** Control which entries appear in the monitor output. `fs:log:<path>` / `fs:nolog:<path>` show/hide filesystem entries; `net:log:<target>:<port>` / `net:nolog:<target>:<port>` show/hide network entries. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
+**Log visibility rules:** Control which entries appear in the monitor output. `log:<path>` / `nolog:<path>` show/hide filesystem entries within the `fs` section; `log:<target>:<port>` / `nolog:<target>:<port>` show/hide network entries within the `net` section. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
 
 ```toml
-rules = [
-  "fs:ro:/usr",
-  "fs:ro:/lib",
-  "fs:ro:/lib64",
-  "fs:ro:/etc/ld.so.cache",
+fs = [
+  "ro:/usr",
+  "ro:/lib",
+  "ro:/lib64",
+  "ro:/etc/ld.so.cache",
 
-  "fs:rw:~/project",   # tilde expands to home directory
-  "fs:none:.",
+  "rw:~/project",   # tilde expands to home directory
+  "none:.",
 
-  "net:http:api.example.com:443",
-  "net:http:*.internal.corp:*",
-  "net:none:evil.example.com:443",
+  "nolog:/etc/fonts",            # hide known-harmless denied reads in monitor
+]
 
-  "fs:nolog:/etc/fonts",            # hide known-harmless denied reads in monitor
-  "net:nolog:telemetry.example.com:*",
+net = [
+  "http:api.example.com:443",
+  "http:*.internal.corp:*",
+  "none:evil.example.com:443",
+
+  "nolog:telemetry.example.com:*",
 ]
 ```
 
@@ -70,10 +73,10 @@ Both modes write one entry per line:
 
 | Operation | Target | Result | Rule |
 |-----------|--------|--------|------|
-| READ | /usr/lib/libc.so.6 | OK | fs:ro:/usr |
-| WRITE | /home/user/output.txt | DENY | fs:ro:/home/user |
+| READ | /usr/lib/libc.so.6 | OK | ro:/usr |
+| WRITE | /home/user/output.txt | DENY | ro:/home/user |
 | READ | /etc/passwd | DENY | no-matching-rule |
-| HTTP | api.example.com:443 | OK | net:http:api.example.com:443 |
+| HTTP | api.example.com:443 | OK | http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
 The file mode (`--monitor=<path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (`--monitor` or `--monitor=-`) buffers until the process exits, then writes to stderr.

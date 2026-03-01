@@ -52,17 +52,17 @@ flowchart TB
 
 ### Config (`internal/config/`)
 
-Loads TOML configuration and routes rules to domain-specific parsers. Thin layer focused on TOML parsing and rule routing by resource prefix (`fs:` vs `net:`). The default config filename is `execave.toml`.
+Loads TOML configuration with typed rule sections (`fs`, `net`, `syscall`) and routes rules to domain-specific parsers. Thin layer focused on TOML parsing and rule routing. The default config filename is `execave.toml`. Rules within each section are prefixed with the resource type internally and passed to their respective validators.
 
 ### FS Rules (`internal/fsrules/`)
 
-Self-contained filesystem rule engine. Parses `fs:<permission>:<path>` rules with validation, resolves permissions for paths using most-specific-wins matching, and handles symlink resolution at runtime. Paths support `~/...` tilde expansion and relative paths (resolved against the config file directory). Used by sandbox for mount configuration and monitor for access attribution.
+Self-contained filesystem rule engine. Parses rules with permission and path (format: `<permission>:<path>`) with validation, resolves permissions for paths using most-specific-wins matching, and handles symlink resolution at runtime. Paths support `~/...` tilde expansion and relative paths (resolved against the config file directory). Used by sandbox for mount configuration and monitor for access attribution.
 
 See security-model.md for path normalization risks.
 
 ### Net Rules (`internal/netrules/`)
 
-Self-contained network rule engine. Parses `net:<protocol>:<target>:<port>` rules supporting domains (with wildcards), IPs, and CIDRs. Resolves permissions using target specificity matching with default-deny. Used by proxy for request authorization.
+Self-contained network rule engine. Parses rules with protocol, target, and port (format: `<protocol>:<target>:<port>`) supporting domains (with wildcards), IPs, and CIDRs. Resolves permissions using target specificity matching with default-deny. Used by proxy for request authorization.
 
 ### Access Log (`internal/accesslog/`)
 
@@ -74,7 +74,7 @@ Manages lifecycle of monitored sandbox executions with start/stop control, statu
 
 ### Log Filter (`internal/logfilter/`)
 
-Shared display logic used by the text log: `ShortenPath` reduces absolute paths to config-directory-relative or `~/...` form; `IsNolog` checks whether an entry matches any `fs:nolog`/`net:nolog`/`syscall:nolog` rule (delegating to `fsrules.LogResolver`, `netrules.LogResolver`, and a `syscallNolog` map).
+Shared display logic used by the text log: `ShortenPath` reduces absolute paths to config-directory-relative or `~/...` form; `IsNolog` checks whether an entry matches any `nolog` rule within its resource section (delegating to `fsrules.LogResolver`, `netrules.LogResolver`, and a `syscallNolog` map).
 
 ### Text Log (`internal/textlog/`)
 

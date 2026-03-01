@@ -32,6 +32,12 @@ func (c *Config) HasNetRules() bool {
 }
 
 // ParseTOML parses a TOML config from raw bytes.
+// The configuration uses top-level array keys for rule sections:
+//   - fs = ["ro:/usr", "rw:."] for filesystem rules
+//   - net = ["http:api.example.com:443"] for network rules
+//   - syscall = ["allow:ptrace"] for syscall rules
+//
+// Rules within each section are unprefixed strings.
 // configDir is used to resolve relative and tilde-prefixed paths in fs rules;
 // configPath must be an absolute path — same contract as ParseRules.
 // ParseTOML panics if configPath is not absolute.
@@ -41,17 +47,32 @@ func ParseTOML(data []byte, configDir, configPath string, managedPaths []string)
 	}
 
 	var raw struct {
-		Rules []string `toml:"rules"`
+		FS      []string `toml:"fs"`
+		Net     []string `toml:"net"`
+		Syscall []string `toml:"syscall"`
 	}
 	if err := toml.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
-	return ParseRules(raw.Rules, configDir, configPath, managedPaths)
+	// Reconstruct prefixed rule strings: fs rules first, then net, then syscall
+	var rules []string
+	for _, r := range raw.FS {
+		rules = append(rules, "fs:"+r)
+	}
+	for _, r := range raw.Net {
+		rules = append(rules, "net:"+r)
+	}
+	for _, r := range raw.Syscall {
+		rules = append(rules, "syscall:"+r)
+	}
+
+	return ParseRules(rules, configDir, configPath, managedPaths)
 }
 
 // Load reads and parses a configuration file.
-// It routes rules by resource prefix: "fs:" rules go to fsrules, "net:" rules go to netrules.
+// The configuration uses top-level array keys (fs, net, syscall) for typed rule sections.
+// It routes rules by resource type: fs rules go to fsrules, net rules go to netrules.
 // managedPaths are path prefixes that fs rules cannot target (e.g., /proc, /dev).
 func Load(path string, managedPaths []string) (*Config, error) {
 	data, err := os.ReadFile(path) // #nosec G304 -- path is user-provided config file from CLI

@@ -42,12 +42,12 @@ func TestE2E_IteratingConfig_EditConfigAndReRunWithMonitor(t *testing.T) {
 // rejected before sandbox start and command execution.
 func TestE2E_IteratingConfig_InvalidConfigRejectedOnStart(t *testing.T) {
 	s := newScenario(t)
-	s.givenRulesOnly("badprefix:something")
+	s.givenRulesOnly("fs:invalid")
 
 	s.whenRunTextLog("-", "sh", "-c", "echo SHOULD_NOT_RUN")
 
 	s.thenExitCode(1)
-	s.thenStderrContains("unknown resource type")
+	s.thenStderrContains("malformed rule")
 	s.thenStderrNotContains("READ")
 	s.thenStderrNotContains("DENY")
 	assert.Empty(t, s.lastResult.Stdout)

@@ -12,22 +12,24 @@ import (
 
 func FuzzLoad(f *testing.F) {
 	// Seed corpus with valid TOML examples
-	f.Add(`rules = []`)
-	f.Add(`rules = ["fs:ro:/usr/bin"]`)
-	f.Add(`rules = ["fs:rw:/home", "fs:ro:/etc"]`)
-	f.Add(`rules = ["fs:none:/secret"]`)
-	f.Add(`rules = ["fs:ro:./relative"]`)
-	f.Add(`rules = ["fs:rw:/path/with/../dots"]`)
+	f.Add(``)
+	f.Add(`fs = ["ro:/usr/bin"]`)
+	f.Add(`fs = ["rw:/home", "ro:/etc"]`)
+	f.Add(`fs = ["none:/secret"]`)
+	f.Add(`fs = ["ro:./relative"]`)
+	f.Add(`fs = ["rw:/path/with/../dots"]`)
 
 	// Seed with syscall rules
-	f.Add(`rules = ["syscall:allow:ptrace"]`)
-	f.Add(`rules = ["syscall:nolog:bpf"]`)
+	f.Add(`syscall = ["allow:ptrace"]`)
+	f.Add(`syscall = ["nolog:bpf"]`)
 
 	// Seed with some invalid examples
-	f.Add(`rules = ["invalid"]`)
+	f.Add(`fs = ["invalid"]`)
 	f.Add(`{invalid json}`)
 	f.Add(`invalid toml [[[`)
-	f.Add(``)
+	f.Add(`fs = []
+net = []
+syscall = []`)
 
 	f.Fuzz(func(t *testing.T, configTOML string) {
 		// Create temporary config file

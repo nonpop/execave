@@ -57,16 +57,16 @@ func TestE2E_ConfiguringExecave_InvalidRuleSyntaxRejectedBeforeExecution(t *test
 	s.thenStderrContains("invalid permission type")
 }
 
-// TestE2E_ConfiguringExecave_UnknownResourceTypeRejected tests that rules with unrecognized
-// resource prefixes are rejected before command execution.
-func TestE2E_ConfiguringExecave_UnknownResourceTypeRejected(t *testing.T) {
+// TestE2E_ConfiguringExecave_InvalidNetActionRejected tests that rules with unrecognized
+// net actions are rejected before command execution.
+func TestE2E_ConfiguringExecave_InvalidNetActionRejected(t *testing.T) {
 	s := newScenario(t)
-	s.givenRulesOnly("dns:allow:example.com")
+	s.givenRulesOnly("net:dns:example.com:53")
 
 	s.whenRun("true")
 
 	s.thenExitCode(1)
-	s.thenStderrContains("unknown resource type")
+	s.thenStderrContains("invalid action")
 }
 
 // TestE2E_ConfiguringExecave_DuplicateFilesystemPathsRejected tests that two rules targeting
@@ -112,7 +112,7 @@ func TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.
 	tmpDir := testTempDir(t)
 	configPath := filepath.Join(tmpDir, "execave.toml")
 
-	configContent := `rules = ["fs:rw:` + configPath + `"]`
+	configContent := `fs = ["rw:` + configPath + `"]`
 	err := os.WriteFile(configPath, []byte(configContent), 0o600)
 	require.NoError(t, err)
 
@@ -187,12 +187,12 @@ func TestE2E_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
 func TestE2E_ConfiguringExecave_CommentsInConfig(t *testing.T) {
 	s := newScenario(t)
 	s.givenRawConfig(`# Sandbox config
-rules = [
+fs = [
     # System libraries
-    "fs:ro:/usr",
-    "fs:ro:/lib",
-    "fs:ro:/lib64",
-    "fs:ro:/etc/ld.so.cache",  # linker cache
+    "ro:/usr",
+    "ro:/lib",
+    "ro:/lib64",
+    "ro:/etc/ld.so.cache",  # linker cache
 ]`)
 
 	s.whenRun("echo", "hello")

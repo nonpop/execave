@@ -76,13 +76,52 @@ func failIfNoGcc(t *testing.T) {
 }
 
 // tomlConfig formats rules as a TOML config file.
+// Rules are grouped by prefix and emitted as flat key sections (fs, net, syscall).
 func tomlConfig(rules []string) []byte {
-	var sb strings.Builder
-	sb.WriteString("rules = [\n")
+	// Group rules by prefix
+	fsRules := []string{}
+	netRules := []string{}
+	syscallRules := []string{}
+
 	for _, r := range rules {
-		fmt.Fprintf(&sb, "    %q,\n", r)
+		if strings.HasPrefix(r, "fs:") {
+			fsRules = append(fsRules, strings.TrimPrefix(r, "fs:"))
+		} else if strings.HasPrefix(r, "net:") {
+			netRules = append(netRules, strings.TrimPrefix(r, "net:"))
+		} else if strings.HasPrefix(r, "syscall:") {
+			syscallRules = append(syscallRules, strings.TrimPrefix(r, "syscall:"))
+		}
 	}
-	sb.WriteString("]\n")
+
+	var sb strings.Builder
+
+	// Emit fs section if there are fs rules
+	if len(fsRules) > 0 {
+		sb.WriteString("fs = [\n")
+		for _, r := range fsRules {
+			fmt.Fprintf(&sb, "    %q,\n", r)
+		}
+		sb.WriteString("]\n")
+	}
+
+	// Emit net section if there are net rules
+	if len(netRules) > 0 {
+		sb.WriteString("net = [\n")
+		for _, r := range netRules {
+			fmt.Fprintf(&sb, "    %q,\n", r)
+		}
+		sb.WriteString("]\n")
+	}
+
+	// Emit syscall section if there are syscall rules
+	if len(syscallRules) > 0 {
+		sb.WriteString("syscall = [\n")
+		for _, r := range syscallRules {
+			fmt.Fprintf(&sb, "    %q,\n", r)
+		}
+		sb.WriteString("]\n")
+	}
+
 	return []byte(sb.String())
 }
 

@@ -29,9 +29,9 @@ func writeTestConfig(t *testing.T, content string) string {
 }
 
 func TestLoad_ValidConfig(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = [
-	"fs:ro:/usr/bin",
-	"fs:rw:/home/user/project",
+	cfg, err := loadTestConfig(t, `fs = [
+	"ro:/usr/bin",
+	"rw:/home/user/project",
 ]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 2)
@@ -48,14 +48,17 @@ func TestLoad_InvalidTOML(t *testing.T) {
 }
 
 func TestLoad_UnknownResourceType(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["dns:allow:example.com"]`)
-	assert.ErrorContains(t, err, "unknown resource type")
+	_, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]
+net = ["dns:allow:example.com"]`)
+	assert.ErrorContains(t, err, "invalid action")
 }
 
 func TestLoad_ValidNetRule(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = [
-	"fs:ro:/usr/bin",
-	"net:http:api.anthropic.com:443",
+	cfg, err := loadTestConfig(t, `fs = [
+	"ro:/usr/bin",
+]
+net = [
+	"http:api.anthropic.com:443",
 ]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -63,77 +66,77 @@ func TestLoad_ValidNetRule(t *testing.T) {
 }
 
 func TestLoad_HasNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["net:http:api.anthropic.com:443"]`)
+	cfg, err := loadTestConfig(t, `net = ["http:api.anthropic.com:443"]`)
 	require.NoError(t, err)
 	assert.True(t, cfg.HasNetRules())
 }
 
 func TestLoad_HasNoNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/bin"]`)
+	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]`)
 	require.NoError(t, err)
 	assert.False(t, cfg.HasNetRules())
 }
 
 func TestLoad_InvalidNetRule(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["net:http:example.com"]`)
+	_, err := loadTestConfig(t, `net = ["http:example.com"]`)
 	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestLoad_NetRuleDuplicateIdentityRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"net:http:example.com:443",
-	"net:none:example.com:443",
+	_, err := loadTestConfig(t, `net = [
+	"http:example.com:443",
+	"none:example.com:443",
 ]`)
 	assert.ErrorContains(t, err, "duplicate net rule")
 }
 
 func TestLoad_NetRuleMixedPortPatternsRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"net:http:example.com:*",
-	"net:none:example.com:443",
+	_, err := loadTestConfig(t, `net = [
+	"http:example.com:*",
+	"none:example.com:443",
 ]`)
 	assert.ErrorContains(t, err, "mixed port patterns")
 }
 
 func TestValidate_NoneWithChildAllowed(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = [
-	"fs:none:/home/user/project/.env",
-	"fs:ro:/home/user/project/.env/example",
+	cfg, err := loadTestConfig(t, `fs = [
+	"none:/home/user/project/.env",
+	"ro:/home/user/project/.env/example",
 ]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 2)
 }
 
 func TestValidate_NoneTerminalValid(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"fs:rw:/home/user/project",
-	"fs:none:/home/user/project/.env",
+	_, err := loadTestConfig(t, `fs = [
+	"rw:/home/user/project",
+	"none:/home/user/project/.env",
 ]`)
 	assert.NoError(t, err)
 }
 
 func TestDuplicatePaths_DifferentPermissions_Rejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"fs:ro:/home/user",
-	"fs:rw:/home/user",
+	_, err := loadTestConfig(t, `fs = [
+	"ro:/home/user",
+	"rw:/home/user",
 ]`)
 	require.ErrorContains(t, err, "duplicate path")
 	assert.ErrorContains(t, err, "/home/user")
 }
 
 func TestDuplicatePaths_IdenticalRules_Rejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"fs:ro:/path",
-	"fs:ro:/path",
+	_, err := loadTestConfig(t, `fs = [
+	"ro:/path",
+	"ro:/path",
 ]`)
 	require.ErrorContains(t, err, "duplicate path")
 	assert.ErrorContains(t, err, "/path")
 }
 
 func TestDuplicatePaths_TrailingSlash_Rejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = [
-	"fs:ro:/foo",
-	"fs:ro:/foo/",
+	_, err := loadTestConfig(t, `fs = [
+	"ro:/foo",
+	"ro:/foo/",
 ]`)
 	require.ErrorContains(t, err, "duplicate path")
 	assert.ErrorContains(t, err, "/foo")
@@ -227,7 +230,8 @@ func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
 // --- Syscall rule tests ---
 
 func TestLoad_ValidSyscallRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/lib", "syscall:allow:ptrace", "syscall:nolog:bpf"]`)
+	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/lib"]
+syscall = ["allow:ptrace", "nolog:bpf"]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
 	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
@@ -235,61 +239,62 @@ func TestLoad_ValidSyscallRules(t *testing.T) {
 }
 
 func TestLoad_InvalidSyscallNameRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:allow:ptraec"]`)
+	_, err := loadTestConfig(t, `syscall = ["allow:ptraec"]`)
 	assert.ErrorContains(t, err, "not a ruleable syscall name")
 }
 
 func TestLoad_NonBlockedSyscallNameRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:allow:read"]`)
+	_, err := loadTestConfig(t, `syscall = ["allow:read"]`)
 	assert.ErrorContains(t, err, "not a ruleable syscall name")
 }
 
 func TestLoad_DefenseInDepthSyscallRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:allow:syslog"]`)
+	_, err := loadTestConfig(t, `syscall = ["allow:syslog"]`)
 	assert.ErrorContains(t, err, "not a ruleable syscall name")
 }
 
 func TestLoad_DefenseInDepthSyscallNologRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:nolog:syslog"]`)
+	_, err := loadTestConfig(t, `syscall = ["nolog:syslog"]`)
 	assert.ErrorContains(t, err, "not a ruleable syscall name")
 }
 
 func TestLoad_DuplicateSyscallAllowRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:allow:ptrace", "syscall:allow:ptrace"]`)
+	_, err := loadTestConfig(t, `syscall = ["allow:ptrace", "allow:ptrace"]`)
 	assert.ErrorContains(t, err, "duplicate syscall allow rule")
 }
 
 func TestLoad_DuplicateSyscallNologRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:nolog:ptrace", "syscall:nolog:ptrace"]`)
+	_, err := loadTestConfig(t, `syscall = ["nolog:ptrace", "nolog:ptrace"]`)
 	assert.ErrorContains(t, err, "duplicate syscall nolog rule")
 }
 
 func TestLoad_SameNameAllowAndNologPermitted(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["syscall:allow:ptrace", "syscall:nolog:ptrace"]`)
+	cfg, err := loadTestConfig(t, `syscall = ["allow:ptrace", "nolog:ptrace"]`)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
 	assert.Equal(t, []string{"ptrace"}, cfg.SyscallNologRules)
 }
 
 func TestLoad_UnknownSyscallActionRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:deny:ptrace"]`)
+	_, err := loadTestConfig(t, `syscall = ["deny:ptrace"]`)
 	assert.ErrorContains(t, err, "unknown syscall action")
 }
 
 func TestLoad_MalformedSyscallRuleRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["syscall:allow"]`)
+	_, err := loadTestConfig(t, `syscall = ["allow"]`)
 	assert.ErrorContains(t, err, "malformed syscall rule")
 }
 
 func TestLoad_EmptyRulesHasNoSyscallRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = []`)
+	cfg, err := loadTestConfig(t, ``)
 	require.NoError(t, err)
 	assert.Empty(t, cfg.SyscallAllowRules)
 	assert.Empty(t, cfg.SyscallNologRules)
 }
 
 func TestParseTOML_ValidTOML(t *testing.T) {
-	content := `rules = ["fs:ro:/usr/bin", "net:http:api.example.com:443"]`
+	content := `fs = ["ro:/usr/bin"]
+net = ["http:api.example.com:443"]`
 	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -309,13 +314,13 @@ func TestParseTOML_InvalidTOML(t *testing.T) {
 }
 
 func TestParseTOML_InvalidRules(t *testing.T) {
-	content := `rules = ["badprefix:something"]`
+	content := `fs = ["invalid rule without colon"]`
 	_, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
-	assert.ErrorContains(t, err, "unknown resource type")
+	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestParseTOML_CommentsPreservedThroughParsing(t *testing.T) {
-	content := "# Comment at top\nrules = [\n    # Another comment\n    \"fs:ro:/usr/bin\",\n]"
+	content := "# Comment at top\nfs = [\n    # Another comment\n    \"ro:/usr/bin\",\n]"
 	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -337,7 +342,7 @@ func TestValidate_ConfigFileExplicitlyWritable_Rejected(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "execave.toml")
 
 	// Config that makes itself writable
-	content := `rules = ["fs:rw:` + configPath + `"]`
+	content := `fs = ["rw:` + configPath + `"]`
 	err := os.WriteFile(configPath, []byte(content), 0o600)
 	require.NoError(t, err)
 
@@ -353,15 +358,15 @@ func TestValidate_ManagedPath_Rejected(t *testing.T) {
 		rule    string
 		wantErr string
 	}{
-		{"exact match", `"fs:ro:/proc"`, "/proc"},
-		{"subpath", `"fs:rw:/proc/self/status"`, "/proc"},
-		{"different managed", `"fs:ro:/dev/null"`, "/dev"},
-		{"tmp subpath", `"fs:rw:/tmp/foo"`, "/tmp"},
+		{"exact match", `"ro:/proc"`, "/proc"},
+		{"subpath", `"rw:/proc/self/status"`, "/proc"},
+		{"different managed", `"ro:/dev/null"`, "/dev"},
+		{"tmp subpath", `"rw:/tmp/foo"`, "/tmp"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content := `rules = [` + tt.rule + `]`
+			content := `fs = [` + tt.rule + `]`
 			configPath := writeTestConfig(t, content)
 
 			_, err := config.Load(configPath, managedPaths)
@@ -379,15 +384,15 @@ func TestValidate_ManagedPath_SimilarNameAllowed(t *testing.T) {
 		name string
 		rule string
 	}{
-		{"proc in name", `"fs:ro:/home/user/proc"`},
-		{"procfile", `"fs:ro:/home/user/procfile"`},
-		{"dev in project", `"fs:rw:/home/user/dev"`},
-		{"tmpdir", `"fs:rw:/home/user/tmpdir"`},
+		{"proc in name", `"ro:/home/user/proc"`},
+		{"procfile", `"ro:/home/user/procfile"`},
+		{"dev in project", `"rw:/home/user/dev"`},
+		{"tmpdir", `"rw:/home/user/tmpdir"`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content := `rules = [` + tt.rule + `]`
+			content := `fs = [` + tt.rule + `]`
 			configPath := writeTestConfig(t, content)
 
 			_, err := config.Load(configPath, managedPaths)

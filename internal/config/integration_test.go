@@ -24,7 +24,8 @@ func TestIntegration_ConfigFileLocation_ConfigFileNotFound(t *testing.T) {
 // --- Requirement: Config file format ---
 
 func TestIntegration_ConfigFileFormat_ValidConfigWithFsAndNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/bin", "net:http:api.anthropic.com:443"]`)
+	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]
+net = ["http:api.anthropic.com:443"]`)
 
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -32,7 +33,8 @@ func TestIntegration_ConfigFileFormat_ValidConfigWithFsAndNetRules(t *testing.T)
 }
 
 func TestIntegration_ConfigFileFormat_ValidConfigWithLogRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/bin", "fs:nolog:/usr/bin", "net:http:api.example.com:443", "net:nolog:*.example.com:*"]`)
+	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin", "nolog:/usr/bin"]
+net = ["http:api.example.com:443", "nolog:*.example.com:*"]`)
 
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -42,7 +44,7 @@ func TestIntegration_ConfigFileFormat_ValidConfigWithLogRules(t *testing.T) {
 }
 
 func TestIntegration_ConfigFileFormat_EmptyRulesArrayHasNoLogRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = []`)
+	cfg, err := loadTestConfig(t, ``)
 
 	require.NoError(t, err)
 	assert.Empty(t, cfg.FSLogRules)
@@ -50,7 +52,7 @@ func TestIntegration_ConfigFileFormat_EmptyRulesArrayHasNoLogRules(t *testing.T)
 }
 
 func TestIntegration_ConfigFileFormat_EmptyRulesArray(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = []`)
+	cfg, err := loadTestConfig(t, ``)
 
 	require.NoError(t, err)
 	assert.Empty(t, cfg.FSRules)
@@ -58,24 +60,25 @@ func TestIntegration_ConfigFileFormat_EmptyRulesArray(t *testing.T) {
 }
 
 func TestIntegration_ConfigFileFormat_UnknownResourceType(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["dns:allow:example.com"]`)
+	_, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]
+net = ["dns:allow:example.com"]`)
 
-	assert.ErrorContains(t, err, "unknown resource type")
+	assert.ErrorContains(t, err, "invalid action")
 }
 
 func TestIntegration_ConfigFileFormat_InvalidRuleRejectedAtConfigLoad(t *testing.T) {
-	_, err := loadTestConfig(t, `rules = ["net:http:example.com"]`)
+	_, err := loadTestConfig(t, `net = ["http:example.com"]`)
 
 	assert.ErrorContains(t, err, "malformed rule")
 }
 
 func TestIntegration_ConfigFileFormat_ConfigWithComments(t *testing.T) {
 	content := `# Sandbox for my coding agent
-rules = [
+fs = [
     # Project directory: read-only
-    "fs:ro:/usr/bin",  # inline comment
-    "net:http:api.anthropic.com:443",
-]`
+    "ro:/usr/bin",  # inline comment
+]
+net = ["http:api.anthropic.com:443"]`
 
 	cfg, err := loadTestConfig(t, content)
 
@@ -85,7 +88,7 @@ rules = [
 }
 
 func TestIntegration_ConfigFileFormat_ConfigWithTrailingComma(t *testing.T) {
-	cfg, err := loadTestConfig(t, `rules = ["fs:ro:/usr/bin",]`)
+	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin",]`)
 
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
@@ -246,7 +249,8 @@ func TestIntegration_ParseRules_SameNameAllowAndNologPermitted(t *testing.T) {
 // --- Requirement: ParseTOML ---
 
 func TestIntegration_ParseTOML_ProducesIdenticalConfigToLoad(t *testing.T) {
-	content := `rules = ["fs:ro:/usr/bin", "net:http:api.example.com:443"]`
+	content := `fs = ["ro:/usr/bin"]
+net = ["http:api.example.com:443"]`
 	managedPaths := []string{"/proc", "/dev"}
 
 	configPath := writeTestConfig(t, content)
@@ -273,7 +277,8 @@ func TestIntegration_ParseRules_LoadAndParseRulesProduceIdenticalConfig(t *testi
 	managedPaths := []string{"/proc", "/dev"}
 
 	// Write the same rules to a TOML file and Load it
-	configPath := writeTestConfig(t, `rules = ["fs:ro:/usr/bin", "net:http:api.example.com:443"]`)
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/bin"]
+net = ["http:api.example.com:443"]`)
 	loadedCfg, err := config.Load(configPath, managedPaths)
 	require.NoError(t, err)
 
