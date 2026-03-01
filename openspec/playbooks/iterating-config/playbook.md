@@ -10,12 +10,12 @@ The user edits their TOML config file in an external editor and runs execave wit
 
 The user edits their TOML config file in an external editor and runs execave with monitoring to observe the access log, adjusting rules between runs.
 
-- **GIVEN** a config file containing rules `fs:ro:/usr/lib` and `fs:rw:/home/user/workspace`
+- **GIVEN** a config file containing rules `fs:ro:/usr/lib` and `fs:rw:/tmp`
 - **AND** the user has started `execave --monitor -- ls /usr/lib`
 - **WHEN** the process exits and the text log is printed to stderr
 - **THEN** the user reviews denied entries in the text log
-- **AND** edits the config file in their editor to add a missing allow rule
-- **AND** re-runs `execave --monitor -- ls /usr/lib` to verify denied entries are resolved
+- **AND** edits the config file in their editor to adjust rules
+- **AND** re-runs `execave --monitor -- ls /usr/lib` to verify
 
 ### Use Case: Invalid config rejected on start
 

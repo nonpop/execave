@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The config capability loads and parses the execave configuration file. It reads TOML, routes rules to the appropriate engine by resource prefix (`fs:` or `net:`), and rejects unrecognized or malformed input at load time.
+The config capability loads and parses the execave configuration file. It reads TOML, routes rules to the appropriate engine by section key (`fs`, `net`, `syscall`), and rejects unrecognized or malformed input at load time.
 
 ## Requirements
 
@@ -16,13 +16,17 @@ The config capability loads and parses the execave configuration file. It reads 
 
 ### Requirement: Config file format
 
-The config file SHALL be valid TOML containing a `rules` array of strings. Rules are routed by resource prefix: `fs:` rules are parsed by the FS rules engine, `net:` rules are parsed by the net rules engine. Within each prefix, the action/permission determines whether the rule is an access rule or a log rule: `fs:ro`, `fs:rw`, `fs:none` are access rules; `fs:log`, `fs:nolog` are log rules; `net:http`, `net:none` are access rules; `net:log`, `net:nolog` are log rules. Unknown prefixes or malformed rules SHALL cause Load to return an error.
+The config file SHALL be valid TOML with optional top-level array keys: `fs`, `net`, and `syscall` of strings. Rule strings within each section omit the resource-type prefix — the section determines the type. All three keys are optional; omitting a key means no rules of that type. Unknown or malformed rule bodies SHALL cause Load to return an error.
+
+Within `fs`: `ro`, `rw`, `none` prefixes are access rules; `log`, `nolog` prefixes are log rules. Within `net`: `http`, `none` prefixes are access rules; `log`, `nolog` prefixes are log rules. Within `syscall`: `allow` and `nolog` are the only valid actions.
 
 #### Scenario: Valid config with fs and net rules
 
 - **WHEN** config contains:
   ```toml
-  rules = ["fs:ro:/usr/bin", "net:http:api.anthropic.com:443"]
+  fs = ["ro:/usr/bin"]
+
+  net = ["http:api.anthropic.com:443"]
   ```
 - **THEN** Load returns a config with 1 FS rule and 1 net rule
 
@@ -30,29 +34,31 @@ The config file SHALL be valid TOML containing a `rules` array of strings. Rules
 
 - **WHEN** config contains:
   ```toml
-  rules = ["fs:ro:/usr/bin", "fs:nolog:/usr/bin", "net:http:api.example.com:443", "net:nolog:*.example.com:*"]
+  fs = ["ro:/usr/bin", "nolog:/usr/bin"]
+
+  net = ["http:api.example.com:443", "nolog:*.example.com:*"]
   ```
 - **THEN** Load returns a config with 1 FS access rule, 1 FS log rule, 1 net access rule, and 1 net log rule
 
-#### Scenario: Empty rules array
+#### Scenario: Empty config (no sections)
 
-- **WHEN** config contains `rules = []`
+- **WHEN** config contains no `fs`, `net`, or `syscall` keys
 - **THEN** Load returns a config with no FS rules, no net rules, no FS log rules, and no net log rules
 
-#### Scenario: Unknown resource type
-- **WHEN** config contains rule `"dns:allow:example.com"`
-- **THEN** Load returns an error containing "unknown resource type"
-
 #### Scenario: Invalid rule rejected at config load
-- **WHEN** config contains rule `"net:http:example.com"` (missing port segment)
+- **WHEN** config contains:
+  ```toml
+  net = ["http:example.com"]
+  ```
+  (missing port segment)
 - **THEN** Load returns an error containing "malformed rule"
 
 #### Scenario: Config with comments
-- **WHEN** config contains TOML line comments (`#`) and inline comments
+- **WHEN** config contains TOML line comments (`#`) and inline comments within the config
 - **THEN** Load parses successfully, ignoring all comments
 
 #### Scenario: Config with trailing comma
-- **WHEN** config contains a rules array with a trailing comma after the last element
+- **WHEN** config contains a `rules` array with a trailing comma after the last element
 - **THEN** Load parses successfully
 
 ### Requirement: Parse rules from in-memory strings
@@ -121,11 +127,17 @@ The config file SHALL be valid TOML containing a `rules` array of strings. Rules
 
 ### Requirement: Parse TOML from bytes
 
-`config.ParseTOML` SHALL accept raw TOML bytes, a configDir, a configPath, and managedPaths, and return a validated `*Config`. It SHALL unmarshal the TOML, extract the `rules` array, and delegate to `ParseRules` with the same configDir, configPath, and managedPaths. It SHALL apply all validation that `Load` applies. `Load` SHALL delegate to `ParseTOML` internally, so that `Load` and `ParseTOML` produce identical results for the same input.
+`config.ParseTOML` SHALL accept raw TOML bytes, a configDir, a configPath, and managedPaths, and return a validated `*Config`. It SHALL unmarshal the `fs`, `net`, and `syscall` keys, prepend the appropriate resource-type prefix to each rule string, and delegate to `ParseRules`. It SHALL apply all validation that `Load` applies. `Load` SHALL delegate to `ParseTOML` internally, so that `Load` and `ParseTOML` produce identical results for the same input.
 
 #### Scenario: Valid TOML parsed from bytes
 
-- **WHEN** ParseTOML is called with bytes containing `rules = ["fs:ro:/usr/bin", "net:http:example.com:443"]`, a valid configDir, an absolute configPath, and nil managedPaths
+- **WHEN** ParseTOML is called with bytes containing:
+  ```toml
+  fs = ["ro:/usr/bin"]
+
+  net = ["http:example.com:443"]
+  ```
+  a valid configDir, an absolute configPath, and nil managedPaths
 - **THEN** it returns a Config with 1 FS rule and 1 net rule
 
 #### Scenario: Empty TOML produces empty Config
@@ -140,27 +152,53 @@ The config file SHALL be valid TOML containing a `rules` array of strings. Rules
 
 #### Scenario: Invalid rule rejected via ParseTOML
 
-- **WHEN** ParseTOML is called with bytes containing `rules = ["badprefix:something"]`
-- **THEN** it returns an error containing "unknown resource type"
+- **WHEN** ParseTOML is called with bytes containing:
+  ```toml
+  net = ["http:example.com"]
+  ```
+  (missing port segment)
+- **THEN** it returns an error containing "malformed rule"
 
 #### Scenario: ParseTOML produces identical result to Load
 
-- **WHEN** a TOML file contains `rules = ["fs:ro:/usr/bin", "net:http:example.com:443"]`
+- **WHEN** a TOML file contains `fs` and `net` keys with rules
 - **AND** Load is called with that file path and managedPaths
 - **AND** ParseTOML is called with the file's bytes, the file's directory, the absolute file path, and the same managedPaths
 - **THEN** both return equivalent Config structs (same FSRules, NetRules, and ManagedPaths)
 
 #### Scenario: TOML with comments parsed from bytes
 
-- **WHEN** ParseTOML is called with bytes containing TOML comments and `rules = ["fs:ro:/usr/bin"]`
-- **THEN** it returns a Config with 1 FS rule (comments are ignored)
+- **WHEN** ParseTOML is called with bytes containing TOML comments within the sections
+- **THEN** it returns a Config successfully (comments are ignored)
 
 ### Requirement: Load delegates to ParseRules
 
-`config.Load` SHALL produce identical results to calling ParseRules with the same rule strings, configDir, configPath, and managedPaths. Load SHALL remain the file-based entry point; ParseRules SHALL be the non-I/O entry point.
+`config.Load` SHALL produce identical results to calling ParseRules with the equivalent prefixed rule strings (resource-type prefix prepended), configDir, configPath, and managedPaths. Load SHALL remain the file-based entry point; ParseRules SHALL be the non-I/O entry point accepting prefixed rule strings.
 
 #### Scenario: Load and ParseRules produce identical Config
-- **WHEN** a TOML file contains `rules = ["fs:ro:/usr/bin", "net:http:example.com:443"]`
+- **WHEN** a TOML file contains `fs = ["ro:/usr/bin"]` and `net = ["http:example.com:443"]`
 - **AND** Load is called with that file path
-- **AND** ParseRules is called with the same raw rules, configDir derived from the file, the absolute file path, and the same managedPaths
+- **AND** ParseRules is called with `["fs:ro:/usr/bin", "net:http:example.com:443"]`, configDir derived from the file, the absolute file path, and the same managedPaths
 - **THEN** both return equivalent Config structs (same FSRules, NetRules, and ManagedPaths)
+
+### Requirement: Effective config rendering
+The config capability SHALL provide effective merged config rendering through `execave config show`, using the same layered load, deduplication, and validation path as command execution.
+
+#### Scenario: Show effective config from default path
+- **WHEN** the user runs `execave config show`
+- **THEN** execave prints TOML representing the effective merged config loaded from `./execave.toml`
+
+#### Scenario: Show effective config from custom path
+- **WHEN** the user runs `execave --config /home/user/project/execave.toml config show`
+- **THEN** execave prints TOML representing the effective merged config loaded from `/home/user/project/execave.toml`
+
+### Requirement: Effective config output format and provenance
+Effective config output SHALL be TOML with typed sections (`fs`, `net`, `syscall`) and SHALL include source-path provenance as comment lines for emitted rules.
+
+#### Scenario: Output contains typed sections
+- **WHEN** `config show` succeeds
+- **THEN** stdout contains TOML arrays for configured sections (`fs`, `net`, and/or `syscall`) using rule bodies consistent with current config format
+
+#### Scenario: Output includes source comments for each emitted rule
+- **WHEN** `config show` emits a rule originating from layered config files
+- **THEN** the emitted TOML includes one or more comment lines indicating source file path provenance adjacent to that rule

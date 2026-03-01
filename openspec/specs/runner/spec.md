@@ -8,12 +8,27 @@ The runner manages the lifecycle of monitored sandbox executions — starting, s
 
 ### Requirement: Start a monitored run
 
-Start SHALL create a fresh `accesslog.Logger`, build a sandbox+monitor from the provided config and command, and execute the run in a background goroutine. Start SHALL return after the goroutine is launched. The runner's status SHALL transition to running.
+The runner SHALL start a monitored sandbox execution when `Start(ctx, cfg, command)` is called. It SHALL create a fresh `accesslog.Logger`, configure the sandbox with the given config, and launch the sandbox+monitor process. The runner SHALL track the running state and notify subscribers of status changes. If a run is already active, Start SHALL stop the existing run before starting the new one with a fresh access log.
 
-#### Scenario: Start launches a monitored run
-- **WHEN** Start is called with a config and command
-- **THEN** Status returns Running=true
-- **AND** Logger returns a non-nil logger with zero entries
+#### Scenario: Start creates fresh logger and launches sandbox
+
+- **WHEN** `Start(ctx, cfg, command)` is called with valid config and command
+- **THEN** a new `accesslog.Logger` is created
+- **AND** `OnLoggerChange` is called with the new logger (if set)
+- **AND** the sandbox+monitor process is launched
+- **AND** `Status().Running` is true
+
+#### Scenario: Start replaces active run
+
+- **WHEN** `Start` is called while a run is active
+- **THEN** the active run is stopped first
+- **AND** a new run starts with a fresh access log
+
+#### Scenario: Start with invalid config
+
+- **WHEN** `Start` is called with invalid config
+- **THEN** an error is returned
+- **AND** no run is started
 
 ### Requirement: Stop an active run
 
@@ -142,3 +157,39 @@ The runner SHALL exit the alternate screen buffer and clear the screen only if t
 - **WHEN** a TUI application exits the alternate screen before execave queries the terminal
 - **THEN** the screen is NOT cleared
 - **AND** any summary output printed by the TUI after exiting alternate screen remains visible
+
+### Requirement: Unsandboxed run mode
+
+When constructed with `noSandbox=true`, the runner SHALL skip bwrap invocation, seccomp filter creation, and network namespace setup. Instead, the runner SHALL create an `accesslog.Logger` with `unenforced=true` and start the monitor with empty bwrap args so strace traces the command directly on the host filesystem. Using `unenforced=true` ensures all log entries — including network entries logged by the proxy — carry result `UNENFORCED`.
+
+When `noSandbox=true` and a network path is configured (proxy is running), the runner SHALL start a host-side TCP-to-UDS bridge and inject `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, and `https_proxy` environment variables into the traced command's environment, pointing to the bridge's TCP address. The bridge SHALL be stopped after the monitored run completes.
+
+#### Scenario: Unsandboxed run traces command directly
+
+- **WHEN** the runner is constructed with `noSandbox=true`
+- **AND** Start is called with a config and command
+- **THEN** the command is executed directly under strace (no bwrap)
+- **AND** the command has full access to the host filesystem
+
+#### Scenario: Unsandboxed run injects HTTP_PROXY when proxy is configured
+
+- **WHEN** the runner is constructed with `noSandbox=true`
+- **AND** a network path (proxy UDS) is configured
+- **AND** Start is called
+- **THEN** a TCP-to-UDS bridge is started on the host
+- **AND** the traced command receives HTTP_PROXY and HTTPS_PROXY pointing to the bridge's TCP address
+
+#### Scenario: Unsandboxed run produces UNENFORCED log entries
+
+- **WHEN** the runner is constructed with `noSandbox=true`
+- **AND** Start is called with a config and command
+- **THEN** all access log entries have result `UNENFORCED`
+- **AND** no entries have result `OK` or `DENY`
+
+
+
+- **WHEN** the runner is constructed with `noSandbox=true`
+- **AND** the config includes syscall rules
+- **AND** Start is called
+- **THEN** no seccomp filter is created or applied
+- **AND** the traced command can execute any syscall

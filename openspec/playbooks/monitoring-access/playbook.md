@@ -8,10 +8,10 @@ The user enables monitoring to see what resources a sandboxed command accesses. 
 
 ### Use Case: View access log in text output
 
-The user runs with `--monitor` to view access log entries in text format on stderr or in a file, with operation type, target, result, and matched rule columns. Filesystem target paths are displayed in shortened form. By default, only DENY and UNKNOWN entries are shown; the user can include OK entries with `--show-allowed`.
+The user runs monitor mode to view access log entries in text format on stderr or in a file, with operation type, target, result, and matched rule columns. Filesystem target paths are displayed in shortened form. By default, only DENY and UNKNOWN entries are shown; the user can include OK entries with `--show-allowed`.
 
 - **GIVEN** a config at `/home/user/project/execave.toml` with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
-- **WHEN** the user runs `execave --monitor -- ls /usr/lib`
+- **WHEN** the user runs `execave monitor --output - -- ls /usr/lib`
 - **THEN** the access log is printed to stderr after the process exits
 - **AND** by default only `DENY` and `UNKNOWN` entries are shown
 - **AND** with `--show-allowed`, all entries including `OK` are shown
@@ -22,10 +22,10 @@ The user runs with `--monitor` to view access log entries in text format on stde
 
 ### Use Case: Real-time streaming to file
 
-The user writes the access log to a file and tails it in real time as the sandboxed command runs.
+The user writes the access log to a file and tails it in real time as the monitored command runs.
 
 - **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **WHEN** the user runs `execave --monitor=access.log -- long-running-command`
+- **WHEN** the user runs `execave monitor --output access.log -- long-running-command`
 - **AND** runs `tail -f access.log` in another terminal
 - **THEN** new log entries appear in the tail output while the command is still running
 
@@ -298,3 +298,52 @@ The user interrupts a long-running command and the text log contains all entries
 - **AND** sends SIGINT (Ctrl-C) while the command is running
 - **THEN** `access.log` contains entries for all operations that occurred before the signal
 - **AND** execave exits with the command's exit code
+
+### Use Case: Observe native filesystem accesses to diagnose sandbox failures
+
+The user runs a command with `--no-sandbox --monitor` to observe all filesystem accesses the program makes on the real host filesystem, without bwrap isolation. This is useful for diagnosing why a program fails inside the sandbox — the access log shows every path the program probes, including ancestor directories or fallback paths that might be missing in the sandboxed view.
+
+- **GIVEN** a config with filesystem rules (e.g., `fs:ro:/usr/lib`, `fs:rw:~/project`)
+- **WHEN** the user runs `execave --no-sandbox --monitor -- myapp`
+- **THEN** `myapp` runs natively on the host filesystem (no bwrap, no filesystem isolation)
+- **AND** the access log is printed to stderr after the process exits (same as `--monitor` without `--no-sandbox`)
+- **AND** log entries show all filesystem accesses with result `UNENFORCED`, making it immediately clear that no sandboxing was active
+- **AND** the user can see accesses to ancestor directories, fallback library paths, and other paths that are not present in the sandboxed view
+
+### Use Case: Write native access log to file in real time
+
+The user runs with `--no-sandbox --monitor=<path>` to stream the native access log to a file while the program runs, useful for long-running programs.
+
+- **GIVEN** a config with filesystem rules
+- **WHEN** the user runs `execave --no-sandbox --monitor=native.log -- myapp`
+- **AND** runs `tail -f native.log` in another terminal
+- **THEN** `myapp` runs natively on the host filesystem
+- **AND** new log entries appear in the tail output while the command is still running
+
+### Use Case: Observe native network accesses without isolation
+
+The user runs with `--no-sandbox --monitor` and the config has net rules. The network proxy starts and HTTP_PROXY/HTTPS_PROXY are set, so proxy-aware HTTP traffic goes through the proxy and is logged against net rules, but there is no network namespace isolation. Connections are never blocked — rules are evaluated for logging only.
+
+- **GIVEN** a config with no net rules (empty rules)
+- **WHEN** the user runs `execave --no-sandbox --monitor --show-allowed -- curl http://<local-server>/`
+- **THEN** `curl` is proxy-aware and sends its request through the proxy (HTTP_PROXY is set)
+- **AND** the request reaches the server and succeeds (not blocked with 403 despite no matching rule)
+- **AND** the text log displays an entry with operation `HTTP`, target `<local-server>`, result `UNENFORCED`
+- **AND** the host network interfaces remain accessible (no `--unshare-net`)
+
+### Use Case: Error when --no-sandbox is used without --monitor
+
+The user attempts to run with `--no-sandbox` but forgets to specify `--monitor`. execave exits with a clear error message.
+
+- **GIVEN** a valid config
+- **WHEN** the user runs `execave --no-sandbox -- myapp` (without `--monitor`)
+- **THEN** execave exits with an error message indicating that `--monitor` is required when `--no-sandbox` is used
+- **AND** `myapp` is not executed
+
+### Use Case: Monitor-specific flags are scoped to monitor command
+The user uses monitor-only behavior through the `monitor` subcommand, while root flags remain global.
+
+- **GIVEN** a valid config file
+- **WHEN** the user runs `execave --config ./execave.toml monitor --show-allowed --show-nolog --no-sandbox --output monitor.log -- command`
+- **THEN** monitor mode runs with those flags applied
+- **AND** `--config` is accepted before the subcommand as a global option

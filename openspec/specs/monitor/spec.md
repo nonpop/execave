@@ -415,3 +415,37 @@ When the strace output ends before the expected number of execves (e.g., the tun
 - **AND** the strace output ends before the user command's execve (e.g., the tunnel crashes)
 - **THEN** log entries are still produced for the last process transition and subsequent operations
 - **AND** the monitor does not produce zero entries
+
+### Requirement: Extra environment variable injection
+
+When `extraEnv` is non-nil, the monitor SHALL set the strace-traced child process's environment to the current process's environment (`os.Environ()`) extended with the entries in `extraEnv`. This allows the caller to inject variables such as `HTTP_PROXY` into the traced command's environment without affecting the monitor process itself.
+
+#### Scenario: Extra env vars injected into traced command
+
+- **WHEN** the monitor is constructed with `extraEnv` containing `HTTP_PROXY=http://127.0.0.1:12345`
+- **AND** Run is called
+- **THEN** the strace-traced command receives `HTTP_PROXY=http://127.0.0.1:12345` in its environment
+
+#### Scenario: Nil extraEnv inherits parent environment unchanged
+
+- **WHEN** the monitor is constructed with `extraEnv=nil`
+- **AND** Run is called
+- **THEN** the strace-traced command inherits the parent process's environment unchanged
+
+### Requirement: Monitor command entrypoint
+Monitoring SHALL be invoked via the `monitor` subcommand, not via root monitor flags.
+
+#### Scenario: Monitor command runs text logging mode
+- **WHEN** the user runs `execave monitor --output - -- /bin/true`
+- **THEN** execave runs monitored execution and writes text log output to stderr after process exit
+
+#### Scenario: Monitor file output mode remains available
+- **WHEN** the user runs `execave monitor --output access.log -- /bin/true`
+- **THEN** execave writes monitor text log output to `access.log` during execution
+
+### Requirement: No-sandbox monitor option remains monitor-scoped
+The `--no-sandbox` option SHALL remain available only in monitor mode and preserve existing requirement that monitored mode is active.
+
+#### Scenario: No-sandbox runs under monitor command
+- **WHEN** the user runs `execave monitor --no-sandbox --output - -- /bin/true`
+- **THEN** execave runs unsandboxed monitored mode and produces monitor output

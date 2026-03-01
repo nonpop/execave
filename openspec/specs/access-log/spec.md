@@ -11,7 +11,7 @@ The access-log capability handles formatting, deduplication, and filtering of ac
 Each log entry SHALL be a structured record with fields:
 - Operation: `READ`, `WRITE`, or `HTTP`
 - Target: the path accessed (for filesystem operations) or `host:port` (for network operations)
-- Result: `OK`, `DENY`, or `UNKNOWN` (access cannot be evaluated against config rules, e.g., unresolvable relative path)
+- Result: `OK`, `DENY`, `UNKNOWN` (access cannot be evaluated against config rules, e.g., unresolvable relative path), or `UNENFORCED` (no sandbox enforcement was active; access was observed but not controlled)
 - Rule: the matching rule (e.g., `fs:ro:/etc` or `net:http:api.anthropic.com:443`) or an exception (e.g., `no-matching-rule`)
 
 Network entries use `HTTP` for all network requests (both CONNECT-tunneled and plain HTTP). The proxy feeds network entries to the same logger that receives filesystem entries from the monitor.
@@ -52,6 +52,16 @@ Network entries use `HTTP` for all network requests (both CONNECT-tunneled and p
 - **WHEN** Logger receives entry (HTTP, `localhost:3000`, DENY, `no-matching-rule`)
 - **THEN** Entries() returns entry: Operation=`HTTP`, Target=`localhost:3000`, Result=`DENY`, Rule=`no-matching-rule`
 
+#### Scenario: Unenforced entry logged
+
+- **WHEN** Logger receives entry (READ, `/tmp/secret`, UNENFORCED, `no-matching-rule`)
+- **THEN** Entries() returns entry: Operation=`READ`, Target=`/tmp/secret`, Result=`UNENFORCED`, Rule=`no-matching-rule`
+
+#### Scenario: Unenforced entry with matching rule logged
+
+- **WHEN** Logger receives entry (HTTP, `api.example.com:443`, UNENFORCED, `net:http:api.example.com:443`)
+- **THEN** Entries() returns entry: Operation=`HTTP`, Target=`api.example.com:443`, Result=`UNENFORCED`, Rule=`net:http:api.example.com:443`
+
 ### Requirement: Log deduplication
 
 Each unique `(operation, target, result)` tuple SHALL be logged at most once, regardless of how many times Log is called. Read and write to the same path are distinct tuples.
@@ -90,3 +100,19 @@ When configured with managed paths (e.g., `/dev`, `/proc`, `/tmp`), the Logger S
 - **WHEN** Logger is configured with managed paths `/dev`, `/proc`, `/tmp`
 - **AND** Logger receives entry (READ, `/usr/bin/bash`, OK, `fs:ro:/usr`)
 - **THEN** output contains an entry for `/usr/bin/bash`
+
+### Requirement: Unenforced mode
+
+When constructed with `unenforced=true`, the Logger SHALL override the Result of every entry passed to `Log()` to `ResultUnenforced`, regardless of the result supplied by the caller. This allows callers (monitor, proxy) to log entries without being aware of the no-sandbox mode.
+
+#### Scenario: Logger in unenforced mode overrides result
+
+- **WHEN** Logger is constructed with `unenforced=true`
+- **AND** Logger receives entry (READ, `/home/user/file.txt`, DENY, `no-matching-rule`)
+- **THEN** Entries() returns entry with Result=`UNENFORCED`
+
+#### Scenario: Logger in normal mode preserves result
+
+- **WHEN** Logger is constructed with `unenforced=false`
+- **AND** Logger receives entry (READ, `/home/user/file.txt`, DENY, `no-matching-rule`)
+- **THEN** Entries() returns entry with Result=`DENY`
