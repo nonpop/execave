@@ -5,19 +5,19 @@
 The user runs a command that attempts dangerous syscalls (e.g., ptrace, mount). When seccomp filtering is active, denied attempts appear as `SYSCALL` entries in the text log, giving visibility into what the sandboxed process tried to do.
 
 - **GIVEN** a config with rule `fs:ro:/usr/lib`
-- **AND** seccomp filtering is active (default, `--allow-all-syscalls` not set)
+- **AND** seccomp filtering is active (always on when sandboxed)
 - **WHEN** the user runs `execave --monitor -- python3 -c "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"`
 - **THEN** the text log displays an entry with operation `SYSCALL`, target `bpf`, result `DENY`, rule `seccomp`
 
 ### Use Case: Verify seccomp filter is active by presence of SYSCALL entries
 
-The user verifies the seccomp filter is working by observing that blocked syscall attempts produce `SYSCALL` entries. When the filter is disabled via `--allow-all-syscalls`, the same attempts produce no `SYSCALL` entries.
+The user verifies the seccomp filter is enforcing by observing that blocked syscall attempts produce `SYSCALL DENY` entries in sandboxed mode. In `--no-sandbox` mode (monitoring only, no bwrap or seccomp), the same attempts appear as `UNENFORCED SYSCALL` instead, confirming that seccomp is the enforcement mechanism.
 
 - **GIVEN** a config with rule `fs:ro:/usr/lib`
-- **WHEN** the user runs `execave --monitor -- python3 -c "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"` with seccomp active
+- **WHEN** the user runs `execave monitor --output=- -- python3 -c "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"` in sandboxed mode
 - **THEN** the text log displays a `SYSCALL bpf DENY seccomp` entry
-- **AND** when the user reruns with `--allow-all-syscalls`
-- **THEN** no `SYSCALL` entry appears in the text log
+- **AND** when the user reruns with `--no-sandbox`
+- **THEN** the text log displays `UNENFORCED SYSCALL bpf` instead of `DENY`
 
 ### Use Case: Seccomp-denied syscall entries deduplicated
 

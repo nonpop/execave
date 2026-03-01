@@ -2,7 +2,7 @@
 
 ### Requirement: Blocked syscall tracing
 
-When seccomp filtering is active, the monitor SHALL include ruleable blocked syscall names in the strace trace expression and log attempted calls as `SYSCALL` entries. Defense-in-depth syscalls are blocked silently by the BPF filter without monitor tracing. When seccomp filtering is not active (`--allow-all-syscalls`), blocked syscalls SHALL NOT be traced.
+When seccomp filtering is active, the monitor SHALL include ruleable blocked syscall names in the strace trace expression and log attempted calls as `SYSCALL` entries. Defense-in-depth syscalls are blocked silently by the BPF filter without monitor tracing. When seccomp filtering is not active (e.g., `--no-sandbox` mode), blocked syscalls SHALL NOT be traced.
 
 The monitor SHALL distinguish between denied and allowed blocked syscalls:
 - Syscalls still in the active blocklist: logged as `SYSCALL / <name> / DENY / seccomp`
@@ -25,9 +25,9 @@ Blocked syscalls SHALL be intercepted before filesystem access processing. They 
 
 #### Scenario: No SYSCALL entries when seccomp disabled
 
-- **WHEN** seccomp filtering is not active (`--allow-all-syscalls`)
+- **WHEN** seccomp filtering is not active (e.g., `--no-sandbox` mode)
 - **AND** the sandboxed process calls a normally-blocked syscall
-- **THEN** no `SYSCALL` entry appears in the log
+- **THEN** no `SYSCALL` `DENY` entry appears in the log (entries appear as `UNENFORCED` instead)
 
 #### Scenario: File-group blocked syscall intercepted before ignore list
 

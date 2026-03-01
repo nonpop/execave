@@ -485,7 +485,7 @@ func TestE2E_MonitoringAccess_ViewSeccompDeniedSyscallAttemptsInAccessLog(t *tes
 }
 
 // TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntries tests that
-// SYSCALL entries appear when seccomp is active and disappear with --allow-all-syscalls.
+// SYSCALL DENY entries appear when seccomp is active (sandboxed) and become UNENFORCED in --no-sandbox mode.
 func TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntries(t *testing.T) {
 	requireAMD64(t)
 	s := newScenario(t)
@@ -495,8 +495,9 @@ func TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntr
 	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
 	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
 
-	s.whenRunTextLogWithFlags([]string{"--allow-all-syscalls"}, "python3", "-c", bpfPythonCmd)
-	s.thenStderrNotContains("SYSCALL")
+	s.whenRunTextLogWithFlags([]string{"--no-sandbox"}, "python3", "-c", bpfPythonCmd)
+	s.thenStderrHasEntry("UNENFORCED", "SYSCALL", "bpf")
+	s.thenStderrNotContains("DENY")
 }
 
 // TestE2E_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated tests that repeated

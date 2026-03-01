@@ -41,11 +41,11 @@
 
 ## 7. Integration and E2E tests
 
-- [ ] 7.1 Monitor integration test: real strace execution with blocked syscall attempt produces SYSCALL entry
-- [ ] 7.2 Config integration test: `ParseRules` with syscall rules produces correct config
-- [ ] 7.3 E2E test for "View seccomp-denied syscall attempts" use case
-- [ ] 7.4 E2E test for "Selectively allow a blocked syscall" use case
-- [ ] 7.5 E2E test for "Invalid syscall name rejected" use case
+- [x] 7.1 Monitor integration test: real strace execution with blocked syscall attempt produces SYSCALL entry
+- [x] 7.2 Config integration test: `ParseRules` with syscall rules produces correct config
+- [x] 7.3 E2E test for "View seccomp-denied syscall attempts" use case
+- [x] 7.4 E2E test for "Selectively allow a blocked syscall" use case
+- [x] 7.5 E2E test for "Invalid syscall name rejected" use case
 
 ## 8. Documentation
 

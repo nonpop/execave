@@ -29,8 +29,8 @@
 - [x] 6.1 Update `docs/security-model.md`: add seccomp row to guarantees table, add to security-critical code table, add `--allow-all-syscalls` to limitations.
 - [x] 6.2 Update `docs/architecture.md` if it references security layers.
 
-## 7. E2E tests (SKIP THESE TASKS FOR NOW)
+## 7. E2E tests
 
-- [ ] 7.1 Add E2E test: default seccomp blocks a dangerous syscall (EPERM).
-- [ ] 7.2 Add E2E test: `--allow-all-syscalls` disables seccomp filtering.
-- [ ] 7.3 Add E2E test: namespace escape via unshare blocked by seccomp.
+- [x] 7.1 Add E2E test: default seccomp blocks a dangerous syscall (EPERM).
+- [x] 7.2 Add E2E test: `--allow-all-syscalls` disables seccomp filtering.
+- [x] 7.3 Add E2E test: namespace escape via unshare blocked by seccomp.

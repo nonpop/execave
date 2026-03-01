@@ -136,7 +136,21 @@ func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary(t *testing.
 	assert.Contains(t, result.Stderr, "not owned by root")
 }
 
-// TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary tests that execave
+// TestE2E_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp tests that
+// a command attempting to create a new user namespace inside the sandbox is blocked
+// by the seccomp filter, preventing namespace escape.
+func TestE2E_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp(t *testing.T) {
+	s := newScenario(t)
+	s.givenRules()
+
+	// unshare --user attempts to create a nested user namespace via the unshare syscall.
+	// The seccomp filter blocks unshare with EPERM.
+	s.whenRun("unshare", "--user", "true")
+
+	s.thenExitCodeNonZero()
+	s.thenStderrContains("Operation not permitted")
+}
+
 // rejects a non-root-owned strace binary found earlier in PATH when monitoring is active.
 func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing.T) {
 	fakeDir := t.TempDir()
