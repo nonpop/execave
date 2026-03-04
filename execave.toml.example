@@ -81,6 +81,8 @@ fs = [
   #
   # "nolog:/etc/fonts",
 
+  # TODO: add example for including global gitconfig, gitignore
+
   # -- Working directory --
   # The only read-write entry. "." resolves to the config file's directory.
   # Scoped to one directory; everything outside remains inaccessible. The

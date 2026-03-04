@@ -1,5 +1,10 @@
 # execave TODOs
 
+- go through TODOs in code & other files
+
+- monitor to execave-access.log by default, and allow stderr/out with
+- maybe need to allow http:*:*
+
 - validate config command, show effective config command, config layering
   - Means: CLI commands to check config validity, display final effective config after processing, and support layering multiple config files with overrides.
   - Assessment: Important. Validate + show-effective are high-value for a security tool. Config layering adds complexity and attack surface (which layer wins? can a child widen parent permissions?) — defer until there's a concrete use case.

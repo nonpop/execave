@@ -1,0 +1,292 @@
+// Package run orchestrates sandbox execution, proxy setup, and access monitoring.
+package run
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/netrules"
+	"github.com/nonpop/execave/internal/proxy"
+	"github.com/nonpop/execave/internal/runner"
+	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/textlog"
+	"golang.org/x/term"
+)
+
+// Run executes command inside the sandbox described by cfgPath.
+// monitor is the text-log output path (empty string disables monitoring, "-" buffers to stderr).
+// showAllowed and showNolog control which log entries are emitted.
+// noSandbox disables bwrap/seccomp enforcement (requires monitor to be set).
+// Returns the exit code of the sandboxed process on success.
+func Run(command []string, cfgPath, monitor string, showAllowed, showNolog bool, noSandbox bool) (int, error) {
+	if noSandbox && monitor == "" {
+		return 0, errors.New("--no-sandbox requires monitor output")
+	}
+
+	cfg, absConfigPath, err := LoadRuntimeConfig(cfgPath)
+	if err != nil {
+		return 0, err
+	}
+
+	// Prevent SIGINT from terminating the Go process: allows deferred cleanup
+	// (terminal restore, proxy shutdown) to run.
+	// See fix-sigint-access-log/design.md for why we use signal.Notify instead of signal.Ignore.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT)
+
+	// Ignore SIGTTOU so terminal ioctls (tcsetattr, tcflush, tcsetpgrp)
+	// succeed when execave is in a background process group. This happens
+	// when --new-session is skipped (Linux 6.2+): the sandboxed process can
+	// call tcsetpgrp() to become the foreground group, and when it dies,
+	// execave is left as a background group.
+	//
+	// Must use signal.Ignore (not signal.Notify): the kernel's
+	// tty_check_change checks for SIG_IGN disposition specifically. A Go
+	// runtime handler (signal.Notify) does not satisfy is_ignored(), causing
+	// an infinite SIGTTOU/restart loop on terminal ioctls from a background
+	// group.
+	//
+	// SIG_IGN is inherited by children across exec, but this is harmless:
+	// interactive shells (bash, zsh) reset their own signal handlers on
+	// startup, and non-interactive children don't use job control.
+	signal.Ignore(syscall.SIGTTOU)
+
+	// Restore terminal state on exit, even if command fails.
+	// This prevents sandboxed processes from leaving the terminal in a bad state
+	// (e.g., echo disabled, raw mode enabled).
+	restoreTerminal := saveTerminalState()
+	defer restoreTerminal()
+
+	ctx := context.Background()
+
+	monitorEnabled := monitor != ""
+
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, noSandbox)
+	if err != nil {
+		return 0, err
+	}
+	if proxyCleanup != nil {
+		defer proxyCleanup()
+	}
+
+	if monitorEnabled {
+		return runMonitored(ctx, cfg, absConfigPath, netPath, httpProxy, command, monitor, showAllowed, showNolog, noSandbox)
+	}
+
+	sb := sandbox.New(cfg, absConfigPath, netPath)
+	exitCode, err := sb.Run(ctx, command)
+	if err != nil {
+		return 0, fmt.Errorf("run sandbox: %w", err)
+	}
+	return exitCode, nil
+}
+
+// LoadRuntimeConfig loads and resolves the runtime configuration from cfgPath.
+// It auto-detects the dynamic linker path from bwrap and returns the absolute
+// config path alongside the loaded config.
+func LoadRuntimeConfig(cfgPath string) (*config.Config, string, error) {
+	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
+	// bwrap is mandatory and re-validated at sandbox launch; if unavailable
+	// here, skip interpreter auto-detection only.
+	var interpPath string
+	if bwrapPath, resolveErr := sandbox.ResolveBwrap(); resolveErr == nil {
+		interpPath = sandbox.InterpreterPath(bwrapPath)
+	}
+	managedPaths := sandbox.ManagedPathsWith(interpPath)
+
+	cfg, err := config.Load(cfgPath, managedPaths)
+	if err != nil {
+		return nil, "", fmt.Errorf("load config from %s: %w", cfgPath, err)
+	}
+	cfg.InterpreterPath = interpPath
+
+	absConfigPath, err := filepath.Abs(cfgPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve absolute path for config %s: %w", cfgPath, err)
+	}
+
+	return cfg, absConfigPath, nil
+}
+
+// saveTerminalState saves the current terminal state and returns a function
+// that restores it. Call the returned function via defer to ensure the terminal
+// is restored even if the sandboxed process leaves it in a bad state.
+func saveTerminalState() func() {
+	stdinFd := int(os.Stdin.Fd())
+	if !term.IsTerminal(stdinFd) {
+		return func() {}
+	}
+	oldState, err := term.GetState(stdinFd)
+	if err != nil {
+		// IsTerminal just confirmed stdin is a terminal; GetState uses the
+		// same ioctl so failure here means the fd was closed concurrently.
+		panic(fmt.Sprintf("get terminal state after IsTerminal succeeded: %v", err))
+	}
+	// Ignore restore errors - terminal is already in unknown state.
+	return func() { _ = term.Restore(stdinFd, oldState) }
+}
+
+// setupNetworking initializes the proxy and network path. The proxy always starts,
+// using the config's net rules (possibly empty, i.e. deny-all). When noSandbox is
+// true, the proxy does not block connections — rules are evaluated for logging only.
+func setupNetworking(cfg *config.Config, noSandbox bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
+	netPath, proxyInstance, tmpDir, err := startProxy(cfg, noSandbox)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cleanup := func() {
+		if err := proxyInstance.Stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: stop proxy: %v\n", err)
+		}
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(os.Stderr, "execave: remove proxy temp dir: %v\n", err)
+		}
+	}
+	return netPath, proxyInstance, cleanup, nil
+}
+
+func startProxy(cfg *config.Config, noEnforce bool) (*sandbox.NetworkPath, *proxy.Proxy, string, error) {
+	tmpDir, err := os.MkdirTemp("", "execave-proxy-*")
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("create proxy temp dir: %w", err)
+	}
+
+	udsPath := filepath.Join(tmpDir, "proxy.sock")
+
+	netResolver := netrules.NewAccessResolver(cfg.NetRules)
+	httpProxy := proxy.New(netResolver, nil)
+	httpProxy.SetNoEnforce(noEnforce)
+
+	if err := httpProxy.Start(udsPath); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, nil, "", fmt.Errorf("start proxy: %w", err)
+	}
+
+	execaveBinary, err := os.Executable()
+	if err != nil {
+		_ = httpProxy.Stop()
+		_ = os.RemoveAll(tmpDir)
+		return nil, nil, "", fmt.Errorf("resolve execave binary path: %w", err)
+	}
+
+	netPath := &sandbox.NetworkPath{
+		UDSPath:       udsPath,
+		ExecaveBinary: execaveBinary,
+	}
+
+	return netPath, httpProxy, tmpDir, nil
+}
+
+// logContext holds the log classification resources for text log monitoring.
+type logContext struct {
+	homeDir      string
+	configDir    string
+	fsRes        *fsrules.LogResolver
+	netRes       *netrules.LogResolver
+	syscallNolog map[string]bool
+}
+
+// runMonitored runs the command under strace-based filesystem access monitoring.
+// When noSandbox is true, bwrap and seccomp are skipped; when false the command
+// runs inside the bwrap sandbox as usual.
+func runMonitored(ctx context.Context, cfg *config.Config, absConfigPath string, netPath *sandbox.NetworkPath, httpProxy *proxy.Proxy, command []string, monitorMode string, showAllowed, showNolog bool, noSandbox bool) (int, error) {
+	rnr := runner.New(cfg, absConfigPath, netPath, noSandbox)
+
+	// Wire logger lifecycle: when the runner creates a fresh logger on each Start,
+	// update the proxy so network access entries go to the same logger.
+	if httpProxy != nil {
+		rnr.OnLoggerChange = httpProxy.SetLogger
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return 0, fmt.Errorf("resolve user home directory: %w", err)
+	}
+
+	syscallNolog := make(map[string]bool, len(cfg.SyscallNologRules))
+	for _, name := range cfg.SyscallNologRules {
+		syscallNolog[name] = true
+	}
+
+	lctx := logContext{
+		homeDir:      homeDir,
+		configDir:    filepath.Dir(absConfigPath),
+		fsRes:        fsrules.NewLogResolver(cfg.FSLogRules),
+		netRes:       netrules.NewLogResolver(cfg.NetLogRules),
+		syscallNolog: syscallNolog,
+	}
+
+	return runMonitoredText(ctx, cfg, rnr, lctx, command, monitorMode, showAllowed, showNolog)
+}
+
+// runMonitoredText runs the command under strace monitoring with text log output.
+// monitorPath is the output file path or "-" to buffer to stderr after process exit.
+func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runner, lctx logContext, command []string, monitorPath string, showAllowed, showNolog bool) (_ int, err error) {
+	var out io.Writer
+	var buf *bytes.Buffer
+
+	if monitorPath == "-" {
+		buf = new(bytes.Buffer)
+		out = buf
+	} else {
+		logFile, createErr := os.Create(monitorPath) // #nosec G304 -- monitorPath is user-provided output path for text log
+		if createErr != nil {
+			return 0, fmt.Errorf("create text log file %s: %w", monitorPath, createErr)
+		}
+		defer func() {
+			if closeErr := logFile.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close text log file %s: %w", monitorPath, closeErr))
+			}
+		}()
+		out = logFile
+	}
+
+	logWriter := textlog.New(out, lctx.homeDir, lctx.configDir, showAllowed, showNolog, lctx.fsRes, lctx.netRes, lctx.syscallNolog)
+
+	if err := rnr.Start(ctx, cfg, command); err != nil {
+		return 0, fmt.Errorf("start initial run: %w", err)
+	}
+
+	logger := rnr.Logger()
+
+	writerCtx, writerCancel := context.WithCancel(ctx)
+	writerErr := make(chan error, 1)
+	go func() {
+		writerErr <- logWriter.Run(writerCtx, logger)
+	}()
+
+	// Wait for the process to exit
+	statusCh := rnr.Subscribe()
+	for rnr.Status().Running {
+		<-statusCh
+	}
+	rnr.Unsubscribe(statusCh)
+
+	// Trigger final drain in the writer
+	writerCancel()
+	if writeErr := <-writerErr; writeErr != nil {
+		err = errors.Join(err, fmt.Errorf("write text log: %w", writeErr))
+	}
+
+	// Flush buffered output for stderr mode after process exits
+	if buf != nil {
+		if _, copyErr := io.Copy(os.Stderr, buf); copyErr != nil {
+			err = errors.Join(err, fmt.Errorf("flush text log to stderr: %w", copyErr))
+		}
+	}
+
+	status := rnr.Status()
+	if status.Error != "" {
+		return status.ExitCode, fmt.Errorf("run text log+sandbox: %s", status.Error)
+	}
+	return status.ExitCode, err
+}

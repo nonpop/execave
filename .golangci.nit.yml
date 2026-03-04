@@ -59,9 +59,11 @@ linters:
         path: '(.+)_test\.go'
         text: "'tt'"
 
+      # allow idiomatic cobra command definitions
       - linters:
           - gochecknoglobals
-        path: 'export_test\.go'
+          - gochecknoinits
+        path: 'cmd/execave/commands/.+\.go'
 
       - linters:
           - goconst
