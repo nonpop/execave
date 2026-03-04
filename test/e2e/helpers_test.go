@@ -75,51 +75,43 @@ func failIfNoGcc(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// tomlSection writes a TOML array section to sb if values is non-empty.
+func tomlSection(buf *strings.Builder, key string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	buf.WriteString(key + " = [\n")
+	for _, v := range values {
+		fmt.Fprintf(buf, "    %q,\n", v)
+	}
+	buf.WriteString("]\n")
+}
+
 // tomlConfig formats rules as a TOML config file.
 // Rules are grouped by prefix and emitted as flat key sections (fs, net, syscall).
 func tomlConfig(rules []string) []byte {
-	// Group rules by prefix
-	fsRules := []string{}
-	netRules := []string{}
-	syscallRules := []string{}
+	sections := []struct {
+		prefix string
+		key    string
+	}{
+		{"fs:", "fs"},
+		{"net:", "net"},
+		{"syscall:", "syscall"},
+	}
 
-	for _, r := range rules {
-		if strings.HasPrefix(r, "fs:") {
-			fsRules = append(fsRules, strings.TrimPrefix(r, "fs:"))
-		} else if strings.HasPrefix(r, "net:") {
-			netRules = append(netRules, strings.TrimPrefix(r, "net:"))
-		} else if strings.HasPrefix(r, "syscall:") {
-			syscallRules = append(syscallRules, strings.TrimPrefix(r, "syscall:"))
+	grouped := make(map[string][]string, len(sections))
+	for _, rule := range rules {
+		for _, s := range sections {
+			if v, ok := strings.CutPrefix(rule, s.prefix); ok {
+				grouped[s.key] = append(grouped[s.key], v)
+				break
+			}
 		}
 	}
 
 	var sb strings.Builder
-
-	// Emit fs section if there are fs rules
-	if len(fsRules) > 0 {
-		sb.WriteString("fs = [\n")
-		for _, r := range fsRules {
-			fmt.Fprintf(&sb, "    %q,\n", r)
-		}
-		sb.WriteString("]\n")
-	}
-
-	// Emit net section if there are net rules
-	if len(netRules) > 0 {
-		sb.WriteString("net = [\n")
-		for _, r := range netRules {
-			fmt.Fprintf(&sb, "    %q,\n", r)
-		}
-		sb.WriteString("]\n")
-	}
-
-	// Emit syscall section if there are syscall rules
-	if len(syscallRules) > 0 {
-		sb.WriteString("syscall = [\n")
-		for _, r := range syscallRules {
-			fmt.Fprintf(&sb, "    %q,\n", r)
-		}
-		sb.WriteString("]\n")
+	for _, s := range sections {
+		tomlSection(&sb, s.key, grouped[s.key])
 	}
 
 	return []byte(sb.String())

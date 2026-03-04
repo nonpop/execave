@@ -98,7 +98,7 @@ The sandboxed process inherits the host's working directory. If the host cwd is 
 
 #### Process Isolation
 
-Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, network). On older kernels, uses `--new-session` to prevent TIOCSTI terminal injection; on Linux 6.2+ where the kernel blocks TIOCSTI, `--new-session` is skipped to allow SIGWINCH delivery for TUI applications. Environment variables pass through from the host. Network is isolated by default; when net rules are configured or monitoring is enabled, a proxy-tunnel bridge provides controlled access (or deny-all logging with no net rules).
+Uses `--unshare-all` for full namespace isolation (PID, IPC, UTS, cgroup, network). On older kernels, uses `--new-session` to prevent TIOCSTI terminal injection; on Linux 6.2+ where the kernel blocks TIOCSTI, `--new-session` is skipped to allow SIGWINCH delivery for TUI applications. Environment variables pass through from the host. Network is isolated; a proxy-tunnel bridge enforces the configured net rules (deny-all if none are configured).
 
 ### Seccomp (`internal/seccomp/`)
 
@@ -114,22 +114,20 @@ Forward HTTP proxy on Unix domain socket (host-side). Handles CONNECT tunneling 
 
 TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, relays connections to proxy UDS, and configures HTTP proxy environment variables. Wraps user command and propagates exit code. Fail-closed on infrastructure errors.
 
+**Intra-sandbox connectivity:** Because the proxy runs on the host, it resolves `localhost` against the host network namespace, not the sandbox's. A server bound to loopback inside the sandbox is unreachable through the proxy. To connect to an intra-sandbox server, bypass the proxy: `NO_PROXY=localhost,127.0.0.1` or `curl --noproxy localhost`. Direct loopback connections work because the sandbox still has a loopback interface.
+
 ### Monitor (`internal/monitor/`)
 
 Optional filesystem and syscall access tracer (`--monitor`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. When seccomp is enabled, also traces blocked and allowed syscalls and logs them as `SYSCALL` entries. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for text log output. Note: strace uses ptrace, so if monitoring is enabled, the sandboxed process cannot use ptrace even if allowed by config (see security-model.md Limitations).
 
 ## Data Flow
 
-**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → creates runner (if `--monitor`) → starts proxy (if net rules or monitoring) → dispatches by monitor mode:
+**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → starts proxy → creates runner (if `--monitor`) → dispatches by monitor mode:
 - `--monitor=<path>`: creates `textlog.Writer` writing to file, calls `runner.Start()`, runs writer goroutine until process exits
 - `--monitor=-` or bare `--monitor`: same as file mode but writes to a buffer, flushed to stderr after exit
 - no `--monitor`: executes `bwrap` directly (no runner, no monitor)
 
-**Runtime (without net rules, no monitoring):** Kernel enforces namespace isolation (mount, PID, IPC, network). No network access. No proxy.
-
-**Runtime (without net rules, monitoring enabled):** Same namespace isolation. Proxy-tunnel starts with an empty rule set (deny-all) so that HTTP-proxy-aware programs' access attempts are logged. Direct connections still fail (no NIC). Monitor traces syscalls, resolves via `fsrules`, logs via `accesslog`. Output goes to text log writer.
-
-**Runtime (with net rules):** Same namespace isolation. Inside the sandbox, the tunnel listens on loopback and bridges TCP to the proxy UDS. Proxy checks each request against net rules and forwards or denies. Both monitor (filesystem) and proxy (network) log to the same `accesslog`. If monitoring enabled, output goes to text log.
+**Runtime:** Kernel enforces namespace isolation (mount, PID, IPC, network). Inside the sandbox, the tunnel listens on loopback and bridges TCP to the proxy UDS. `HTTP_PROXY`/`HTTPS_PROXY` are injected. The proxy checks each request against net rules (deny-all if none configured) and forwards or denies. Both monitor (filesystem) and proxy (network) log to the same `accesslog`. If monitoring enabled, output goes to text log.
 
 **Shutdown:** After sandbox exits, the writer goroutine is cancelled, performs a final drain, then the buffered output (stderr mode) is flushed.
 

@@ -80,9 +80,9 @@ BuildBwrapArgs SHALL always include `--unshare-all` and never include `--share-n
 
 When a NetworkPath is provided, BuildBwrapArgs SHALL bind-mount the proxy UDS and execave binary into the sandbox read-only, and wrap the user command with `execave network-tunnel`.
 
-Note: MonitoringWithoutNetRulesStartsProxyTunnel requires bwrap + strace + proxy orchestration and cannot be tested at the sandbox package level.
+Note: The CLI always provides a NetworkPath; testing the always-on proxy behavior requires bwrap + proxy orchestration and cannot be tested at the sandbox package level.
 
-#### Scenario: Net rules trigger proxy-tunnel setup
+#### Scenario: Proxy-tunnel setup
 - **WHEN** NetworkPath is provided
 - **THEN** BuildBwrapArgs wraps the command with `network-tunnel` and the sandbox-internal UDS path
 

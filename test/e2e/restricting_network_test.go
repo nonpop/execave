@@ -7,18 +7,17 @@ import (
 )
 
 // TestE2E_RestrictingNetwork_RunCommandWithNoNetworkAccess tests that without any net rules,
-// the sandbox has no network interface and all connections fail.
+// HTTP-proxy-aware clients receive 403 from the deny-all proxy.
 func TestE2E_RestrictingNetwork_RunCommandWithNoNetworkAccess(t *testing.T) {
 	s := newScenario(t)
-	s.givenPython3()
+	s.givenCurl()
 
 	s.givenRules()
 
-	// No net rules → no NIC, TCP connection fails
-	s.whenRun("python3", "-c",
-		"import socket; s=socket.socket(); s.settimeout(2); s.connect(('1.1.1.1', 80))")
+	// No net rules → proxy starts with deny-all rule set; curl (proxy-aware) gets 403.
+	s.whenRun("curl", "-si", "http://example.com/")
 
-	s.thenExitCodeNonZero()
+	s.thenStdoutContains("403")
 }
 
 // TestE2E_RestrictingNetwork_AllowSpecificHTTPSEndpoints tests that an allowed HTTPS endpoint

@@ -187,7 +187,7 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 
 	monitorEnabled := monitor != ""
 
-	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, monitorEnabled, noSandbox)
+	netPath, httpProxy, proxyCleanup, err := setupNetworking(cfg, noSandbox)
 	if err != nil {
 		return 0, err
 	}
@@ -234,15 +234,10 @@ func extractCommand(cmd *cobra.Command, args []string) []string {
 	return args[argsLenAtDash:]
 }
 
-// setupNetworking initializes the proxy and network path if net rules are present
-// or if monitoring is enabled. When monitoring is enabled without net rules, the
-// proxy starts with an empty rule set (deny-all) so that HTTP-proxy-aware
-// programs' network access attempts are logged. When noSandbox is true, the proxy
-// does not block connections — rules are evaluated for logging only.
-func setupNetworking(cfg *config.Config, monitorEnabled bool, noSandbox bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
-	if !cfg.HasNetRules() && !monitorEnabled {
-		return nil, nil, nil, nil
-	}
+// setupNetworking initializes the proxy and network path. The proxy always starts,
+// using the config's net rules (possibly empty, i.e. deny-all). When noSandbox is
+// true, the proxy does not block connections — rules are evaluated for logging only.
+func setupNetworking(cfg *config.Config, noSandbox bool) (*sandbox.NetworkPath, *proxy.Proxy, func(), error) {
 	netPath, proxyInstance, tmpDir, err := startProxy(cfg, noSandbox)
 	if err != nil {
 		return nil, nil, nil, err

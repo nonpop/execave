@@ -52,7 +52,9 @@ net = [
 
 **Automatic mounts** (not in config): `/dev`, `/proc`, `/tmp`
 
-**Network is isolated by default.** Only connections matching net rules are allowed. The internal proxy is the only way out, so apps that ignore `HTTP_PROXY`/`HTTPS_PROXY` have no network access.
+**Network is isolated.** Only connections matching net rules are allowed; without net rules the proxy is deny-all. Apps that ignore `HTTP_PROXY`/`HTTPS_PROXY` have no network access regardless (no NIC inside the sandbox).
+
+**Intra-sandbox servers:** execave injects `HTTP_PROXY` into the sandboxed process's environment. HTTP clients route all connections—including to `localhost`—through the host-side proxy, which cannot reach servers inside the sandbox's network namespace. To connect to an intra-sandbox server, bypass the proxy: set `NO_PROXY=localhost,127.0.0.1`.
 
 **Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `--monitor` to narrow down what's actually needed.
 
