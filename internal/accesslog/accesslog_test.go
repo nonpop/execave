@@ -1,9 +1,12 @@
 package accesslog
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,8 +14,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// countLogLines returns the number of log entries written to s.
+// Each entry is terminated by a newline, so this counts newlines.
+func countLogLines(s string) int {
+	return strings.Count(s, "\n")
+}
+
+// syncBuffer is a thread-safe bytes.Buffer for concurrent log tests.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
 func TestLogger_LogEntry(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -23,16 +52,17 @@ func TestLogger_LogEntry(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationRead, entries[0].Operation)
-	assert.Equal(t, "/etc/passwd", entries[0].Target)
-	assert.Equal(t, ResultOK, entries[0].Result)
-	assert.Equal(t, "fs:ro:/etc", entries[0].Rule)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "READ")
+	assert.Contains(t, buf.String(), "/etc/passwd")
+	assert.Contains(t, buf.String(), "OK")
+	assert.Contains(t, buf.String(), "fs:ro:/etc")
 }
 
 func TestLogger_ConcurrentAccess(t *testing.T) {
-	logger := New(nil, false)
+	var buf syncBuffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	const numGoroutines = 10
 	const entriesPerGoroutine = 20
@@ -59,25 +89,22 @@ func TestLogger_ConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	// Assert all distinct entries are present (no entries lost)
-	entries := logger.Entries()
 	expectedEntries := numGoroutines * entriesPerGoroutine
-	assert.Len(t, entries, expectedEntries)
+	assert.Equal(t, expectedEntries, countLogLines(buf.String()))
 
 	// Verify each distinct entry appears exactly once
-	entryMap := make(map[string]bool)
-	for _, entry := range entries {
-		entryMap[entry.Target] = true
-	}
 	for i := range numGoroutines {
 		for j := range entriesPerGoroutine {
 			expectedPath := fmt.Sprintf("/tmp/file-%d-%d.txt", i, j)
-			assert.True(t, entryMap[expectedPath])
+			assert.Contains(t, buf.String(), expectedPath)
 		}
 	}
 }
 
 func TestLogger_Deduplication(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -91,8 +118,7 @@ func TestLogger_Deduplication(t *testing.T) {
 	logger.Log(entry)
 
 	// Should only appear once
-	entries := logger.Entries()
-	assert.Len(t, entries, 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_ReadAndWriteSeparate(t *testing.T) {
@@ -101,7 +127,9 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 	err := os.WriteFile(testFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	readEntry := Entry{
 		Operation: OperationRead,
@@ -121,10 +149,9 @@ func TestLogger_ReadAndWriteSeparate(t *testing.T) {
 	logger.Log(writeEntry)
 
 	// Both should be logged (different operations)
-	entries := logger.Entries()
-	assert.Len(t, entries, 2)
-	assert.Equal(t, OperationRead, entries[0].Operation)
-	assert.Equal(t, OperationWrite, entries[1].Operation)
+	assert.Equal(t, 2, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "READ")
+	assert.Contains(t, buf.String(), "WRITE")
 }
 
 func TestLogger_ManagedPathFiltering(t *testing.T) {
@@ -156,7 +183,9 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create new logger for each test to avoid deduplication issues
-			logger := New(managedPaths, false)
+			var buf bytes.Buffer
+			cfg := &Config{ManagedPaths: managedPaths, ShowAllowed: true}
+			logger := New(&buf, cfg)
 
 			entry := Entry{
 				Operation: OperationRead,
@@ -167,11 +196,10 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 
 			logger.Log(entry)
 
-			entries := logger.Entries()
 			if tt.filtered {
-				assert.Empty(t, entries)
+				assert.Empty(t, buf.String())
 			} else {
-				assert.Len(t, entries, 1)
+				assert.Equal(t, 1, countLogLines(buf.String()))
 			}
 		})
 	}
@@ -179,7 +207,9 @@ func TestLogger_ManagedPathFiltering(t *testing.T) {
 
 func TestLogger_NonExistentReadLogged(t *testing.T) {
 	tmpDir := t.TempDir()
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	// File that doesn't exist — logger logs it regardless.
 	// Non-existent path filtering is the resolver/monitor's responsibility.
@@ -193,9 +223,8 @@ func TestLogger_NonExistentReadLogged(t *testing.T) {
 	}
 
 	logger.Log(readEntry)
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationRead, entries[0].Operation)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "READ")
 }
 
 func TestLogger_ExistingFileLogged(t *testing.T) {
@@ -204,7 +233,9 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 	err := os.WriteFile(existingFile, []byte("test"), 0o600)
 	require.NoError(t, err)
 
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationRead,
@@ -214,14 +245,13 @@ func TestLogger_ExistingFileLogged(t *testing.T) {
 	}
 
 	logger.Log(entry)
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationRead, entries[0].Operation)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "READ")
 }
 
 func TestIsManagedPath(t *testing.T) {
 	managedPaths := []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
-	logger := New(managedPaths, false)
+	logger := New(nil, &Config{ManagedPaths: managedPaths})
 
 	tests := []struct {
 		name     string
@@ -263,7 +293,9 @@ func TestIsManagedPath(t *testing.T) {
 }
 
 func TestLogger_LogFormat(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationWrite,
@@ -274,16 +306,17 @@ func TestLogger_LogFormat(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationWrite, entries[0].Operation)
-	assert.Equal(t, "/home/user/project/file.txt", entries[0].Target)
-	assert.Equal(t, ResultDeny, entries[0].Result)
-	assert.Equal(t, "fs:ro:/home/user/project", entries[0].Rule)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "WRITE")
+	assert.Contains(t, buf.String(), "/home/user/project/file.txt")
+	assert.Contains(t, buf.String(), "DENY")
+	assert.Contains(t, buf.String(), "fs:ro:/home/user/project")
 }
 
 func TestLogger_HTTPSEntry(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -294,16 +327,17 @@ func TestLogger_HTTPSEntry(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationHTTP, entries[0].Operation)
-	assert.Equal(t, "api.example.com:443", entries[0].Target)
-	assert.Equal(t, ResultOK, entries[0].Result)
-	assert.Equal(t, "net:http:api.example.com:443", entries[0].Rule)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "HTTP")
+	assert.Contains(t, buf.String(), "api.example.com:443")
+	assert.Contains(t, buf.String(), "OK")
+	assert.Contains(t, buf.String(), "net:http:api.example.com:443")
 }
 
 func TestLogger_HTTPEntry(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -314,14 +348,14 @@ func TestLogger_HTTPEntry(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationHTTP, entries[0].Operation)
-	assert.Equal(t, "localhost:3000", entries[0].Target)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "localhost:3000")
 }
 
 func TestLogger_HTTPSDenied(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -332,16 +366,17 @@ func TestLogger_HTTPSDenied(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationHTTP, entries[0].Operation)
-	assert.Equal(t, "malicious.example.com:443", entries[0].Target)
-	assert.Equal(t, ResultDeny, entries[0].Result)
-	assert.Equal(t, RuleNoMatch, entries[0].Rule)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "HTTP")
+	assert.Contains(t, buf.String(), "malicious.example.com:443")
+	assert.Contains(t, buf.String(), "DENY")
+	assert.Contains(t, buf.String(), RuleNoMatch)
 }
 
 func TestLogger_HTTPSDeduplication(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -355,12 +390,13 @@ func TestLogger_HTTPSDeduplication(t *testing.T) {
 		logger.Log(entry)
 	}
 
-	entries := logger.Entries()
-	assert.Len(t, entries, 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	// CONNECT and plain HTTP to the same host:port now both log as OperationHTTP.
 	// A second identical entry (same operation, target, result) deduplicates.
@@ -374,12 +410,13 @@ func TestLogger_HTTPDeduplicatesAcrossCONNECTAndPlain(t *testing.T) {
 	logger.Log(entry)
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	assert.Len(t, entries, 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
-	logger := New([]string{"/dev", "/proc", "/tmp"}, false)
+	var buf bytes.Buffer
+	cfg := &Config{ManagedPaths: []string{"/dev", "/proc", "/tmp"}, ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationHTTP,
@@ -389,12 +426,13 @@ func TestLogger_NetworkEntriesNotFilteredByManagedPaths(t *testing.T) {
 	}
 
 	logger.Log(entry)
-	entries := logger.Entries()
-	assert.Len(t, entries, 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_SyscallEntryLogged(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -405,16 +443,17 @@ func TestLogger_SyscallEntryLogged(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, OperationSyscall, entries[0].Operation)
-	assert.Equal(t, "bpf", entries[0].Target)
-	assert.Equal(t, ResultDeny, entries[0].Result)
-	assert.Equal(t, RuleNoMatch, entries[0].Rule)
+	assert.Equal(t, 1, countLogLines(buf.String()))
+	assert.Contains(t, buf.String(), "SYSCALL")
+	assert.Contains(t, buf.String(), "bpf")
+	assert.Contains(t, buf.String(), "DENY")
+	assert.Contains(t, buf.String(), RuleNoMatch)
 }
 
 func TestLogger_SyscallEntryDeduplicated(t *testing.T) {
-	logger := New(nil, false)
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -426,11 +465,13 @@ func TestLogger_SyscallEntryDeduplicated(t *testing.T) {
 	logger.Log(entry)
 	logger.Log(entry)
 
-	assert.Len(t, logger.Entries(), 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_SyscallEntryNotFilteredByManagedPaths(t *testing.T) {
-	logger := New([]string{"/dev", "/proc", "/tmp"}, false)
+	var buf bytes.Buffer
+	cfg := &Config{ManagedPaths: []string{"/dev", "/proc", "/tmp"}, ShowAllowed: true}
+	logger := New(&buf, cfg)
 
 	entry := Entry{
 		Operation: OperationSyscall,
@@ -441,8 +482,7 @@ func TestLogger_SyscallEntryNotFilteredByManagedPaths(t *testing.T) {
 
 	logger.Log(entry)
 
-	entries := logger.Entries()
-	assert.Len(t, entries, 1)
+	assert.Equal(t, 1, countLogLines(buf.String()))
 }
 
 func TestLogger_RuleReasonConstants(t *testing.T) {
@@ -465,7 +505,9 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 			err := os.WriteFile(testFile, []byte("test"), 0o600)
 			require.NoError(t, err)
 
-			logger := New(nil, false)
+			var buf bytes.Buffer
+			cfg := &Config{ShowAllowed: true}
+			logger := New(&buf, cfg)
 
 			entry := Entry{
 				Operation: OperationWrite, // Use WRITE so non-existent path filtering doesn't apply
@@ -475,9 +517,45 @@ func TestLogger_RuleReasonConstants(t *testing.T) {
 			}
 
 			logger.Log(entry)
-			entries := logger.Entries()
-			require.Len(t, entries, 1)
-			assert.Equal(t, tt.rule, entries[0].Rule)
+			assert.Equal(t, 1, countLogLines(buf.String()))
+			assert.Contains(t, buf.String(), tt.rule)
 		})
 	}
+}
+
+func TestLogger_Close_BufferMode(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&buf, cfg)
+
+	logger.Log(Entry{
+		Operation: OperationRead,
+		Target:    "/etc/hosts",
+		Result:    ResultOK,
+		Rule:      "fs:ro:/etc",
+	})
+
+	require.NoError(t, logger.Close())
+	assert.Contains(t, buf.String(), "/etc/hosts")
+}
+
+func TestLogger_Close_WriteError(t *testing.T) {
+	cfg := &Config{ShowAllowed: true}
+	logger := New(&failWriter{}, cfg)
+
+	logger.Log(Entry{
+		Operation: OperationRead,
+		Target:    "/etc/hosts",
+		Result:    ResultOK,
+		Rule:      "fs:ro:/etc",
+	})
+
+	assert.Error(t, logger.Close())
+}
+
+// failWriter is an io.Writer that always returns an error.
+type failWriter struct{}
+
+func (f *failWriter) Write(_ []byte) (int, error) {
+	return 0, errors.New("write failed")
 }

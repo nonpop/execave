@@ -30,13 +30,13 @@ func TestE2E_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testin
 	basePath := filepath.Join(dir, "base.toml")
 	rootPath := filepath.Join(dir, "execave.toml")
 
-	baseConfig := `fs = ["ro:/usr", "nolog:/usr/share/doc"]
+	baseConfig := `fs = ["ro:/usr"]
 net = ["http:api.example.com:443"]
 syscall = ["allow:ptrace"]`
 	rootConfig := `extends = ["base.toml"]
 fs = ["rw:./workspace"]
 net = ["none:blocked.example.com:443"]
-syscall = ["nolog:bpf"]`
+syscall = ["allow:reboot"]`
 
 	require.NoError(t, os.WriteFile(basePath, []byte(baseConfig), 0o600))
 	require.NoError(t, os.WriteFile(rootPath, []byte(rootConfig), 0o600))
@@ -47,8 +47,7 @@ syscall = ["nolog:bpf"]`
 	assert.Contains(t, result.Stdout, "fs = [")
 	assert.Contains(t, result.Stdout, "net = [")
 	assert.Contains(t, result.Stdout, "syscall = [")
-	assert.Contains(t, result.Stdout, "  # "+basePath+"\n  \"ro:/usr\",")
-	assert.Contains(t, result.Stdout, "\"nolog:/usr/share/doc\",\n\n  # "+rootPath+"\n  \"rw:"+filepath.Join(dir, "workspace")+"\",")
+	assert.Contains(t, result.Stdout, "  # "+basePath+"\n  \"ro:/usr\",\n\n  # "+rootPath+"\n  \"rw:"+filepath.Join(dir, "workspace")+"\",")
 	assert.Contains(t, result.Stdout, "\"allow:ptrace\",")
-	assert.Contains(t, result.Stdout, "\"nolog:bpf\",")
+	assert.Contains(t, result.Stdout, "\"allow:reboot\",")
 }

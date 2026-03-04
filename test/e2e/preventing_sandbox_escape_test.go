@@ -46,7 +46,7 @@ func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t
 	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", hop1)
 
 	s.thenExitCodeNonZero()
-	s.thenStderrHasEntry("READ", mount.rel("hop1"), "OK", "fs:ro:"+mount.String())
+	s.thenStderrHasEntry("READ", mount.rel("hop1"), "OK", "ro:"+mount.String())
 	s.thenStderrHasEntry("READ", nomatch.rel("hop2"), "DENY", "no-matching-rule")
 	s.thenStderrNotContains(secretFile)
 }
@@ -64,7 +64,6 @@ func TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented(t *testing.
 	s.whenRun("sh", "-c", "echo '{}' > "+configPath)
 
 	s.thenExitCodeNonZero()
-	s.thenStderrContains("forced read-only")
 	s.thenStderrContains("execave.toml: Read-only file system")
 
 	s.whenRun("sh", "-c", "echo modified >> "+otherFile)
@@ -112,7 +111,7 @@ func TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
 
 	s.givenRules("fs:ro:" + mount.String())
 
-	s.whenRunTextLog("-", "cat", loopA)
+	s.whenRunTextLog("", "cat", loopA)
 
 	s.thenExitCodeNonZero()
 	s.thenStderrContains("loop-a: Too many levels of symbolic links")
@@ -162,7 +161,7 @@ func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing
 	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
 	configPath := writeConfig(t, []string{"fs:ro:/usr"})
-	result := runExecave(t, "", "--config", configPath, "monitor", "--output=-", "--", "true")
+	result := runExecave(t, "", "--config", configPath, "monitor", "--", "true")
 
 	assert.NotEqual(t, 0, result.ExitCode)
 	assert.Contains(t, result.Stderr, "not owned by root")

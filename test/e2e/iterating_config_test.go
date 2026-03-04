@@ -35,7 +35,7 @@ func TestE2E_IteratingConfig_EditConfigAndReRunWithMonitor(t *testing.T) {
 		"sh", "-c", "ls /usr/lib >/dev/null && cat "+secretFile+" >/dev/null")
 
 	s.thenExitCode(0)
-	s.thenStderrHasEntry("READ", secret.rel("secret.txt"), "OK", "fs:ro:"+secret.String())
+	s.thenStderrHasEntry("READ", secret.rel("secret.txt"), "OK", "ro:"+secret.String())
 }
 
 // TestE2E_IteratingConfig_InvalidConfigRejectedOnStart tests that invalid rules are
@@ -44,7 +44,7 @@ func TestE2E_IteratingConfig_InvalidConfigRejectedOnStart(t *testing.T) {
 	s := newScenario(t)
 	s.givenRulesOnly("fs:invalid")
 
-	s.whenRunTextLog("-", "sh", "-c", "echo SHOULD_NOT_RUN")
+	s.whenRunTextLog("", "sh", "-c", "echo SHOULD_NOT_RUN")
 
 	s.thenExitCode(1)
 	s.thenStderrContains("malformed rule")

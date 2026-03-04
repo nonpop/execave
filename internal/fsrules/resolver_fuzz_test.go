@@ -20,6 +20,16 @@ func parseOperation(opStr string) Operation {
 	}
 }
 
+// findRuleByRawRule returns the rule with the given raw rule string, or nil if not found.
+func findRuleByRawRule(rules []Rule, rawRule string) *Rule {
+	for i := range rules {
+		if rules[i].RawRule == rawRule {
+			return &rules[i]
+		}
+	}
+	return nil
+}
+
 // assertLongestPrefixWins checks that no rule in cfg has a longer matching prefix than result.Rule.
 func assertLongestPrefixWins(t *testing.T, cfg *testConfig, result AccessResult, cleanPath string) {
 	t.Helper()
@@ -28,9 +38,14 @@ func assertLongestPrefixWins(t *testing.T, cfg *testConfig, result AccessResult,
 		return
 	}
 
+	matched := findRuleByRawRule(cfg.rules, *result.Rule)
+	if !assert.NotNil(t, matched) {
+		return
+	}
+
 	for _, r := range cfg.rules {
 		if matchesPath(r.Path, cleanPath) {
-			assert.LessOrEqual(t, len(r.Path), len(result.Rule.Path))
+			assert.LessOrEqual(t, len(r.Path), len(matched.Path))
 		}
 	}
 }
@@ -61,7 +76,7 @@ func FuzzCheckAccess(f *testing.F) {
 
 		// Create a test config with various rules
 		cfg := &testConfig{
-			rules: []AccessRule{
+			rules: []Rule{
 				fsRule(PermissionReadWrite, "/home/user/project"),
 				fsRule(PermissionReadOnly, "/home/user/project/.git"),
 				fsRule(PermissionNone, "/home/user/.ssh"),
@@ -80,12 +95,15 @@ func FuzzCheckAccess(f *testing.F) {
 		if result.Rule == nil {
 			assert.Nil(t, result2.Rule)
 		} else {
-			assert.Equal(t, result.Rule.Path, result2.Rule.Path)
+			assert.Equal(t, *result.Rule, *result2.Rule)
 		}
 
 		// Invariant 2: If rule returned, it must match the cleaned path
 		if result.Rule != nil {
-			assert.True(t, matchesPath(result.Rule.Path, cleanPath))
+			matched := findRuleByRawRule(cfg.rules, *result.Rule)
+			if assert.NotNil(t, matched) {
+				assert.True(t, matchesPath(matched.Path, cleanPath))
+			}
 		}
 
 		// Invariant 3: No other rule has a longer matching prefix
@@ -94,7 +112,12 @@ func FuzzCheckAccess(f *testing.F) {
 		// Invariant 4: Write allowed only if rw permission
 		if result.Allowed && operation == OperationWrite {
 			assert.NotNil(t, result.Rule)
-			assert.Equal(t, PermissionReadWrite, result.Rule.Permission)
+			if result.Rule != nil {
+				matched := findRuleByRawRule(cfg.rules, *result.Rule)
+				if assert.NotNil(t, matched) {
+					assert.Equal(t, PermissionReadWrite, matched.Permission)
+				}
+			}
 		}
 
 		// Invariant 5: No matching rule means denied
@@ -103,8 +126,11 @@ func FuzzCheckAccess(f *testing.F) {
 		}
 
 		// Invariant 6: none permission always denies
-		if result.Rule != nil && result.Rule.Permission == PermissionNone {
-			assert.False(t, result.Allowed)
+		if result.Rule != nil {
+			matched := findRuleByRawRule(cfg.rules, *result.Rule)
+			if matched != nil && matched.Permission == PermissionNone {
+				assert.False(t, result.Allowed)
+			}
 		}
 	})
 }
@@ -168,7 +194,7 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 
 		// Create config with overlapping rules at different levels
 		cfg := &testConfig{
-			rules: []AccessRule{
+			rules: []Rule{
 				fsRule(PermissionReadOnly, "/home"),
 				fsRule(PermissionReadWrite, "/home/user"),
 				fsRule(PermissionReadWrite, "/home/user/project"),
@@ -187,17 +213,20 @@ func FuzzCheckAccessWithOverlappingRules(f *testing.F) {
 
 		// Invariant: Permission hierarchy is respected
 		if result.Rule != nil {
-			switch result.Rule.Permission {
-			case PermissionNone:
-				assert.False(t, result.Allowed)
-			case PermissionReadOnly:
-				if operation == OperationWrite {
+			matched := findRuleByRawRule(cfg.rules, *result.Rule)
+			if assert.NotNil(t, matched) {
+				switch matched.Permission {
+				case PermissionNone:
 					assert.False(t, result.Allowed)
+				case PermissionReadOnly:
+					if operation == OperationWrite {
+						assert.False(t, result.Allowed)
+					}
+				case PermissionReadWrite:
+					assert.True(t, result.Allowed)
+				default:
+					t.Fatalf("fuzz: resolved rule has unexpected permission %d", matched.Permission)
 				}
-			case PermissionReadWrite:
-				assert.True(t, result.Allowed)
-			case PermissionUnknown:
-				t.Fatal("resolved rule has PermissionUnknown")
 			}
 		}
 	})

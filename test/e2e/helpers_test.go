@@ -33,9 +33,10 @@ func testTempDir(t *testing.T) string {
 	err = os.MkdirAll(baseTmpDir, 0o750)
 	require.NoError(t, err)
 
-	// Create unique subdirectory for this test
+	// Create unique subdirectory for this test. Replace path separators
+	// introduced by subtests (e.g. "TestFoo/sub") since MkdirTemp rejects them.
 	//nolint:usetesting // intentionally not using t.TempDir() - we need a custom location
-	tmpDir, err := os.MkdirTemp(baseTmpDir, t.Name())
+	tmpDir, err := os.MkdirTemp(baseTmpDir, strings.ReplaceAll(t.Name(), "/", "_"))
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -73,18 +74,6 @@ func failIfNoGcc(t *testing.T) {
 	t.Helper()
 	_, err := exec.LookPath("gcc")
 	require.NoError(t, err)
-}
-
-// tomlSection writes a TOML array section to sb if values is non-empty.
-func tomlSection(buf *strings.Builder, key string, values []string) {
-	if len(values) == 0 {
-		return
-	}
-	buf.WriteString(key + " = [\n")
-	for _, v := range values {
-		fmt.Fprintf(buf, "    %q,\n", v)
-	}
-	buf.WriteString("]\n")
 }
 
 // tomlConfig formats rules as a TOML config file.
@@ -378,23 +367,28 @@ func (s *scenario) whenRunWithDefaultConfig(workDir string, args ...string) {
 	s.lastResult = &result
 }
 
-// whenRunTextLog executes execave monitor mode with --output=<monitorArg> for text log tests.
-func (s *scenario) whenRunTextLog(monitorArg string, args ...string) {
+// whenRunTextLog executes execave monitor mode for text log tests.
+// If outputPath is empty, output goes to stderr (the default). Otherwise output goes to the given file.
+func (s *scenario) whenRunTextLog(outputPath string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
 	execArgs := make([]string, 0, 7+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--output="+monitorArg, "--")
+	execArgs = append(execArgs, "--config", s.configPath, "monitor")
+	if outputPath != "" {
+		execArgs = append(execArgs, "--output-path="+outputPath)
+	}
+	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
 	s.lastResult = &result
 }
 
-// whenRunTextLogWithFlags executes execave monitor mode with --output=- and extra flags.
+// whenRunTextLogWithFlags executes execave monitor mode writing to stderr, with extra flags.
 func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
 	execArgs := make([]string, 0, 7+len(flags)+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--output=-")
+	execArgs = append(execArgs, "--config", s.configPath, "monitor")
 	execArgs = append(execArgs, flags...)
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
@@ -412,11 +406,16 @@ func (s *scenario) whenRunNoSandbox(args ...string) {
 	s.lastResult = &result
 }
 
-// whenRunNoSandboxMonitorFile executes execave with --no-sandbox --monitor=<file>.
-func (s *scenario) whenRunNoSandboxMonitorFile(monitorFile string, args ...string) {
+// whenRunNoSandboxMonitorFile executes execave monitor --no-sandbox.
+// If outputPath is empty, output goes to stderr (the default). Otherwise output goes to the given file.
+func (s *scenario) whenRunNoSandboxMonitorFile(outputPath string, args ...string) {
 	s.t.Helper()
 	execArgs := make([]string, 0, 8+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--no-sandbox", "--output="+monitorFile, "--")
+	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--no-sandbox")
+	if outputPath != "" {
+		execArgs = append(execArgs, "--output-path="+outputPath)
+	}
+	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
 	s.lastResult = &result

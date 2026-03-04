@@ -32,12 +32,13 @@ var configShowCmd = &cobra.Command{
 }
 
 func showConfig() error {
-	cfg, _, err := run.LoadRuntimeConfig(configPath)
+	runtimeCfg, cleanup, err := run.LoadRuntimeConfig(configPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("load effective config: %w", err)
 	}
+	defer cleanup()
 
-	rendered := config.RenderEffectiveTOML(cfg) // TODO: move render logic to this file.
+	rendered := config.RenderEffectiveTOML(runtimeCfg.Config)
 
 	if _, err := io.WriteString(os.Stdout, rendered); err != nil {
 		return fmt.Errorf("write effective config output: %w", err)

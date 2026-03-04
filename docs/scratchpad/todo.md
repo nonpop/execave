@@ -1,7 +1,15 @@
 # execave TODOs
 
 - go through TODOs in code & other files
+- go through all panics and make the messages so that the user would understand what happened and why
+- maybe log could log in rule format?
+  - fs/ro:/foo/bar DENY no-matching-rule
+  - fs/rw:/baz DENY fs:ro:/baz
+- verify "ruleable" syscalls really are so
+- Maybe use 'tcp' vs 'http' in net rules? Or 'tunnel' vs 'forward'?
+- find a way to run tests reliably without -count=1
 
+- sequences like `^[[?1049;2$y` sometimes appear
 - monitor to execave-access.log by default, and allow stderr/out with
 - maybe need to allow http:*:*
 

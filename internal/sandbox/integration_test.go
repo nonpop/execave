@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nonpop/execave/internal/binutil"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,27 +30,81 @@ func fakeVersionBinary(t *testing.T, name, versionLine string) string {
 	return p
 }
 
+func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
+	var permStr string
+	switch permission {
+	case fsrules.PermissionReadOnly:
+		permStr = "ro"
+	case fsrules.PermissionReadWrite:
+		permStr = "rw"
+	case fsrules.PermissionNone:
+		permStr = "none"
+	case fsrules.PermissionUnknown:
+		permStr = "unknown"
+	default:
+		permStr = "unknown"
+	}
+
+	return fsrules.Rule{
+		Permission: permission,
+		Path:       path,
+		RawRule:    permStr + ":" + path,
+		SourcePath: "",
+	}
+}
+
+// argsContainSequence checks whether args contains the given sequence as consecutive elements.
+func argsContainSequence(args []string, seq ...string) bool {
+	for i := range len(args) - len(seq) + 1 {
+		match := true
+		for j, s := range seq {
+			if args[i+j] != s {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	dummyTunnelBinary = "/usr/local/bin/execave"
+	dummyUDSPath      = "/tmp/test-proxy.sock"
+)
+
+// prepare calls sandbox.Prepare with seccompFD=3, returning the bwrap args.
+// It adds RO rules for the tunnel binary and UDS, then wraps the command using the given paths.
+// The returned close func must be called to release the seccomp pipe.
+func prepare(t *testing.T, cfg *config.Config, tunnelBinary, udsPath string, command []string) (args []string, close func()) {
+	t.Helper()
+	bwrapPath, err := binutil.ResolveBwrap()
+	require.NoError(t, err)
+	cfg.FSRules = append(cfg.FSRules, fsRule(fsrules.PermissionReadOnly, tunnelBinary))
+	cfg.FSRules = append(cfg.FSRules, fsRule(fsrules.PermissionReadOnly, udsPath))
+	wrapped := tunnel.WrapCommand(tunnelBinary, udsPath, command)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
+	require.NoError(t, err)
+	return sc.Args, cleanup
+}
+
 // --- Requirement: Default-deny filesystem ---
 
 func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"cat", "/opt/secret"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"cat", "/opt/secret"})
+	defer close()
 
 	// /opt/secret should not appear in any mount args
 	assert.False(t, argsContainSequence(args, "--ro-bind", "/opt/secret", "/opt/secret"))
@@ -57,23 +113,17 @@ func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 
 func TestIntegration_DefaultDenyFilesystem_AllowedPathAccessible(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"bash"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"bash"})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--ro-bind", "/usr/bin", "/usr/bin"))
 }
@@ -84,23 +134,17 @@ func TestIntegration_ReadOnlyAccess_ReadAllowed(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"cat", filepath.Join(dir, "data.txt")})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"cat", filepath.Join(dir, "data.txt")})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--ro-bind", dir, dir))
 }
@@ -109,23 +153,17 @@ func TestIntegration_ReadOnlyAccess_WriteDeniedOnReadOnlyPath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"touch", filepath.Join(dir, "test.txt")})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"touch", filepath.Join(dir, "test.txt")})
+	defer close()
 
 	// Must use --ro-bind (not --bind) so bwrap enforces read-only
 	assert.True(t, argsContainSequence(args, "--ro-bind", dir, dir))
@@ -138,23 +176,17 @@ func TestIntegration_ReadWriteAccess_ReadAllowedOnReadWritePath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"cat", filepath.Join(dir, "test.txt")})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"cat", filepath.Join(dir, "test.txt")})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
 }
@@ -163,23 +195,17 @@ func TestIntegration_ReadWriteAccess_WriteAllowedOnReadWritePath(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"touch", filepath.Join(dir, "test.txt")})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"touch", filepath.Join(dir, "test.txt")})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
 }
@@ -192,24 +218,18 @@ func TestIntegration_NoAccessRule_ReadDeniedByNoneRule(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"cat", secretFile})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"cat", secretFile})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", secretFile))
 }
@@ -220,24 +240,18 @@ func TestIntegration_NoAccessRule_WriteDeniedByNoneRule(t *testing.T) {
 	require.NoError(t, os.WriteFile(secretFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"sh", "-c", "echo test > " + secretFile})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"sh", "-c", "echo test > " + secretFile})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", secretFile))
 }
@@ -248,24 +262,18 @@ func TestIntegration_NoAccessRule_NoneDirectoryInaccessible(t *testing.T) {
 	require.NoError(t, os.Mkdir(blockedDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, blockedDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"ls", blockedDir})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"ls", blockedDir})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", blockedDir))
 	assert.True(t, argsContainSequence(args, "--chmod", "0000", blockedDir))
@@ -278,25 +286,19 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 	require.NoError(t, os.MkdirAll(childDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, parentDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"cat", filepath.Join(childDir, "data.txt")})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"cat", filepath.Join(childDir, "data.txt")})
+	defer close()
 
 	// Parent gets tmpfs + 0111 (execute-only for traversal)
 	assert.True(t, argsContainSequence(args, "--tmpfs", parentDir))
@@ -309,23 +311,17 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 
 func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	assert.Contains(t, args, "--unshare-all")
 	assert.NotContains(t, args, "--share-net")
@@ -333,23 +329,17 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 
 func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	// --unshare-all isolates network namespace, preventing DNS
 	assert.Contains(t, args, "--unshare-all")
@@ -359,113 +349,81 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 
 func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"curl", "https://api.example.com"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, "/usr/local/bin/execave", "/tmp/proxy.sock", []string{"curl", "https://api.example.com"})
+	defer close()
 
-	// Command should be wrapped with tunnel
+	// Command should be wrapped with tunnel using host paths
 	assert.True(t, argsContainSequence(args,
-		"--", "/tmp/execave", "network-tunnel", "/tmp/execave-proxy.sock", "--",
+		"--", "/usr/local/bin/execave", "network-tunnel", "/tmp/proxy.sock", "--",
 		"curl", "https://api.example.com"))
 }
 
 func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *testing.T) {
+	udsFile := filepath.Join(t.TempDir(), "proxy.sock")
+	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
+
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/test-proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, "/usr/local/bin/execave", udsFile, []string{"true"})
+	defer close()
 
-	assert.True(t, argsContainSequence(args, "--ro-bind", "/tmp/test-proxy.sock", "/tmp/execave-proxy.sock"))
+	// UDS is bind-mounted at its host path (same source/dest)
+	assert.True(t, argsContainSequence(args, "--ro-bind", udsFile, udsFile))
 }
 
 func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *testing.T) {
+	execaveBinary, err := os.Executable()
+	require.NoError(t, err)
+
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, execaveBinary, "/tmp/proxy.sock", []string{"true"})
+	defer close()
 
-	assert.True(t, argsContainSequence(args, "--ro-bind", "/usr/local/bin/execave", "/tmp/execave"))
+	// Execave binary is bind-mounted at its host path (same source/dest)
+	assert.True(t, argsContainSequence(args, "--ro-bind", execaveBinary, execaveBinary))
 }
 
 // --- Requirement: Processes ignoring HTTP_PROXY have no network ---
 
 func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFails(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, "/usr/local/bin/execave", "/tmp/proxy.sock", []string{"true"})
+	defer close()
 
 	// Even with net rules, --unshare-all isolates network (no NIC)
 	assert.Contains(t, args, "--unshare-all")
@@ -474,86 +432,41 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFai
 
 func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, "/usr/local/bin/execave", "/tmp/proxy.sock", []string{"true"})
+	defer close()
 
 	assert.Contains(t, args, "--unshare-all")
 }
 
 // --- Requirement: CLI command execution ---
 
-func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *testing.T) {
+func TestIntegration_CLICommandExecution_CommandWrappedWithTunnel(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	sb := sandbox.New(cfg, "", nil)
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"echo", "hello"})
+	defer close()
 
-	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
-
-	// Command directly after -- (no tunnel wrapping)
-	assert.True(t, argsContainSequence(args, "--", "echo", "hello"))
-	assert.False(t, argsContainSequence(args, "network-tunnel"))
-}
-
-func TestIntegration_CLICommandExecution_CommandExecutionWithNetRules(t *testing.T) {
-	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
-			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
-		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-	sb := sandbox.New(cfg, "", netPath)
-
-	args := sb.BuildBwrapArgs([]string{"python", "script.py"})
-
-	// Command wrapped with tunnel
+	// Command wrapped with tunnel using host paths
 	assert.True(t, argsContainSequence(args,
-		"/tmp/execave", "network-tunnel", "/tmp/execave-proxy.sock", "--",
-		"python", "script.py"))
+		"/usr/local/bin/execave", "network-tunnel", "/tmp/test-proxy.sock", "--",
+		"echo", "hello"))
 }
 
 // Note: ExitCodePropagationWithTunnel requires running bwrap + tunnel.
@@ -566,23 +479,18 @@ func TestIntegration_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *t
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
+			{Permission: fsrules.PermissionReadOnly, Path: configPath, RawRule: "ro:" + configPath, SourcePath: ""},
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, configPath, nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	// Parent dir is --bind (rw), then config file overlaid with --ro-bind
 	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
@@ -595,23 +503,17 @@ func TestIntegration_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblin
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, configPath, nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	// Parent dir still gets --bind (rw access for siblings)
 	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
@@ -627,23 +529,17 @@ func TestIntegration_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, workDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, configPath, nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	// Config path should NOT be in any mount args
 	assert.False(t, argsContainSequence(args, "--ro-bind", configPath, configPath))
@@ -656,23 +552,17 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 	require.NoError(t, os.WriteFile(configPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, configPath, nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: nil,
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	// Parent is already --ro-bind; no separate config overlay needed
 	assert.True(t, argsContainSequence(args, "--ro-bind", dir, dir))
@@ -688,23 +578,19 @@ func TestIntegration_ConfigFileProtection_LayeredConfigPathsForcedRoAfterMerge(t
 	require.NoError(t, os.WriteFile(rootPath, []byte("{}"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
+			{Permission: fsrules.PermissionReadOnly, Path: basePath, RawRule: "ro:" + basePath, SourcePath: ""},
+			{Permission: fsrules.PermissionReadOnly, Path: rootPath, RawRule: "ro:" + rootPath, SourcePath: ""},
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             []string{basePath, rootPath},
-	}
-	sb := sandbox.New(cfg, rootPath, nil)
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+		ConfigPaths: []string{basePath, rootPath},
+	}
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
 	assert.True(t, argsContainSequence(args, "--ro-bind", basePath, basePath))
@@ -724,7 +610,7 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 	// With seccomp enabled, ptrace returns EPERM (exit 1 from the shell calling the syscall).
 	// We verify the sandbox runs and exits without crashing (seccomp filter is plumbed correctly).
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 			fsRule(fsrules.PermissionReadOnly, "/usr/lib"),
 			fsRule(fsrules.PermissionReadOnly, "/usr/lib64"),
@@ -733,25 +619,33 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/bin"),
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            sandbox.ManagedDirs,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: sandbox.ManagedDirs(),
+
+		ConfigPaths: nil,
 	}
-	sb := sandbox.New(cfg, "", nil)
 	ctx := context.Background()
 
 	// Just verify bwrap starts successfully with the seccomp filter plumbed.
 	// The filter is applied — if there's a plumbing error, bwrap exits with error.
-	exitCode, runErr := sb.Run(ctx, []string{"true"})
+	udsFile := filepath.Join(t.TempDir(), "proxy.sock")
+	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
+	truePath, err := exec.LookPath("true")
+	require.NoError(t, err)
+	bwrapPath, err := binutil.ResolveBwrap()
+	require.NoError(t, err)
+	cfg.FSRules = append(cfg.FSRules, fsRule(fsrules.PermissionReadOnly, truePath))
+	cfg.FSRules = append(cfg.FSRules, fsRule(fsrules.PermissionReadOnly, udsFile))
+	wrapped := tunnel.WrapCommand(truePath, udsFile, []string{"true"})
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
+	require.NoError(t, err)
+	defer cleanup()
+
+	cmd := exec.CommandContext(ctx, sc.BwrapPath, sc.Args...)
+	cmd.ExtraFiles = sc.ExtraFiles
+	runErr := cmd.Run()
 	require.NoError(t, runErr)
-	assert.Equal(t, 0, exitCode)
 }
 
 // --- Requirement: Binary validation ---
@@ -759,9 +653,9 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 func TestIntegration_BinaryValidation_BwrapNotFoundInPATH(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	_, err := sandbox.ResolveBwrap()
+	_, err := binutil.ResolveBwrap()
 
-	assert.ErrorContains(t, err, "not found in PATH")
+	assert.ErrorContains(t, err, "look up path")
 }
 
 func TestIntegration_BinaryValidation_NonRootOwnedBinaryRejected(t *testing.T) {
@@ -770,7 +664,7 @@ func TestIntegration_BinaryValidation_NonRootOwnedBinaryRejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(fakeBwrap, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
 	t.Setenv("PATH", tmpDir)
 
-	_, err := sandbox.ResolveBwrap()
+	_, err := binutil.ResolveBwrap()
 
 	assert.ErrorContains(t, err, "not owned by root")
 }
@@ -783,7 +677,7 @@ func TestIntegration_BinaryValidation_NonRootSymlinkToBinaryRejected(t *testing.
 	require.NoError(t, os.Symlink(target, link))
 	t.Setenv("PATH", tmpDir)
 
-	_, err := sandbox.ResolveBwrap()
+	_, err := binutil.ResolveBwrap()
 
 	assert.ErrorContains(t, err, "not owned by root")
 }
@@ -791,9 +685,9 @@ func TestIntegration_BinaryValidation_NonRootSymlinkToBinaryRejected(t *testing.
 func TestIntegration_BinaryValidation_StraceNotFoundInPATH(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	_, err := sandbox.ResolveStrace()
+	_, err := binutil.ResolveStrace()
 
-	assert.ErrorContains(t, err, "not found in PATH")
+	assert.ErrorContains(t, err, "look up path")
 }
 
 func TestIntegration_BinaryValidation_NonRootOwnedStraceRejected(t *testing.T) {
@@ -802,59 +696,55 @@ func TestIntegration_BinaryValidation_NonRootOwnedStraceRejected(t *testing.T) {
 	require.NoError(t, os.WriteFile(fakeStrace, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
 	t.Setenv("PATH", tmpDir)
 
-	_, err := sandbox.ResolveStrace()
+	_, err := binutil.ResolveStrace()
 
 	assert.ErrorContains(t, err, "not owned by root")
 }
 
 // --- Requirement: ELF interpreter auto-mount ---
 
-func TestIntegration_InterpreterAutoMount_RuleTargetingInterpreterPathRejected(t *testing.T) {
+func TestIntegration_InterpreterAutoMount_UserRuleForInterpreterPathAllowed(t *testing.T) {
 	// Detect the real interpreter path from a known dynamic binary.
 	lsPath, err := exec.LookPath("ls")
 	require.NoError(t, err)
 
-	interpPath := sandbox.InterpreterPath(lsPath)
+	interpPath := binutil.InterpreterPath(lsPath)
 	require.NotEmpty(t, interpPath)
 
-	managedPaths := sandbox.ManagedPathsWith(interpPath)
+	managedPaths := sandbox.ManagedDirs()
 
-	_, err = config.ParseRules(
-		[]string{"fs:ro:" + interpPath},
-		"/",
-		"/config.toml",
-		managedPaths,
-	)
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "execave.toml")
+	err = os.WriteFile(configPath, []byte(`fs = ["ro:`+interpPath+`"]`), 0o600)
+	require.NoError(t, err)
 
-	assert.ErrorContains(t, err, "managed path")
+	cfg, err := config.Load(configPath, managedPaths, interpPath, "", "")
+	require.NoError(t, err)
+
+	// User's explicit rule should be present; no synthetic rule added.
+	assert.Len(t, cfg.FSRules, 1)
+	assert.Equal(t, interpPath, cfg.FSRules[0].Path)
 }
 
-func TestIntegration_InterpreterAutoMount_InterpreterMountedInBwrapArgs(t *testing.T) {
+func TestIntegration_InterpreterAutoMount_SyntheticRuleMountedInBwrapArgs(t *testing.T) {
 	// Detect the real interpreter path from a known dynamic binary.
 	lsPath, err := exec.LookPath("ls")
 	require.NoError(t, err)
 
-	interpPath := sandbox.InterpreterPath(lsPath)
+	interpPath := binutil.InterpreterPath(lsPath)
 	require.NotEmpty(t, interpPath)
 
-	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
-			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
-		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		InterpreterPath:         interpPath,
-		ManagedPaths:            sandbox.ManagedPathsWith(interpPath),
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	sb := sandbox.New(cfg, "", nil)
+	// Load config with interpreter path — synthetic RO rule should be appended.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "execave.toml")
+	err = os.WriteFile(configPath, []byte(`fs = ["ro:/usr/bin"]`), 0o600)
+	require.NoError(t, err)
 
-	args := sb.BuildBwrapArgs([]string{"true"})
+	cfg, err := config.Load(configPath, sandbox.ManagedDirs(), interpPath, "", "")
+	require.NoError(t, err)
+
+	args, close := prepare(t, cfg, dummyTunnelBinary, dummyUDSPath, []string{"true"})
+	defer close()
 
 	assert.True(t, argsContainSequence(args, "--ro-bind", interpPath, interpPath))
 }
@@ -867,7 +757,7 @@ func TestIntegration_InterpreterAutoMount_InterpreterMountedInBwrapArgs(t *testi
 func TestIntegration_BwrapVersionCheck_IncompatibleVersionReturnsError(t *testing.T) {
 	fakeBwrap := fakeVersionBinary(t, "bwrap", "bwrap 0.10.0")
 
-	_, err := sandbox.CheckBwrapVersion(fakeBwrap)
+	_, err := binutil.CheckBwrapVersion(fakeBwrap)
 
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "incompatible")
@@ -879,7 +769,7 @@ func TestIntegration_BwrapVersionCheck_IncompatibleVersionReturnsError(t *testin
 func TestIntegration_BwrapVersionCheck_WarnTierVersionPrintsWarningAndContinues(t *testing.T) {
 	fakeBwrap := fakeVersionBinary(t, "bwrap", "bwrap 0.12.0")
 
-	warn, err := sandbox.CheckBwrapVersion(fakeBwrap)
+	warn, err := binutil.CheckBwrapVersion(fakeBwrap)
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, warn)
@@ -890,9 +780,9 @@ func TestIntegration_BwrapVersionCheck_WarnTierVersionPrintsWarningAndContinues(
 // TestIntegration_StraceVersionCheck_IncompatibleVersionReturnsError verifies that
 // CheckStraceVersion returns an error for an incompatible strace version.
 func TestIntegration_StraceVersionCheck_IncompatibleVersionReturnsError(t *testing.T) {
-	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.17")
+	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.18")
 
-	_, err := sandbox.CheckStraceVersion(fakeStrace)
+	_, err := binutil.CheckStraceVersion(fakeStrace)
 
 	assert.Error(t, err)
 	assert.ErrorContains(t, err, "incompatible")
@@ -901,9 +791,9 @@ func TestIntegration_StraceVersionCheck_IncompatibleVersionReturnsError(t *testi
 // TestIntegration_StraceVersionCheck_WarnTierVersionPrintsWarningAndContinues verifies that
 // CheckStraceVersion returns a non-empty warning (and no error) for a warn-tier version.
 func TestIntegration_StraceVersionCheck_WarnTierVersionPrintsWarningAndContinues(t *testing.T) {
-	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.19")
+	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.20")
 
-	warn, err := sandbox.CheckStraceVersion(fakeStrace)
+	warn, err := binutil.CheckStraceVersion(fakeStrace)
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, warn)

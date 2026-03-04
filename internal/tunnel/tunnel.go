@@ -19,11 +19,49 @@ import (
 	"syscall"
 )
 
-// StartBridge starts a host-side TCP-to-UDS bridge goroutine.
+// Subcommand is the subcommand name for the network tunnel.
+const Subcommand = "network-tunnel"
+
+// ExecCount is the number of exec transitions the tunnel adds to the execution chain.
+const ExecCount = 1
+
+// WrapCommand prepends the tunnel invocation to command, returning the full
+// argv starting with tunnelBinary.
+// command must not be empty.
+func WrapCommand(tunnelBinary, udsPath string, command []string) []string {
+	if len(command) == 0 {
+		panic("command must not be empty")
+	}
+	result := make([]string, 0, 3+1+len(command))
+	result = append(result, tunnelBinary, Subcommand, udsPath, "--")
+	result = append(result, command...)
+	return result
+}
+
+// Run starts the tunnel and runs the user command.
+// udsPath is the path to the proxy's Unix domain socket.
+// targetArgv is the user command and its arguments.
+// Returns the user command's exit code.
+func Run(udsPath string, targetArgv []string) (int, error) {
+	if len(targetArgv) == 0 {
+		return 1, errors.New("no command specified")
+	}
+
+	port, stop, err := startBridge(context.Background(), udsPath)
+	if err != nil {
+		return 1, fmt.Errorf("start bridge: %w", err)
+	}
+	defer stop()
+
+	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	return runCommand(targetArgv, proxyURL)
+}
+
+// startBridge starts a TCP-to-UDS bridge goroutine.
 // udsPath is the path to the proxy's Unix domain socket.
 // Returns the TCP port on 127.0.0.1, a stop function, and any error.
 // The stop function closes the TCP listener and waits for in-flight relays to drain.
-func StartBridge(ctx context.Context, udsPath string) (int, func(), error) {
+func startBridge(ctx context.Context, udsPath string) (int, func(), error) {
 	var lc net.ListenConfig
 	listener, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -32,7 +70,7 @@ func StartBridge(ctx context.Context, udsPath string) (int, func(), error) {
 
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
-		panic("StartBridge: TCP listener returned non-TCP address")
+		panic("TCP listener returned non-TCP address")
 	}
 	port := tcpAddr.Port
 
@@ -47,29 +85,13 @@ func StartBridge(ctx context.Context, udsPath string) (int, func(), error) {
 	return port, stop, nil
 }
 
-// Run starts the tunnel and runs the user command.
-// udsPath is the path to the proxy's Unix domain socket.
-// args is the user command and its arguments.
-// Returns the user command's exit code.
-func Run(udsPath string, args []string) (int, error) {
-	if len(args) == 0 {
-		return 1, errors.New("no command specified")
-	}
-
-	port, stop, err := StartBridge(context.Background(), udsPath)
-	if err != nil {
-		return 1, err
-	}
-	defer stop()
-
-	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	return runCommand(args, proxyURL)
-}
-
 func acceptLoop(ctx context.Context, listener net.Listener, udsPath string, wg *sync.WaitGroup) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				fmt.Fprintf(os.Stderr, "execave: tunnel: accept: %v\n", err)
+			}
 			return
 		}
 		wg.Go(func() {
@@ -84,6 +106,7 @@ func relayToUDS(ctx context.Context, tcpConn net.Conn, udsPath string) {
 	var dialer net.Dialer
 	udsConn, err := dialer.DialContext(ctx, "unix", udsPath)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "execave: tunnel: connect to proxy: %v\n", err)
 		return
 	}
 	defer func() { _ = udsConn.Close() }()

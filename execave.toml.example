@@ -74,13 +74,6 @@ fs = [
   "ro:/etc/pki/ca-trust",
   "ro:/etc/ca-certificates",
 
-  # -- Log visibility (monitor only) --
-  # Hide known-harmless denied entries from the --monitor web UI.
-  # Useful for noisy paths you've already reviewed and accepted.
-  # Does not affect access enforcement — only display.
-  #
-  # "nolog:/etc/fonts",
-
   # TODO: add example for including global gitconfig, gitignore
 
   # -- Working directory --
@@ -92,8 +85,8 @@ fs = [
 ]
 
 # net = [
-#   # Log visibility for network rules (uncomment to use)
-#   # "nolog:telemetry.example.com:*",
+#   # "http:example.com:443",
+#   # "http:*.example.com:*",
 # ]
 
 # syscall = [

@@ -1,7 +1,7 @@
 // Package proxy implements a forward HTTP proxy that listens on a Unix domain socket
 // and enforces a network allowlist based on net rules.
 //
-// The proxy handles CONNECT requests (for tunneling) and plain HTTP requests.
+// The proxy handles CONNECT requests and plain HTTP requests.
 // It evaluates each request against the configured allowlist and either forwards
 // the request or responds with 403 Forbidden.
 package proxy
@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -35,70 +34,50 @@ const (
 
 // Proxy is a forward HTTP proxy that listens on a UDS and enforces net rules.
 type Proxy struct {
-	resolver  atomic.Pointer[netrules.AccessResolver]
-	logger    atomic.Pointer[accesslog.Logger]
-	listener  net.Listener
+	logger    *accesslog.Logger
+	resolver  *netrules.Resolver
 	udsPath   string
-	wg        sync.WaitGroup
+	noEnforce bool // when true, rules are evaluated for logging only; all connections are forwarded
+
+	listener  net.Listener
 	server    *http.Server
 	transport *http.Transport
-	noEnforce bool // when true, rules are evaluated for logging only; all connections are forwarded
+	wg        sync.WaitGroup
+	serveErr  error
 }
 
-// New creates a new Proxy with the given net rules resolver and access logger.
+// New creates a new Proxy with the given access logger, net rules resolver, UDS path, and enforcement flag.
 // resolver must not be nil.
 // logger may be nil if access logging is not needed.
-func New(resolver *netrules.AccessResolver, logger *accesslog.Logger) *Proxy {
+// udsPath must not be empty.
+// When noEnforce is true, rules are evaluated for logging only; all connections are forwarded regardless of result.
+func New(logger *accesslog.Logger, resolver *netrules.Resolver, udsPath string, noEnforce bool) *Proxy {
 	if resolver == nil {
-		panic("New: resolver must not be nil")
+		panic("resolver must not be nil")
+	}
+	if udsPath == "" {
+		panic("udsPath must not be empty")
 	}
 	proxy := &Proxy{
-		resolver:  atomic.Pointer[netrules.AccessResolver]{},
-		logger:    atomic.Pointer[accesslog.Logger]{},
+		logger:    logger,
+		resolver:  resolver,
+		udsPath:   udsPath,
+		noEnforce: noEnforce,
+
 		listener:  nil,
-		udsPath:   "",
-		wg:        sync.WaitGroup{},
 		server:    nil,
 		transport: &http.Transport{},
-		noEnforce: false,
-	}
-	proxy.resolver.Store(resolver)
-	if logger != nil {
-		proxy.logger.Store(logger)
+		wg:        sync.WaitGroup{},
 	}
 	return proxy
 }
 
-// SetResolver replaces the net rules resolver. Safe for concurrent use with request handlers.
-// resolver must not be nil.
-func (p *Proxy) SetResolver(resolver *netrules.AccessResolver) {
-	if resolver == nil {
-		panic("SetResolver: resolver must not be nil")
-	}
-	p.resolver.Store(resolver)
-}
-
-// SetLogger replaces the access logger. Safe for concurrent use with request handlers.
-// logger may be nil to disable access logging.
-func (p *Proxy) SetLogger(logger *accesslog.Logger) {
-	p.logger.Store(logger)
-}
-
-// SetNoEnforce configures whether the proxy enforces access rules.
-// When true, rules are evaluated for logging only; all connections are forwarded regardless of result.
-// Must be called before Start.
-func (p *Proxy) SetNoEnforce(noEnforce bool) {
-	p.noEnforce = noEnforce
-}
-
-// Start creates the UDS at the given path and begins accepting connections.
-func (p *Proxy) Start(udsPath string) error {
-	p.udsPath = udsPath
-
+// Start creates the UDS and begins accepting connections.
+func (p *Proxy) Start() error {
 	var lc net.ListenConfig
-	listener, err := lc.Listen(context.Background(), "unix", udsPath)
+	listener, err := lc.Listen(context.Background(), "unix", p.udsPath)
 	if err != nil {
-		return fmt.Errorf("listen on UDS %s: %w", udsPath, err)
+		return fmt.Errorf("listen on UDS %s: %w", p.udsPath, err)
 	}
 	p.listener = listener
 
@@ -109,7 +88,7 @@ func (p *Proxy) Start(udsPath string) error {
 
 	p.wg.Go(func() {
 		if err := p.server.Serve(listener); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "execave: serve proxy: %v\n", err)
+			p.serveErr = err
 		}
 	})
 
@@ -125,6 +104,10 @@ func (p *Proxy) Stop() error {
 	err := p.server.Shutdown(ctx)
 
 	p.wg.Wait()
+
+	if p.serveErr != nil {
+		err = errors.Join(err, fmt.Errorf("serve proxy: %w", p.serveErr))
+	}
 
 	if rmErr := os.Remove(p.udsPath); rmErr != nil && !os.IsNotExist(rmErr) {
 		if err == nil {
@@ -156,7 +139,7 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
+	result := p.resolver.CheckAccess(netrules.ProtocolHTTP, host, port)
 	p.logAccess(accesslog.OperationHTTP, r.Host, result)
 
 	if !result.Allowed && !p.noEnforce {
@@ -176,9 +159,7 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "execave: CONNECT hijack not available\n")
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		panic("execave: BUG: http.ResponseWriter does not implement http.Hijacker")
 	}
 
 	clientConn, _, err := hijacker.Hijack()
@@ -206,7 +187,7 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostPort := net.JoinHostPort(host, strconv.FormatUint(uint64(port), 10))
-	result := p.resolver.Load().Resolve(netrules.ProtocolHTTP, host, port)
+	result := p.resolver.CheckAccess(netrules.ProtocolHTTP, host, port)
 	p.logAccess(accesslog.OperationHTTP, hostPort, result)
 
 	if !result.Allowed && !p.noEnforce {
@@ -244,23 +225,44 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result netrules.ResolveResult) {
-	logger := p.logger.Load()
-	if logger == nil {
+func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result netrules.AccessResult) {
+	if p.logger == nil {
 		return
 	}
 
-	logResult := accesslog.ResultOK
-	if !result.Allowed {
+	var logResult accesslog.ResultType
+	if p.noEnforce {
+		logResult = accesslog.ResultUnenforced
+	} else if result.Allowed {
+		logResult = accesslog.ResultOK
+	} else {
 		logResult = accesslog.ResultDeny
 	}
 
-	logger.Log(accesslog.Entry{
+	rule := accesslog.RuleNoMatch
+	if result.Rule != nil {
+		rule = *result.Rule
+	}
+	p.logger.Log(accesslog.Entry{
 		Operation: opType,
 		Target:    target,
 		Result:    logResult,
-		Rule:      result.Rule,
+		Rule:      rule,
 	})
+}
+
+// extractHTTPHostPort extracts host and port from a plain HTTP request.
+// Uses the URL host if available, falls back to Host header.
+// Default port is 80 for HTTP.
+func extractHTTPHostPort(r *http.Request) (string, uint16, error) {
+	hostPort := r.URL.Host
+	if hostPort == "" {
+		hostPort = r.Host
+	}
+	if hostPort == "" {
+		return "", 0, errors.New("no host in request")
+	}
+	return parseHostPort(hostPort, 80) //nolint:mnd
 }
 
 // parseHostPort extracts host and port from a host:port string.
@@ -281,20 +283,6 @@ func parseHostPort(hostPort string, defaultPort uint16) (string, uint16, error) 
 
 	// No port specified, use entire string as host with default port
 	return hostPort, defaultPort, nil
-}
-
-// extractHTTPHostPort extracts host and port from a plain HTTP request.
-// Uses the URL host if available, falls back to Host header.
-// Default port is 80 for HTTP.
-func extractHTTPHostPort(r *http.Request) (string, uint16, error) {
-	hostPort := r.URL.Host
-	if hostPort == "" {
-		hostPort = r.Host
-	}
-	if hostPort == "" {
-		return "", 0, errors.New("no host in request")
-	}
-	return parseHostPort(hostPort, 80) //nolint:mnd
 }
 
 // relay copies data bidirectionally between two connections.

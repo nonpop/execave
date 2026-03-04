@@ -54,7 +54,7 @@ func TestE2E_TextLog_StderrContainsEntriesAfterExit(t *testing.T) {
 
 	s.givenRules("fs:none:" + deniedFile)
 
-	s.whenRunTextLog("-", "cat", deniedFile)
+	s.whenRunTextLog("", "cat", deniedFile)
 
 	s.thenExitCodeNonZero()
 	s.thenStderrContains("DENY")
@@ -70,7 +70,7 @@ func TestE2E_TextLog_ShowAllowedIncludesOKEntries(t *testing.T) {
 
 	s.givenRules("fs:ro:" + data.String())
 
-	s.whenRunTextLog("-", "cat", allowedFile)
+	s.whenRunTextLog("", "cat", allowedFile)
 
 	s.thenExitCode(0)
 	s.thenStderrNotContains(data.rel("data.txt"))
@@ -82,27 +82,6 @@ func TestE2E_TextLog_ShowAllowedIncludesOKEntries(t *testing.T) {
 	s.thenStderrContains(data.rel("data.txt"))
 }
 
-// TestE2E_TextLog_ShowNologIncludesNologEntries tests that --show-nolog causes entries
-// matching nolog rules to appear in the text log (nolog entries are hidden by default).
-func TestE2E_TextLog_ShowNologIncludesNologEntries(t *testing.T) {
-	s := newScenario(t)
-	project := s.givenDir("project")
-	cacheDir := project.join("cache")
-	cacheFile := project.file("cache/data.bin", "cache data")
-
-	s.givenRules("fs:ro:"+project.String(), "fs:nolog:"+cacheDir)
-
-	s.whenRunTextLog("-", "cat", cacheFile)
-
-	s.thenExitCode(0)
-	s.thenStderrNotContains(project.rel("cache/data.bin"))
-
-	s.whenRunTextLogWithFlags([]string{"--show-nolog", "--show-allowed"}, "cat", cacheFile)
-
-	s.thenExitCode(0)
-	s.thenStderrContains(project.rel("cache/data.bin"))
-}
-
 // TestE2E_TextLog_BareMonitorWritesToStderr tests that bare --monitor (without a value)
 // writes denied entries to stderr after process exits.
 func TestE2E_TextLog_BareMonitorWritesToStderr(t *testing.T) {
@@ -112,7 +91,7 @@ func TestE2E_TextLog_BareMonitorWritesToStderr(t *testing.T) {
 
 	s.givenRules("fs:none:" + deniedFile)
 
-	s.whenRunTextLog("-", "cat", deniedFile)
+	s.whenRunTextLog("", "cat", deniedFile)
 
 	s.thenExitCodeNonZero()
 	s.thenStderrContains("DENY")
@@ -128,7 +107,7 @@ func TestE2E_TextLog_OutputFormatContainsAllColumns(t *testing.T) {
 
 	s.givenRules("fs:none:" + deniedFile)
 
-	s.whenRunTextLog("-", "cat", deniedFile)
+	s.whenRunTextLog("", "cat", deniedFile)
 
 	s.thenExitCodeNonZero()
 	var matchLine string
@@ -141,5 +120,5 @@ func TestE2E_TextLog_OutputFormatContainsAllColumns(t *testing.T) {
 	require.NotEmpty(t, matchLine)
 	assert.Contains(t, matchLine, "DENY")
 	assert.Contains(t, matchLine, "READ")
-	assert.Contains(t, matchLine, "fs:none:"+deniedFile)
+	assert.Contains(t, matchLine, "none:"+deniedFile)
 }

@@ -22,7 +22,7 @@ const (
 // --- Requirement: Deny-list filter generation ---
 
 func TestIntegration_DenyListFilterGeneration_FilterBlocksDangerousSyscall(t *testing.T) {
-	data := seccomp.Filter()
+	data := filterBytes(t)
 	insns := parseInstructions(t, data)
 
 	// SYS_PTRACE must appear as a JEQ check that jumps to the DENY return.
@@ -46,7 +46,7 @@ func TestIntegration_DenyListFilterGeneration_FilterBlocksDangerousSyscall(t *te
 }
 
 func TestIntegration_DenyListFilterGeneration_FilterAllowsNormalSyscalls(t *testing.T) {
-	data := seccomp.Filter()
+	data := filterBytes(t)
 	insns := parseInstructions(t, data)
 
 	// Normal syscalls (read, write, open, execve) must NOT appear as JEQ checks.
@@ -74,7 +74,7 @@ func TestIntegration_DenyListFilterGeneration_FilterAllowsNormalSyscalls(t *test
 }
 
 func TestIntegration_DenyListFilterGeneration_FilterKillsOnWrongArchitecture(t *testing.T) {
-	data := seccomp.Filter()
+	data := filterBytes(t)
 	insns := parseInstructions(t, data)
 
 	// The filter must contain SECCOMP_RET_KILL_PROCESS for arch mismatch.
@@ -96,13 +96,16 @@ func TestIntegration_FilterPipeCreation_FilterPipeReturnsReadableFile(t *testing
 
 	got, err := io.ReadAll(pipe)
 	require.NoError(t, err)
-	assert.Equal(t, seccomp.Filter(), got)
+
+	// Filter must be non-empty and a valid BPF program (multiple of 8 bytes).
+	assert.NotEmpty(t, got)
+	assert.Zero(t, len(got)%8)
 }
 
 // --- Requirement: Architecture support ---
 
 func TestIntegration_ArchitectureSupport_FilterUsesCorrectArchitecture(t *testing.T) {
-	data := seccomp.Filter()
+	data := filterBytes(t)
 	insns := parseInstructions(t, data)
 
 	// The second instruction must be a JEQ checking the architecture constant.
@@ -120,16 +123,7 @@ func TestIntegration_ArchitectureSupport_FilterUsesCorrectArchitecture(t *testin
 	}
 }
 
-// --- Requirement: Blocked and ruleable syscall names ---
-
-func TestIntegration_BlockedSyscallNames_ContainsExpectedSyscalls(t *testing.T) {
-	names := seccomp.BlockedSyscallNames()
-	assert.NotEmpty(t, names)
-	assert.Contains(t, names, "ptrace")
-	assert.Contains(t, names, "bpf")
-	assert.Contains(t, names, "mount")
-	assert.Contains(t, names, "kexec_load")
-}
+// --- Requirement: Ruleable syscall names ---
 
 func TestIntegration_RuleableSyscallNames_ExcludesDefenseOnlySyscalls(t *testing.T) {
 	ruleable := seccomp.RuleableSyscallNames()
@@ -159,6 +153,17 @@ func TestIntegration_FilterPipeWithAllowed_ExcludesAllowedSyscalls(t *testing.T)
 
 	// Reduced filter should be shorter by exactly 1 JEQ instruction (8 bytes).
 	assert.Len(t, reducedData, len(fullData)-8)
+}
+
+// filterBytes returns the full deny-list filter bytes via FilterPipe.
+func filterBytes(t *testing.T) []byte {
+	t.Helper()
+	pipe, err := seccomp.FilterPipe(nil)
+	require.NoError(t, err)
+	defer pipe.Close() //nolint:errcheck // best-effort close in test
+	data, err := io.ReadAll(pipe)
+	require.NoError(t, err)
+	return data
 }
 
 // parseInstructions decodes a BPF program byte slice into SockFilter instructions.

@@ -18,13 +18,13 @@ func expectedInstructionCount() int {
 }
 
 func TestFilter_ByteLengthMatchesExpectedInstructionCount(t *testing.T) {
-	data := Filter()
+	data := filterFromNrs(extractNrs(blockedSyscalls))
 	expectedBytes := expectedInstructionCount() * 8 // each SockFilter is 8 bytes
 	assert.Len(t, data, expectedBytes)
 }
 
 func TestFilter_ArchCheckIsFirstInstruction(t *testing.T) {
-	data := Filter()
+	data := filterFromNrs(extractNrs(blockedSyscalls))
 	require.GreaterOrEqual(t, len(data), 8)
 
 	var insn unix.SockFilter
@@ -36,7 +36,7 @@ func TestFilter_ArchCheckIsFirstInstruction(t *testing.T) {
 }
 
 func TestFilter_EachBlockedSyscallPresentInFilter(t *testing.T) {
-	data := Filter()
+	data := filterFromNrs(extractNrs(blockedSyscalls))
 	require.GreaterOrEqual(t, len(data), 8)
 
 	// Parse all instructions
@@ -54,15 +54,6 @@ func TestFilter_EachBlockedSyscallPresentInFilter(t *testing.T) {
 	for _, sc := range blockedSyscalls {
 		assert.True(t, jeqK[sc.nr])
 	}
-}
-
-func TestBlockedSyscallNames_ReturnsExpectedNames(t *testing.T) {
-	names := BlockedSyscallNames()
-	assert.NotEmpty(t, names)
-	assert.Len(t, names, len(blockedSyscalls))
-	assert.Equal(t, "ptrace", names[0])
-	assert.Contains(t, names, "syslog")
-	assert.Contains(t, names, "mount")
 }
 
 func TestRuleableSyscallNames_ExcludesDefenseOnlySyscalls(t *testing.T) {
@@ -88,10 +79,10 @@ func TestRuleableSyscallNames_ExcludesDefenseOnlySyscalls(t *testing.T) {
 	}
 }
 
-func TestRuleableSyscallNames_IsSubsetOfBlockedSyscallNames(t *testing.T) {
+func TestRuleableSyscallNames_IsSubsetOfBlockedSyscalls(t *testing.T) {
 	blocked := make(map[string]bool)
-	for _, name := range BlockedSyscallNames() {
-		blocked[name] = true
+	for _, sc := range blockedSyscalls {
+		blocked[sc.name] = true
 	}
 	for _, name := range RuleableSyscallNames() {
 		assert.True(t, blocked[name])
@@ -125,5 +116,5 @@ func TestFilterPipe_ReturnsReadableFileWithCorrectContent(t *testing.T) {
 
 	got, err := io.ReadAll(pipe)
 	require.NoError(t, err)
-	assert.Equal(t, Filter(), got)
+	assert.Equal(t, filterFromNrs(extractNrs(blockedSyscalls)), got)
 }

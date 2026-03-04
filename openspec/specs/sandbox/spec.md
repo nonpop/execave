@@ -167,7 +167,7 @@ ResolveBwrap and ResolveStrace SHALL resolve their respective binaries from PATH
 
 ### Requirement: ELF interpreter auto-mount
 
-InterpreterPath SHALL read the PT_INTERP program header from the bwrap binary and return the dynamic linker path. ManagedPathsWith SHALL extend ManagedDirs with the interpreter path. When Config.InterpreterPath is set, BuildBwrapArgs SHALL include a read-only bind-mount for the interpreter. The interpreter path SHALL be a managed path, preventing user rules from targeting it.
+binutil.InterpreterPath SHALL read the PT_INTERP program header from the bwrap binary and return the dynamic linker path. ManagedPathsWith SHALL extend ManagedDirs with the interpreter path. When Config.InterpreterPath is set, BuildBwrapArgs SHALL include a read-only bind-mount for the interpreter. The interpreter path SHALL be a managed path, preventing user rules from targeting it.
 
 #### Scenario: Rule targeting interpreter path rejected
 - **WHEN** the interpreter path is detected from a dynamically linked binary

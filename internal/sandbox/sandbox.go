@@ -2,269 +2,88 @@
 package sandbox
 
 import (
-	"context"
-	"debug/elf"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/seccomp"
+	"github.com/nonpop/execave/internal/tunnel"
 )
 
 // tiocSTISysctlPath is the sysctl path for TIOCSTI legacy mode.
 const tiocSTISysctlPath = "/proc/sys/dev/tty/legacy_tiocsti"
 
-// ManagedDirs are directories the sandbox handles automatically.
+// managedDirs are directories the sandbox handles automatically.
 // Includes: runtime infrastructure (/dev, /proc), isolation (/tmp),
 // and bwrap's internal pivot_root directories (/newroot, /oldroot).
 //
 //nolint:gochecknoglobals // used read-only
-var ManagedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
+var managedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
 
-// InterpreterPath reads the PT_INTERP program header from the ELF binary at
-// bwrapPath and returns the dynamic linker path. Returns empty string for
-// static binaries (no PT_INTERP), non-ELF files, read errors, or non-absolute
-// interpreter paths.
-func InterpreterPath(bwrapPath string) string {
-	elfFile, err := elf.Open(bwrapPath)
+// ManagedDirs returns the directories the sandbox manages automatically.
+// These are: /dev, /proc, /tmp, /newroot, /oldroot.
+func ManagedDirs() []string {
+	return managedDirs
+}
+
+// sandbox manages the bubblewrap sandbox configuration and execution.
+type sandbox struct {
+	cfg *config.Config
+}
+
+// SandboxedCommand describes a fully prepared sandbox command ready to execute.
+type SandboxedCommand struct {
+	// BwrapPath is the absolute path to bwrap.
+	BwrapPath string
+	// Args are the complete bwrap args (not including the binary name).
+	Args []string
+	// ExtraFiles are files to pass to the process (seccomp pipe).
+	ExtraFiles []*os.File
+	// SetupExecves is the number of exec transitions before the user command (bwrap exec + tunnel exec transitions + user command exec).
+	SetupExecves int
+}
+
+// Prepare builds the sandboxed bwrap command and seccomp filter.
+// bwrapPath must not be empty.
+// seccompFD is the file descriptor number the seccomp pipe will have in the child process.
+// The caller must place ExtraFiles so that the seccomp pipe lands at this FD.
+// The returned cleanup function releases resources (seccomp pipe) and must be called after the command finishes.
+func Prepare(bwrapPath string, cfg *config.Config, command []string, seccompFD int) (*SandboxedCommand, func(), error) {
+	if bwrapPath == "" {
+		panic("bwrapPath must not be empty")
+	}
+	s := &sandbox{cfg: cfg}
+
+	bwrapArgs := s.buildBwrapArgs(command, seccompFD)
+
+	pipe, err := seccomp.FilterPipe(allowedSyscallMap(cfg))
 	if err != nil {
-		return ""
+		return nil, nil, fmt.Errorf("create seccomp filter: %w", err)
 	}
-	defer elfFile.Close() //nolint:errcheck // read-only
 
-	for _, prog := range elfFile.Progs {
-		if prog.Type == elf.PT_INTERP {
-			data := make([]byte, prog.Filesz)
-			_, err := prog.ReadAt(data, 0)
-			if err != nil {
-				return ""
-			}
-			// PT_INTERP is a null-terminated string
-			path := strings.TrimRight(string(data), "\x00")
-			if !filepath.IsAbs(path) {
-				return ""
-			}
-			return path
-		}
+	cleanup := func() {
+		_ = pipe.Close()
 	}
-	return ""
+
+	return &SandboxedCommand{
+		BwrapPath:    bwrapPath,
+		Args:         bwrapArgs,
+		ExtraFiles:   []*os.File{pipe},
+		SetupExecves: 2 + tunnel.ExecCount, // bwrap exec, tunnel exec, then user command exec
+	}, cleanup, nil
 }
 
-// ManagedPathsWith returns ManagedDirs extended with interpreterPath if non-empty.
-// Returns ManagedDirs as-is when interpreterPath is empty.
-func ManagedPathsWith(interpreterPath string) []string {
-	if interpreterPath == "" {
-		return ManagedDirs
+// allowedSyscallMap builds a map of allowed syscall names from cfg.SyscallRules,
+func allowedSyscallMap(cfg *config.Config) map[string]bool {
+	m := make(map[string]bool, len(cfg.SyscallRules))
+	for _, rule := range cfg.SyscallRules {
+		m[rule.Name] = true
 	}
-	paths := make([]string, len(ManagedDirs)+1)
-	copy(paths, ManagedDirs)
-	paths[len(ManagedDirs)] = interpreterPath
-	return paths
-}
-
-const (
-	// sandboxUDSPath is the fixed path where the proxy UDS is mounted inside the sandbox.
-	sandboxUDSPath = "/tmp/execave-proxy.sock"
-	// sandboxExecavePath is the fixed path where the execave binary is mounted inside the sandbox.
-	sandboxExecavePath = "/tmp/execave"
-)
-
-// NetworkPath holds paths for proxy-tunnel network setup.
-// When non-nil, the sandbox bind-mounts the UDS and execave binary,
-// and wraps the user command with the network tunnel.
-type NetworkPath struct {
-	// UDSPath is the host-side path to the proxy Unix domain socket.
-	UDSPath string
-	// ExecaveBinary is the host-side path to the execave binary.
-	ExecaveBinary string
-}
-
-// Sandbox manages the bubblewrap sandbox configuration and execution.
-type Sandbox struct {
-	cfg        *config.Config
-	configPath string
-	netPath    *NetworkPath
-}
-
-// New creates a new Sandbox.
-// configPath must be empty or absolute.
-// netPath may be nil when no net rules are configured.
-func New(cfg *config.Config, configPath string, netPath *NetworkPath) *Sandbox {
-	if configPath != "" && !filepath.IsAbs(configPath) {
-		panic("internal error: configPath must be absolute: " + configPath)
-	}
-	return &Sandbox{
-		cfg:        cfg,
-		configPath: configPath,
-		netPath:    netPath,
-	}
-}
-
-// InsertSeccompArg inserts --seccomp <fd> before the -- separator in bwrap args.
-// args must contain "--" as a separator. fd is the file descriptor number of
-// the seccomp filter pipe (e.g. 3 for the direct path, 4 for the monitored path).
-func InsertSeccompArg(args []string, fd int) []string {
-	for i, a := range args {
-		if a == "--" {
-			seccompArgs := []string{"--seccomp", strconv.Itoa(fd)}
-			result := make([]string, 0, len(args)+len(seccompArgs))
-			result = append(result, args[:i]...)
-			result = append(result, seccompArgs...)
-			result = append(result, args[i:]...)
-			return result
-		}
-	}
-	panic("internal error: InsertSeccompArg: no -- separator found in bwrap args")
-}
-
-// HasNetworkPath reports whether the sandbox has network proxy-tunnel configuration.
-func (s *Sandbox) HasNetworkPath() bool {
-	return s.netPath != nil
-}
-
-// ResolveBwrap finds and validates the bwrap binary.
-// exec.LookPath resolves "bwrap" from PATH. The resolved path is validated
-// for root ownership and safe permissions before use.
-func ResolveBwrap() (string, error) {
-	path, err := exec.LookPath("bwrap")
-	if err != nil {
-		return "", fmt.Errorf("resolve bwrap: bubblewrap (bwrap) not found in PATH: %w", err)
-	}
-
-	if err := ValidateBinary(path); err != nil {
-		return "", fmt.Errorf("resolve bwrap: %w", err)
-	}
-
-	return path, nil
-}
-
-// ResolveStrace finds and validates the strace binary.
-// exec.LookPath resolves "strace" from PATH. The resolved path is validated
-// for root ownership and safe permissions before use.
-func ResolveStrace() (string, error) {
-	path, err := exec.LookPath("strace")
-	if err != nil {
-		return "", fmt.Errorf("resolve strace: strace not found in PATH: %w", err)
-	}
-
-	if err := ValidateBinary(path); err != nil {
-		return "", fmt.Errorf("resolve strace: %w", err)
-	}
-
-	return path, nil
-}
-
-// ValidateBinary checks that the binary at path is safe to execute.
-//
-// Two checks are performed:
-//  1. Lstat (no symlink follow): the path entry itself must be owned by root.
-//     A non-privileged attacker cannot create root-owned symlinks, so this
-//     prevents symlink-to-real-binary injection attacks.
-//  2. Stat (follows symlinks): the resolved target must be owned by root and
-//     not writable by group or others. Symlink permission bits are always 0777
-//     (meaningless), so we must follow symlinks to check actual file permissions.
-func ValidateBinary(path string) error {
-	// Lstat: check the path entry itself (not following symlinks).
-	linfo, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("validate binary: lstat %s: %w", path, err)
-	}
-	lstat, ok := linfo.Sys().(*syscall.Stat_t)
-	if !ok {
-		panic("validate binary: Stat_t cast failed (non-Linux?)")
-	}
-	if lstat.Uid != 0 {
-		return fmt.Errorf("validate binary: %s not owned by root (uid %d)", path, lstat.Uid)
-	}
-
-	// Stat: check the resolved target for write-bit safety.
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("validate binary: stat %s: %w", path, err)
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		panic("validate binary: Stat_t cast failed (non-Linux?)")
-	}
-	if stat.Uid != 0 {
-		return fmt.Errorf("validate binary: %s resolved target not owned by root (uid %d)", path, stat.Uid)
-	}
-	const groupOrOtherWritable = 0o022
-	if stat.Mode&groupOrOtherWritable != 0 {
-		return fmt.Errorf("validate binary: %s writable by group or others (mode %04o)", path, stat.Mode)
-	}
-
-	return nil
-}
-
-// Run executes a command in the sandbox and returns its exit code.
-func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
-	if len(command) == 0 {
-		return 1, errors.New("no command specified")
-	}
-
-	bwrapPath, err := ResolveBwrap()
-	if err != nil {
-		return 1, err
-	}
-
-	if warn, verr := CheckBwrapVersion(bwrapPath); verr != nil {
-		return 1, verr
-	} else if warn != "" {
-		fmt.Fprintln(os.Stderr, "execave: warning:", warn)
-	}
-
-	bwrapArgs := s.BuildBwrapArgs(command)
-
-	var allowedSyscalls map[string]bool
-	if len(s.cfg.SyscallAllowRules) > 0 {
-		allowedSyscalls = make(map[string]bool, len(s.cfg.SyscallAllowRules))
-		for _, name := range s.cfg.SyscallAllowRules {
-			allowedSyscalls[name] = true
-		}
-	}
-
-	var extraFiles []*os.File
-	pipe, err := seccomp.FilterPipe(allowedSyscalls)
-	if err != nil {
-		return 1, fmt.Errorf("create seccomp filter: %w", err)
-	}
-	defer pipe.Close() //nolint:errcheck // pipe closed after cmd.Run
-	extraFiles = []*os.File{pipe}
-	bwrapArgs = InsertSeccompArg(bwrapArgs, 3)
-
-	cmd := exec.CommandContext(ctx, bwrapPath, bwrapArgs...) // #nosec G204 -- args built from validated config
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.ExtraFiles = extraFiles
-
-	err = cmd.Run()
-	if err != nil {
-		exitErr := new(exec.ExitError)
-		if errors.As(err, &exitErr) {
-			// Command ran but exited with non-zero code or signal
-			ws, ok := exitErr.Sys().(syscall.WaitStatus)
-			if ok && ws.Signaled() {
-				// Process was terminated by signal - return 128 + signal number
-				// This matches shell convention (e.g., SIGINT = 2 → exit code 130)
-				return 128 + int(ws.Signal()), nil //nolint: mnd // well-known code
-			}
-			return exitErr.ExitCode(), nil
-		}
-		// Failed to execute bwrap itself
-		return 1, fmt.Errorf("execute bwrap: %w", err)
-	}
-
-	return 0, nil
+	return m
 }
 
 // tiocSTIBlocked reports whether the kernel blocks TIOCSTI terminal injection.
@@ -282,8 +101,9 @@ func tiocSTIBlocked(sysctlPath string) bool {
 	return content == "0"
 }
 
-// BuildBwrapArgs constructs bwrap arguments (exported for monitor integration).
-func (s *Sandbox) BuildBwrapArgs(command []string) []string {
+// buildBwrapArgs constructs bwrap arguments from the sandbox configuration.
+// seccompFD is the file descriptor number for the seccomp pipe.
+func (s *sandbox) buildBwrapArgs(command []string, seccompFD int) []string {
 	args := []string{}
 
 	// Unshare all namespaces (PID, IPC, UTS, network, cgroup) for process isolation.
@@ -299,76 +119,33 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	// Environment variables pass through from host (no --clearenv)
 
 	// Note: No --chdir flag. The sandboxed process inherits host cwd.
-	// If cwd is not mounted, bwrap falls back to /.
+	// If cwd is not mounted, bwrap falls back to $HOME, or / if $HOME is also not mounted.
+
 	args = append(args, "--die-with-parent")
 
 	args = append(args, "--dev", "/dev")
 	args = append(args, "--proc", "/proc")
 	args = append(args, "--tmpfs", "/tmp")
 
-	// Auto-mount the ELF interpreter (dynamic linker) so dynamically linked
-	// binaries can load. Without this, the kernel can't start the process.
-	if s.cfg.InterpreterPath != "" {
-		args = append(args, "--ro-bind", s.cfg.InterpreterPath, s.cfg.InterpreterPath)
-	}
+	args = s.addRuleMounts(args)
 
-	args = s.addRuleMounts(args, s.forcedReadOnlyConfigPaths())
-
-	// When net rules are present, bind-mount the proxy UDS and execave binary,
-	// then wrap the user command with the network tunnel.
-	if s.netPath != nil {
-		args = append(args, "--ro-bind", s.netPath.UDSPath, sandboxUDSPath)
-		args = append(args, "--ro-bind", s.netPath.ExecaveBinary, sandboxExecavePath)
-
-		args = append(args, "--")
-		args = append(args, sandboxExecavePath, "network-tunnel", sandboxUDSPath, "--")
-		args = append(args, command...)
-	} else {
-		args = append(args, "--")
-		args = append(args, command...)
-	}
+	args = append(args, "--seccomp", strconv.Itoa(seccompFD))
+	args = append(args, "--")
+	args = append(args, command...)
 
 	return args
 }
 
-func (s *Sandbox) forcedReadOnlyConfigPaths() []string {
-	paths := s.cfg.ConfigPaths
-	if len(paths) == 0 && s.configPath != "" {
-		paths = []string{s.configPath}
-	}
-	if len(paths) == 0 {
-		return nil
-	}
-
-	resolver := fsrules.NewAccessResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
-	forced := make([]string, 0, len(paths))
-	seen := make(map[string]struct{})
-	for _, path := range paths {
-		if path == "" {
-			continue
-		}
-		if _, ok := seen[path]; ok {
-			continue
-		}
-		seen[path] = struct{}{}
-		if resolver.PermissionFor(path) <= fsrules.PermissionReadWrite {
-			forced = append(forced, path)
-			fmt.Fprintf(os.Stderr, "execave: config file %s forced read-only\n", path)
-		}
-	}
-	return forced
-}
-
-// addRuleMounts adds bind mounts for config rules and applies forced read-only config paths.
-func (s *Sandbox) addRuleMounts(args []string, forcedReadOnlyPaths []string) []string {
+// addRuleMounts adds bind mounts for config rules.
+func (s *sandbox) addRuleMounts(args []string) []string {
 	mounted := make(map[string]bool)
-	rules := appendForcedReadOnlyRules(s.getSortedRules(), forcedReadOnlyPaths)
+	rules := s.getSortedRules()
 
 	for _, rule := range rules {
 		path := rule.Path
 
 		if mounted[path] {
-			panic("internal error: duplicate mount path: " + path)
+			panic("duplicate mount path: " + path)
 		}
 
 		info, err := os.Stat(path)
@@ -377,53 +154,15 @@ func (s *Sandbox) addRuleMounts(args []string, forcedReadOnlyPaths []string) []s
 			continue
 		}
 
-		args = appendMountArgs(args, rule, info)
+		args = appendMountArgs(args, rule, info, rules)
 		mounted[path] = true
-
-		// Restrict permissions on fs:none directory tmpfs mounts.
-		// Without this, the empty tmpfs would be world-readable/writable (0755),
-		// which contradicts the guarantee that fs:none paths are inaccessible.
-		// Dirs with child rules get 0111 (execute-only) to allow path traversal
-		// to child mounts. Dirs without children get 0000 (completely blocked).
-		if rule.Permission == fsrules.PermissionNone && info.IsDir() {
-			if hasChildRules(rules, path) {
-				args = append(args, "--chmod", "0111", path)
-			} else {
-				args = append(args, "--chmod", "0000", path)
-			}
-		}
 	}
 
 	return args
 }
 
-// appendForcedReadOnlyRules appends synthetic read-only rules for each unique non-empty
-// path in forcedReadOnlyPaths to rules and returns the extended slice.
-func appendForcedReadOnlyRules(rules []fsrules.AccessRule, forcedReadOnlyPaths []string) []fsrules.AccessRule {
-	if len(forcedReadOnlyPaths) == 0 {
-		return rules
-	}
-	seen := make(map[string]struct{})
-	for _, configPath := range forcedReadOnlyPaths {
-		if configPath == "" {
-			continue
-		}
-		if _, ok := seen[configPath]; ok {
-			continue
-		}
-		seen[configPath] = struct{}{}
-		rules = append(rules, fsrules.AccessRule{
-			Permission: fsrules.PermissionReadOnly,
-			Path:       configPath,
-			RawRule:    "fs:ro:" + configPath,
-			SourcePath: "",
-		})
-	}
-	return rules
-}
-
-func (s *Sandbox) getSortedRules() []fsrules.AccessRule {
-	sorted := make([]fsrules.AccessRule, len(s.cfg.FSRules))
+func (s *sandbox) getSortedRules() []fsrules.Rule {
+	sorted := make([]fsrules.Rule, len(s.cfg.FSRules))
 	copy(sorted, s.cfg.FSRules)
 	// Sort by shortest path first (parents before children).
 	// In bwrap, later mounts overlay earlier ones, so children with
@@ -433,7 +172,7 @@ func (s *Sandbox) getSortedRules() []fsrules.AccessRule {
 }
 
 // hasChildRules reports whether any rule's path is a strict descendant of parentPath.
-func hasChildRules(rules []fsrules.AccessRule, parentPath string) bool {
+func hasChildRules(rules []fsrules.Rule, parentPath string) bool {
 	prefix := parentPath + "/"
 	for _, r := range rules {
 		if strings.HasPrefix(r.Path, prefix) {
@@ -444,7 +183,8 @@ func hasChildRules(rules []fsrules.AccessRule, parentPath string) bool {
 }
 
 // appendMountArgs adds bwrap arguments for a single rule.
-func appendMountArgs(args []string, rule fsrules.AccessRule, info os.FileInfo) []string {
+// rules is the full set of rules, used to determine chmod for fs:none directories.
+func appendMountArgs(args []string, rule fsrules.Rule, info os.FileInfo, rules []fsrules.Rule) []string {
 	path := rule.Path
 
 	switch rule.Permission {
@@ -459,12 +199,22 @@ func appendMountArgs(args []string, rule fsrules.AccessRule, info os.FileInfo) [
 		// For directories: empty tmpfs hides original contents.
 		// For files: /dev/null returns Permission denied.
 		if info.IsDir() {
-			return append(args, "--tmpfs", path)
+			args = append(args, "--tmpfs", path)
+			// Restrict permissions on the tmpfs mount. Without this, the empty
+			// tmpfs would be world-readable/writable (0755), which contradicts
+			// the guarantee that fs:none paths are inaccessible.
+			// Dirs with child rules get 0111 (execute-only) to allow path
+			// traversal to child mounts. Dirs without children get 0000
+			// (completely blocked).
+			if hasChildRules(rules, path) {
+				return append(args, "--chmod", "0111", path)
+			}
+			return append(args, "--chmod", "0000", path)
 		}
 		return append(args, "--bind", "/dev/null", path)
 
 	case fsrules.PermissionUnknown:
-		panic("internal error: rule has PermissionUnknown: " + rule.RawRule)
+		panic("rule has PermissionUnknown: " + rule.RawRule)
 	}
 
 	return args

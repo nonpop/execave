@@ -68,7 +68,7 @@ func TestE2E_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
 	result := runExecave(t, "", "--config", "/nonexistent/config.toml", "--", "true")
 
 	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "config file not found")
+	assert.Contains(t, result.Stderr, "file not found")
 }
 
 // TestE2E_ConfiguringExecave_InvalidRuleSyntaxRejectedBeforeExecution tests that a malformed
@@ -273,8 +273,8 @@ func TestE2E_ConfiguringExecave_MultipleSyscallRules(t *testing.T) {
 	// Invoke both syscalls; reboot uses invalid magic (0,0,0) so it returns EINVAL, not actually rebooting.
 	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "python3", "-c", bpfRebootPythonCmd)
 
-	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "syscall:allow:bpf")
-	s.thenStderrHasEntry("SYSCALL", "reboot", "OK", "syscall:allow:reboot")
+	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "allow:bpf")
+	s.thenStderrHasEntry("SYSCALL", "reboot", "OK", "allow:reboot")
 }
 
 // TestE2E_ConfiguringExecave_DuplicateSyscallAllowRulesRejected tests that duplicate
@@ -287,14 +287,14 @@ func TestE2E_ConfiguringExecave_DuplicateSyscallAllowRulesRejected(t *testing.T)
 	assert.Contains(t, result.Stderr, "duplicate")
 }
 
-// TestE2E_ConfiguringExecave_DuplicateSyscallNologRulesRejected tests that duplicate
-// syscall:nolog rules are rejected with an error at config parse time.
-func TestE2E_ConfiguringExecave_DuplicateSyscallNologRulesRejected(t *testing.T) {
-	rules := []string{"syscall:nolog:ptrace", "syscall:nolog:ptrace"}
+// TestE2E_ConfiguringExecave_SyscallNologRuleRejected tests that syscall:nolog rules
+// are rejected with an error at config parse time (nolog action no longer supported).
+func TestE2E_ConfiguringExecave_SyscallNologRuleRejected(t *testing.T) {
+	rules := []string{"syscall:nolog:ptrace"}
 	result := runExecave(t, "", "--config", writeConfig(t, rules), "--", "ls")
 
 	assertExitCode(t, result, 1)
-	assert.Contains(t, result.Stderr, "duplicate")
+	assert.Contains(t, result.Stderr, "unknown syscall action")
 }
 
 // requireRoot skips the test if not running as root, since creating root-owned

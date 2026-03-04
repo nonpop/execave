@@ -1,19 +1,19 @@
-package sandbox_test
+package sandbox
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/nonpop/execave/internal/binutil"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func fsRule(permission fsrules.Permission, path string) fsrules.AccessRule {
+func fsRule(permission fsrules.Permission, path string) fsrules.Rule {
 	var permStr string
 	switch permission {
 	case fsrules.PermissionReadOnly:
@@ -28,48 +28,12 @@ func fsRule(permission fsrules.Permission, path string) fsrules.AccessRule {
 		permStr = "unknown"
 	}
 
-	return fsrules.AccessRule{
+	return fsrules.Rule{
 		Permission: permission,
 		Path:       path,
-		RawRule:    "fs:" + permStr + ":" + path,
+		RawRule:    permStr + ":" + path,
 		SourcePath: "",
 	}
-}
-
-func TestBuildBwrapArgs(t *testing.T) {
-	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
-			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
-		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-
-	sb := sandbox.New(cfg, "/tmp/execave-test.json", nil)
-	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
-
-	// Verify essential arguments
-	assert.Contains(t, args, "--unshare-all")
-	assert.Contains(t, args, "--dev")
-	assert.Contains(t, args, "--proc")
-
-	// Verify command is present
-	hasCommand := false
-	for i, a := range args {
-		if a == "echo" && i+1 < len(args) && args[i+1] == "hello" {
-			hasCommand = true
-			break
-		}
-	}
-	assert.True(t, hasCommand)
 }
 
 // argsContainSequence checks whether args contains the given sequence as consecutive elements.
@@ -89,30 +53,57 @@ func argsContainSequence(args []string, seq ...string) bool {
 	return false
 }
 
+func TestBuildBwrapArgs(t *testing.T) {
+	cfg := &config.Config{
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+		},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
+	}
+
+	sb := &sandbox{cfg: cfg}
+	tunnelWrapped := tunnel.WrapCommand("/usr/local/bin/execave", "/tmp/proxy.sock", []string{"echo", "hello"})
+	args := sb.buildBwrapArgs(tunnelWrapped, 3)
+
+	// Verify essential arguments
+	assert.Contains(t, args, "--unshare-all")
+	assert.Contains(t, args, "--dev")
+	assert.Contains(t, args, "--proc")
+
+	// Verify command is present
+	hasCommand := false
+	for i, a := range args {
+		if a == "echo" && i+1 < len(args) && args[i+1] == "hello" {
+			hasCommand = true
+			break
+		}
+	}
+	assert.True(t, hasCommand)
+}
+
 func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 	dir := t.TempDir()
 	noneDir := filepath.Join(dir, "blocked")
 	require.NoError(t, os.Mkdir(noneDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
 	assert.True(t, argsContainSequence(args, "--chmod", "0000", noneDir))
@@ -125,25 +116,20 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 	require.NoError(t, os.MkdirAll(childDir, 0o750))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
 	assert.True(t, argsContainSequence(args, "--chmod", "0111", noneDir))
@@ -155,24 +141,19 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 	require.NoError(t, os.WriteFile(noneFile, []byte("secret"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	// File should use /dev/null bind, not tmpfs
 	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", noneFile))
@@ -183,201 +164,141 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	assert.Contains(t, args, "--unshare-all")
 	assert.NotContains(t, args, "--share-net")
 }
 
 func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
-	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-
-	netPath := &sandbox.NetworkPath{
-		UDSPath:       "/tmp/test-proxy.sock",
-		ExecaveBinary: "/usr/local/bin/execave",
-	}
-
-	sb := sandbox.New(cfg, "", netPath)
-	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
-
-	// Should bind-mount UDS and execave binary
-	assert.True(t, argsContainSequence(args, "--ro-bind", "/tmp/test-proxy.sock", "/tmp/execave-proxy.sock"))
-	assert.True(t, argsContainSequence(args, "--ro-bind", "/usr/local/bin/execave", "/tmp/execave"))
-
-	// Command should be wrapped with tunnel
-	assert.True(t, argsContainSequence(args, "--", "/tmp/execave", "network-tunnel", "/tmp/execave-proxy.sock", "--", "echo", "hello"))
-}
-
-func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
-	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"echo", "hello"})
-
-	// Should not have tunnel wrapping
-	assert.False(t, argsContainSequence(args, "network-tunnel"))
-	// Command should follow -- directly
-	assert.True(t, argsContainSequence(args, "--", "echo", "hello"))
-}
-
-func TestInsertSeccompArg_InsertsBeforeSeparator(t *testing.T) {
-	args := []string{"--unshare-all", "--", "echo", "hi"}
-	got := sandbox.InsertSeccompArg(args, 3)
-	assert.True(t, argsContainSequence(got, "--seccomp", "3", "--", "echo", "hi"))
-}
-
-func TestInsertSeccompArg_DoesNotModifyOriginal(t *testing.T) {
-	original := []string{"--unshare-all", "--", "echo"}
-	sandbox.InsertSeccompArg(original, 3)
-	assert.Equal(t, []string{"--unshare-all", "--", "echo"}, original)
-}
-
-func TestHasNetworkPath(t *testing.T) {
-	cfg := new(config.Config)
-
-	sb := sandbox.New(cfg, "", nil)
-	assert.False(t, sb.HasNetworkPath())
-
-	sb = sandbox.New(cfg, "", &sandbox.NetworkPath{
-		UDSPath:       "/tmp/proxy.sock",
-		ExecaveBinary: "/usr/bin/execave",
-	})
-	assert.True(t, sb.HasNetworkPath())
-}
-
-func TestInterpreterPath_DynamicBinary(t *testing.T) {
-	// Use /usr/bin/ls as a well-known dynamically linked binary.
-	path, err := exec.LookPath("ls")
-	require.NoError(t, err)
-
-	interp := sandbox.InterpreterPath(path)
-
-	assert.NotEmpty(t, interp)
-	assert.True(t, filepath.IsAbs(interp))
-	assert.Contains(t, interp, "ld-linux")
-}
-
-func TestInterpreterPath_StaticBinary(t *testing.T) {
-	// Build a static Go binary (CGO_ENABLED=0 produces static binaries).
 	tmpDir := t.TempDir()
-	binPath := filepath.Join(tmpDir, "static")
-	src := filepath.Join(tmpDir, "main.go")
-	require.NoError(t, os.WriteFile(src, []byte("package main\nfunc main() {}\n"), 0o600))
+	udsFile := filepath.Join(tmpDir, "proxy.sock")
+	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
+	execaveFile := filepath.Join(tmpDir, "execave")
+	require.NoError(t, os.WriteFile(execaveFile, nil, 0o755)) //nolint:gosec // test binary needs execute permission
 
-	cmd := exec.Command("go", "build", "-o", binPath, src) // #nosec G204 -- binPath and src are constructed from t.TempDir()
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	out, err := cmd.CombinedOutput()
-	t.Log(string(out))
-	require.NoError(t, err)
-
-	interp := sandbox.InterpreterPath(binPath)
-
-	assert.Empty(t, interp)
-}
-
-func TestInterpreterPath_NonexistentPath(t *testing.T) {
-	interp := sandbox.InterpreterPath("/nonexistent/binary")
-
-	assert.Empty(t, interp)
-}
-
-func TestManagedPathsWith_NonEmpty(t *testing.T) {
-	paths := sandbox.ManagedPathsWith("/lib64/ld-linux-x86-64.so.2")
-
-	assert.Contains(t, paths, "/lib64/ld-linux-x86-64.so.2")
-	// Must also contain all ManagedDirs
-	for _, d := range sandbox.ManagedDirs {
-		assert.Contains(t, paths, d)
-	}
-	assert.Len(t, paths, len(sandbox.ManagedDirs)+1)
-}
-
-func TestManagedPathsWith_Empty(t *testing.T) {
-	paths := sandbox.ManagedPathsWith("")
-
-	assert.Equal(t, sandbox.ManagedDirs, paths)
-}
-
-func TestBuildBwrapArgs_IncludesInterpreterMount(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+			fsRule(fsrules.PermissionReadOnly, udsFile),
+			fsRule(fsrules.PermissionReadOnly, execaveFile),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "/lib64/ld-linux-x86-64.so.2",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	tunnelWrapped := tunnel.WrapCommand(execaveFile, udsFile, []string{"echo", "hello"})
+	args := sb.buildBwrapArgs(tunnelWrapped, 3)
+
+	// Should bind-mount UDS and execave binary at their host paths (same source/dest)
+	assert.True(t, argsContainSequence(args, "--ro-bind", udsFile, udsFile))
+	assert.True(t, argsContainSequence(args, "--ro-bind", execaveFile, execaveFile))
+
+	// Command should be wrapped with tunnel using host paths
+	assert.True(t, argsContainSequence(args, "--", execaveFile, "network-tunnel", udsFile, "--", "echo", "hello"))
+}
+
+func TestPrepare_SetupExecves3(t *testing.T) {
+	bwrapPath, err := binutil.ResolveBwrap()
+	if err != nil {
+		t.Skip("bwrap not available")
+	}
+
+	cfg := &config.Config{
+		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+	}
+	sc, cleanup, err := Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+
+	assert.Equal(t, 3, sc.SetupExecves)
+}
+
+func TestPrepare_InsertsSeccompAtFD(t *testing.T) {
+	bwrapPath, err := binutil.ResolveBwrap()
+	if err != nil {
+		t.Skip("bwrap not available")
+	}
+
+	cfg := &config.Config{
+		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+	}
+	sc, cleanup, err := Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+
+	assert.True(t, argsContainSequence(sc.Args, "--seccomp", "3", "--"))
+	assert.NotEmpty(t, sc.ExtraFiles)
+}
+
+func TestPrepare_DoesNotModifyOriginalArgs(t *testing.T) {
+	bwrapPath, err := binutil.ResolveBwrap()
+	if err != nil {
+		t.Skip("bwrap not available")
+	}
+
+	cfg := &config.Config{
+		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+	}
+	command := []string{"true"}
+	sc, cleanup, err := Prepare(bwrapPath, cfg, command, 3)
+	require.NoError(t, err)
+	defer cleanup()
+
+	assert.Equal(t, []string{"true"}, command)
+	assert.True(t, argsContainSequence(sc.Args, "--seccomp", "3"))
+}
+
+func TestManagedDirs(t *testing.T) {
+	paths := ManagedDirs()
+
+	assert.Equal(t, []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}, paths)
+}
+
+func TestBuildBwrapArgs_IncludesInterpreterFromFSRules(t *testing.T) {
+	cfg := &config.Config{
+		FSRules: []fsrules.Rule{
+			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
+			fsRule(fsrules.PermissionReadOnly, "/lib64/ld-linux-x86-64.so.2"),
+		},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+		ConfigPaths:  nil,
+	}
+
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	assert.True(t, argsContainSequence(args, "--ro-bind", "/lib64/ld-linux-x86-64.so.2", "/lib64/ld-linux-x86-64.so.2"))
 }
 
-func TestBuildBwrapArgs_NoInterpreterWhenEmpty(t *testing.T) {
+func TestBuildBwrapArgs_NoInterpreterWhenNotInFSRules(t *testing.T) {
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+		ConfigPaths:  nil,
 	}
 
-	sb := sandbox.New(cfg, "", nil)
-	args := sb.BuildBwrapArgs([]string{"true"})
+	sb := &sandbox{cfg: cfg}
+	args := sb.buildBwrapArgs([]string{"true"}, 3)
 
 	// No interpreter-related --ro-bind should appear (other than /usr/bin)
 	for i, a := range args {

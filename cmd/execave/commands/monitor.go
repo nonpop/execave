@@ -1,12 +1,16 @@
 package commands
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"os"
+
+	"github.com/nonpop/execave/internal/run"
+	"github.com/spf13/cobra"
+)
 
 func init() {
-	// TODO: change to "output-path"? And write to stdout instead?
-	monitorCmd.Flags().StringVar(&monitorOutputPath, "output", "", "Text log output path (default: write to stderr after exit).")
+	monitorCmd.Flags().StringVar(&monitorOutputPath, "output-path", "", "Write text log to this file. If not set, log is written to stderr after the command exits.")
 	monitorCmd.Flags().BoolVar(&monitorShowAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only).")
-	monitorCmd.Flags().BoolVar(&monitorShowNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden).")
 	monitorCmd.Flags().BoolVar(&monitorNoSandbox, "no-sandbox", false, "Run WITHOUT sandboxing (default: sandboxed).")
 	rootCmd.AddCommand(monitorCmd)
 }
@@ -14,7 +18,6 @@ func init() {
 var (
 	monitorOutputPath  string
 	monitorShowAllowed bool
-	monitorShowNolog   bool
 	monitorNoSandbox   bool
 )
 
@@ -24,6 +27,27 @@ var monitorCmd = &cobra.Command{
 	Args:         validateTargetArgv,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(cmd, args, configPath, monitorOutputPath, monitorShowAllowed, monitorShowNolog, monitorNoSandbox)
+		targetArgv := args
+		argsLenAtDash := cmd.ArgsLenAtDash()
+		if argsLenAtDash >= 0 {
+			targetArgv = args[argsLenAtDash:]
+		}
+
+		sandboxCfg := run.SandboxConfig{
+			ConfigPath: configPath,
+			TargetArgv: targetArgv,
+			MonitorConfig: &run.MonitorConfig{
+				File:        monitorOutputPath,
+				LogAllowed:  monitorShowAllowed,
+				Unsandboxed: monitorNoSandbox,
+			},
+		}
+
+		exitCode, err := run.Run(sandboxCfg)
+		if err != nil {
+			return fmt.Errorf("run: %w", err)
+		}
+		os.Exit(exitCode)
+		return nil
 	},
 }

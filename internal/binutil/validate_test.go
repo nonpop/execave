@@ -1,4 +1,4 @@
-package sandbox
+package binutil
 
 import (
 	"os"
@@ -10,7 +10,7 @@ import (
 )
 
 func TestValidateBinary_nonexistentPath(t *testing.T) {
-	err := ValidateBinary("/nonexistent/path/bwrap")
+	err := validateBinary("/nonexistent/path/bwrap")
 	assert.Error(t, err)
 }
 
@@ -19,7 +19,7 @@ func TestValidateBinary_notOwnedByRoot(t *testing.T) {
 	bin := filepath.Join(tmpDir, "fakebinary")
 	require.NoError(t, os.WriteFile(bin, []byte("fake"), 0o755)) // #nosec G306 -- test binary needs execute permission
 
-	err := ValidateBinary(bin)
+	err := validateBinary(bin)
 	assert.ErrorContains(t, err, "not owned by root")
 }
 
@@ -33,7 +33,7 @@ func TestValidateBinary_symlinkNotOwnedByRoot(t *testing.T) {
 
 	// Both the symlink and target are owned by the current (non-root) user,
 	// so validation fails on the symlink ownership check (Lstat).
-	err := ValidateBinary(link)
+	err := validateBinary(link)
 	assert.ErrorContains(t, err, "not owned by root")
 }
 

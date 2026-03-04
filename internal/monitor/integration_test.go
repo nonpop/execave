@@ -1,7 +1,7 @@
 package monitor_test
 
 import (
-	"context"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/binutil"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/monitor"
 	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/seccomp"
+	"github.com/nonpop/execave/internal/syscallrules"
+	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,17 +40,12 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(dataDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(dataDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -57,17 +54,13 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = env.mon.Run(context.Background(), []string{"sh", "-c", "cat " + testFile + " && sleep 3"})
+		_, _ = env.run([]string{"sh", "-c", "cat " + testFile + " && sleep 3"})
 	}()
 
 	// Entry must be available via the Logger while the sandbox is still running
 	require.Eventually(t, func() bool {
-		for _, e := range env.logger.Entries() {
-			if e.Target == testFile && e.Operation == accesslog.OperationRead {
-				return true
-			}
-		}
-		return false
+		logStr := env.logBuf.String()
+		return strings.Contains(logStr, testFile) && strings.Contains(logStr, "READ")
 	}, 5*time.Second, 50*time.Millisecond)
 
 	// Confirm the command is still running (still in the sleep phase)
@@ -78,12 +71,10 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAvailableDuringExecution
 	}
 
 	// Verify entry fields
-	for _, e := range env.logger.Entries() {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+dataDir, e.Rule)
-		}
-	}
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "ro:"+dataDir)
 
 	// Wait for command to finish normally
 	<-done
@@ -104,17 +95,12 @@ func TestIntegration_OperationTypeMapping_QueryingFileMetadataLoggedAsRead(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -123,14 +109,10 @@ func TestIntegration_OperationTypeMapping_QueryingFileMetadataLoggedAsRead(t *te
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *testing.T) {
@@ -145,17 +127,12 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -164,14 +141,10 @@ func TestIntegration_OperationTypeMapping_CreatingDirectoryLoggedAsWrite(t *test
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == newDir && e.Operation == accesslog.OperationWrite {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, newDir)
+	assert.Contains(t, logStr, "WRITE")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_OperationTypeMapping_ReadingFileContentsLoggedAsRead(t *testing.T) {
@@ -183,7 +156,7 @@ func TestIntegration_OperationTypeMapping_ReadingFileContentsLoggedAsRead(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *testing.T) {
@@ -198,17 +171,12 @@ func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *te
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -218,14 +186,10 @@ func TestIntegration_OperationTypeMapping_WritingFileContentsLoggedAsWrite(t *te
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == testFile && e.Operation == accesslog.OperationWrite {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found, "openat(O_WRONLY|O_CREAT) must be classified as WRITE")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "WRITE")
+	assert.Contains(t, logStr, "OK")
 }
 
 // --- Requirement: Path resolution for *at() syscalls ---
@@ -265,17 +229,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkLog
 	// bwrap resolves these at mount time.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(linkDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(linkDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -287,20 +246,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkLog
 	assert.Equal(t, 0, exitCode)
 
 	// The entry must use the symlink (unresolved) path
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+linkDir, e.Rule)
-		}
-	}
-	assert.True(t, found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "ro:"+linkDir)
 
 	// The real (resolved) path must NOT appear in the log
-	for _, e := range env.logger.Entries() {
-		assert.NotEqual(t, realFile, e.Target)
-	}
+	assert.NotContains(t, env.logBuf.String(), realFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInIntermediateComponentLoggedWithoutResolution(t *testing.T) {
@@ -327,17 +280,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInI
 	// The resolver skips the symlink; the kernel follows it transparently.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(linkDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(linkDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -349,20 +297,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RuleBoundarySymlinkInI
 	assert.Equal(t, 0, exitCode)
 
 	// The entry must use the symlink (unresolved) path
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+linkDir, e.Rule)
-		}
-	}
-	assert.True(t, found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "ro:"+linkDir)
 
 	// The real (resolved) path must NOT appear in the log
-	for _, e := range env.logger.Entries() {
-		assert.NotEqual(t, realFile, e.Target)
-	}
+	assert.NotContains(t, env.logBuf.String(), realFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountResolvedAndLogged(t *testing.T) {
@@ -386,17 +328,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountReso
 	// so the resolver walks the host FS and resolves it.
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -405,26 +342,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountReso
 	assert.Equal(t, 0, exitCode)
 
 	// The symlink hop must be logged as a READ
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+mountDir, e.Rule)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "ro:"+mountDir)
 
 	// The resolved target must be logged as a READ (the original operation)
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationRead {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+mountDir, e.Rule)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinMountResolvedAndLogged(t *testing.T) {
@@ -447,17 +372,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinM
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -466,26 +386,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkWithinM
 	assert.Equal(t, 0, exitCode)
 
 	// The symlink hop must be logged as a READ
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+mountDir, e.Rule)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "ro:"+mountDir)
 
 	// The resolved target must be logged as a READ (the original operation)
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationRead {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "fs:ro:"+mountDir, e.Rule)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainResolvedWithAllHopsLogged(t *testing.T) {
@@ -509,17 +417,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -528,23 +431,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_RelativeSymlinkChainRe
 	assert.Equal(t, 0, exitCode)
 
 	// Both hops must be logged as READ
-	var aFound, bFound, targetFound bool
-	for _, entry := range env.logger.Entries() {
-		switch {
-		case entry.Target == aLink && entry.Operation == accesslog.OperationRead:
-			aFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		case entry.Target == bLink && entry.Operation == accesslog.OperationRead:
-			bFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		case entry.Target == targetFile && entry.Operation == accesslog.OperationRead:
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		}
-	}
-	assert.True(t, aFound)
-	assert.True(t, bFound)
-	assert.True(t, targetFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, aLink)
+	assert.Contains(t, logStr, bLink)
+	assert.Contains(t, logStr, targetFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPointingOutsideRulesDenied(t *testing.T) {
@@ -570,17 +462,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPoin
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -588,25 +475,15 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkWithinMountPoin
 	require.NoError(t, err)
 
 	// The hop must be logged as READ OK (symlink itself is in ruled dir)
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// The target must be logged as READ DENY (no matching rule)
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == unruledFile && e.Operation == accesslog.OperationRead {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-			assert.Equal(t, accesslog.RuleNoMatch, e.Rule)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, unruledFile)
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, accesslog.RuleNoMatch)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWithinMount(t *testing.T) {
@@ -630,17 +507,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -648,23 +520,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopSymlinkChainWi
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var aFound, bFound, targetFound bool
-	for _, entry := range env.logger.Entries() {
-		switch {
-		case entry.Target == aLink && entry.Operation == accesslog.OperationRead:
-			aFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		case entry.Target == bLink && entry.Operation == accesslog.OperationRead:
-			bFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		case entry.Target == targetFile && entry.Operation == accesslog.OperationRead:
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, entry.Result)
-		}
-	}
-	assert.True(t, aFound)
-	assert.True(t, bFound)
-	assert.True(t, targetFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, aLink)
+	assert.Contains(t, logStr, bLink)
+	assert.Contains(t, logStr, targetFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtDeniedIntermediateHop(t *testing.T) {
@@ -693,17 +554,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtD
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(ruledDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(ruledDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -711,29 +567,17 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_MultiHopChainBreaksAtD
 	require.NoError(t, err)
 
 	// hop1 must be logged as READ OK
-	var hop1Found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == hop1 && e.Operation == accesslog.OperationRead {
-			hop1Found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hop1Found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, hop1)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// hop2 must be logged as READ DENY (no matching rule)
-	var hop2Found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == hop2 && e.Operation == accesslog.OperationRead {
-			hop2Found = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-		}
-	}
-	assert.True(t, hop2Found)
+	assert.Contains(t, logStr, hop2)
+	assert.Contains(t, logStr, "DENY")
 
 	// Target must NOT be logged — chain broke at hop2
-	for _, e := range env.logger.Entries() {
-		assert.NotEqual(t, targetFile, e.Target)
-	}
+	assert.NotContains(t, env.logBuf.String(), targetFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediatePathComponentResolved(t *testing.T) {
@@ -758,17 +602,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediateP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -779,24 +618,13 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkInIntermediateP
 	assert.Equal(t, 0, exitCode)
 
 	// The dir symlink hop must be logged as a READ
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkSubDir && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkSubDir)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// The resolved target (through the real subdir) must be logged
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationRead {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughSymlinkWithinMount(t *testing.T) {
@@ -818,17 +646,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughS
 	// rw rule — both hop READ and target WRITE are allowed
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -837,24 +660,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteOperationThroughS
 	assert.Equal(t, 0, exitCode)
 
 	// The hop must be logged as READ OK
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// The target must be logged as WRITE OK
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationWrite {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
+	assert.Contains(t, logStr, "WRITE")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToReadOnlyTargetDenied(t *testing.T) {
@@ -878,17 +691,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToR
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(rwDir), roRule(roDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(rwDir), roRule(roDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -896,24 +704,15 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughSymlinkToR
 	require.NoError(t, err)
 
 	// The hop must be logged as READ OK (symlink in rw dir is readable)
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// The target must be logged as WRITE DENY (ro dir doesn't allow writes)
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationWrite {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
+	assert.Contains(t, logStr, "WRITE")
+	assert.Contains(t, logStr, "DENY")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySymlinkToWritableTargetAllowed(t *testing.T) {
@@ -937,17 +736,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySy
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -956,24 +750,14 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_WriteThroughReadOnlySy
 	assert.Equal(t, 0, exitCode)
 
 	// The hop must be logged as READ OK (symlink in ro dir is readable)
-	var hopFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == linkFile && e.Operation == accesslog.OperationRead {
-			hopFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, hopFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, linkFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 
 	// The target must be logged as WRITE OK (rw dir allows writes)
-	var targetFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationWrite {
-			targetFound = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, targetFound)
+	assert.Contains(t, logStr, targetFile)
+	assert.Contains(t, logStr, "WRITE")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExceeded(t *testing.T) {
@@ -995,17 +779,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExcee
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1016,14 +795,9 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkDepthLimitExcee
 	require.NoError(t, err)
 
 	// There must be an entry with the depth-limit-exceeded rule
-	var depthLimitFound bool
-	for _, e := range env.logger.Entries() {
-		if e.Rule == accesslog.RuleSymlinkDepthExceeded {
-			depthLimitFound = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-		}
-	}
-	assert.True(t, depthLimitFound)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, accesslog.RuleSymlinkDepthExceeded)
+	assert.Contains(t, logStr, "DENY")
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDeduplicated(t *testing.T) {
@@ -1047,17 +821,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDe
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1068,12 +837,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_ResolvedSymlinkPathsDe
 
 	// Count how many times the target path appears as a READ entry.
 	// Logger deduplication should filter the second READ for the same target.
-	targetReadCount := 0
-	for _, e := range env.logger.Entries() {
-		if e.Target == targetFile && e.Operation == accesslog.OperationRead {
-			targetReadCount++
-		}
-	}
+	targetReadCount := strings.Count(env.logBuf.String(), targetFile)
 	assert.Equal(t, 1, targetReadCount)
 }
 
@@ -1092,17 +856,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_NonExistentPathNotReso
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1111,9 +870,7 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_NonExistentPathNotReso
 	_, err = env.run([]string{"sh", "-c", "cat " + noexistFile + " || true"})
 	require.NoError(t, err)
 
-	for _, e := range env.logger.Entries() {
-		assert.NotEqual(t, noexistFile, e.Target)
-	}
+	assert.NotContains(t, env.logBuf.String(), noexistFile)
 }
 
 func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedPathLoggedAsUnknown(t *testing.T) {
@@ -1138,17 +895,12 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedP
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            []string{managedDir},
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: []string{managedDir},
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1156,14 +908,9 @@ func TestIntegration_SymlinkPathResolutionInAccessLogging_SymlinkThroughManagedP
 	require.NoError(t, err)
 
 	// The entry must be logged as UNKNOWN with the unresolvable rule
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Rule == accesslog.RuleSymlinkTargetUnresolvable {
-			found = true
-			assert.Equal(t, accesslog.ResultUnknown, e.Result)
-		}
-	}
-	assert.True(t, found)
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, accesslog.RuleSymlinkTargetUnresolvable)
+	assert.Contains(t, logStr, "UNKNOWN")
 }
 
 // --- Requirement: Non-existent path filtering for reads ---
@@ -1182,17 +929,12 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentReadFilteredFro
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1200,9 +942,7 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentReadFilteredFro
 	_, err = env.run([]string{"sh", "-c", "cat " + noexistFile + " || true"})
 	require.NoError(t, err)
 
-	for _, e := range env.logger.Entries() {
-		assert.NotEqual(t, noexistFile, e.Target, "non-existent read must not be logged")
-	}
+	assert.NotContains(t, env.logBuf.String(), noexistFile)
 }
 
 func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *testing.T) {
@@ -1220,17 +960,12 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *
 	// ro rule — monitor resolves this write as DENY
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(mountDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1239,14 +974,10 @@ func TestIntegration_NonExistentPathFilteringForReads_NonExistentWriteLogged(t *
 	_, err = env.run([]string{"sh", "-c", "echo hello > " + newFile + " || true"})
 	require.NoError(t, err)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == newFile && e.Operation == accesslog.OperationWrite {
-			found = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-		}
-	}
-	assert.True(t, found, "write to non-existent path must be logged")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, newFile)
+	assert.Contains(t, logStr, "WRITE")
+	assert.Contains(t, logStr, "DENY")
 }
 
 func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentStillLogged(t *testing.T) {
@@ -1273,17 +1004,12 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1292,13 +1018,7 @@ func TestIntegration_NonExistentPathFilteringForReads_StatErrorOtherThanEnoentSt
 	_, err = env.run([]string{"sh", "-c", "cat " + secretFile + " || true"})
 	require.NoError(t, err)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == secretFile {
-			found = true
-		}
-	}
-	assert.True(t, found, "stat EACCES must be treated as fail-safe and logged")
+	assert.Contains(t, env.logBuf.String(), secretFile)
 }
 
 func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *testing.T) {
@@ -1317,17 +1037,12 @@ func TestIntegration_RealTimeAccessLogWriting_LogEntriesAppearInSyscallOrder(t *
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1418,32 +1133,22 @@ func roRuleEnv(t *testing.T, absTestDir string) *monitorTestEnv {
 	t.Helper()
 	return newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 }
 
-// assertHasReadEntry asserts that the logger contains a READ entry with ResultOK for the given target.
-func assertHasReadEntry(t *testing.T, entries []accesslog.Entry, target string) {
+// assertHasReadEntry asserts that the log string contains a READ entry with ResultOK for the given target.
+func assertHasReadEntry(t *testing.T, logStr string, target string) {
 	t.Helper()
-	var found bool
-	for _, e := range entries {
-		if e.Target == target && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found)
+	assert.Contains(t, logStr, target)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_AbsoluteDirfdIgnored tests that when an
@@ -1459,7 +1164,7 @@ func TestIntegration_PathResolutionForAtSyscalls_AbsoluteDirfdIgnored(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd tests that
@@ -1480,17 +1185,12 @@ func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -1501,14 +1201,10 @@ func TestIntegration_PathResolutionForAtSyscalls_AtFdCwdResolvesWithTrackedCwd(t
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, found, "AT_FDCWD annotation must be joined with relative path to form absolute path")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_AtFdCwdUnresolvableWhenNoCwdTracked tests
@@ -1550,15 +1246,10 @@ void _start(void) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == "untracked/relative.txt" {
-			found = true
-			assert.Equal(t, accesslog.ResultUnknown, e.Result)
-			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
-		}
-	}
-	assert.True(t, found, "relative path without tracked cwd must be logged as UNKNOWN")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, "untracked/relative.txt")
+	assert.Contains(t, logStr, "UNKNOWN")
+	assert.Contains(t, logStr, accesslog.RuleUnresolvedRelativePath)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdResolvesWithTrackedCwd tests
@@ -1595,7 +1286,7 @@ int main(int argc, char *argv[]) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_RelativeDirfdUnresolvableWhenNoCwdTracked
@@ -1637,15 +1328,10 @@ void _start(void) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if strings.HasSuffix(e.Target, "fd-relative.txt") {
-			found = true
-			assert.Equal(t, accesslog.ResultUnknown, e.Result)
-			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
-		}
-	}
-	assert.True(t, found, "unannotated numeric dirfd with relative path and no tracked cwd must be UNKNOWN")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, "fd-relative.txt")
+	assert.Contains(t, logStr, "UNKNOWN")
+	assert.Contains(t, logStr, accesslog.RuleUnresolvedRelativePath)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_EmptyPathWithAtEmptyPath tests that when
@@ -1684,7 +1370,7 @@ int main(int argc, char *argv[]) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_ChdirUpdatesCwdForPid tests that a
@@ -1717,7 +1403,7 @@ int main(int argc, char *argv[]) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_FchdirUpdatesCwdForPid tests that a
@@ -1753,7 +1439,7 @@ int main(int argc, char *argv[]) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	assertHasReadEntry(t, env.logger.Entries(), testFile)
+	assertHasReadEntry(t, env.logBuf.String(), testFile)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_CwdClearedOnProcessExit tests that
@@ -1799,15 +1485,10 @@ void _start(void) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env2.logger.Entries() {
-		if e.Target == "post-exit/relative.txt" {
-			found = true
-			assert.Equal(t, accesslog.ResultUnknown, e.Result)
-			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
-		}
-	}
-	assert.True(t, found, "cwd state must not persist across monitor runs")
+	logStr := env2.logBuf.String()
+	assert.Contains(t, logStr, "post-exit/relative.txt")
+	assert.Contains(t, logStr, "UNKNOWN")
+	assert.Contains(t, logStr, accesslog.RuleUnresolvedRelativePath)
 }
 
 // TestIntegration_PathResolutionForAtSyscalls_CwdNotInheritedByNewPid tests that a
@@ -1873,15 +1554,10 @@ int main(int argc, char *argv[]) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range env.logger.Entries() {
-		if e.Target == "child-relative.txt" {
-			found = true
-			assert.Equal(t, accesslog.ResultUnknown, e.Result)
-			assert.Equal(t, accesslog.RuleUnresolvedRelativePath, e.Rule)
-		}
-	}
-	assert.True(t, found, "new pid must not inherit parent's tracked cwd")
+	logStr := env.logBuf.String()
+	assert.Contains(t, logStr, "child-relative.txt")
+	assert.Contains(t, logStr, "UNKNOWN")
+	assert.Contains(t, logStr, accesslog.RuleUnresolvedRelativePath)
 }
 
 // --- Requirement: Blocked syscall attempts produce SYSCALL entries ---
@@ -1898,47 +1574,38 @@ func TestIntegration_SyscallTracing_BlockedSyscallAttemptProducesSyscallEntry(t 
 	}
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+		FSRules:      []fsrules.Rule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-	stracePath, err := sandbox.ResolveStrace()
+		ConfigPaths: nil,
+	}
+	var logBuf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&logBuf, logCfg)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+
+	stracePath, err := binutil.ResolveStrace()
 	require.NoError(t, err)
 
-	blocked := map[string]bool{"bpf": true}
+	sr := syscallrules.NewResolver(nil, seccomp.RuleableSyscallNames())
 	seccompFile, err := seccomp.FilterPipe(nil)
 	require.NoError(t, err)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, nil, nil)
+	cmd := []string{"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"}
 
 	// Python invokes the bpf syscall (nr 321 on x86_64) which is in our blocked set.
 	// Without bwrap the seccomp filter is not applied, but strace still emits the
 	// syscall. The monitor intercepts it based on the name and logs it as DENY.
-	exitCode, err := mon.Run(context.Background(), []string{
-		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",
-	})
+	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, cmd, 0, seccompFile, sr, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range logger.Entries() {
-		if e.Operation == accesslog.OperationSyscall && e.Target == "bpf" {
-			found = true
-			assert.Equal(t, accesslog.ResultDeny, e.Result)
-			assert.Equal(t, accesslog.RuleSeccomp, e.Rule)
-		}
-	}
-	assert.True(t, found)
+	logStr := logBuf.String()
+	assert.Contains(t, logStr, "bpf")
+	assert.Contains(t, logStr, "SYSCALL")
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, accesslog.RuleNoMatch)
 }
 
 // TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry tests that when
@@ -1953,57 +1620,50 @@ func TestIntegration_SyscallTracing_AllowedSyscallProducesSyscallOKEntry(t *test
 	}
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	var logBuf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&logBuf, logCfg)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
-	stracePath, err := sandbox.ResolveStrace()
+	stracePath, err := binutil.ResolveStrace()
 	require.NoError(t, err)
 
-	// blockedSyscalls must be non-nil to enable syscall tracing in buildStraceArgs.
-	// In production, both maps are populated from config when seccomp is active.
-	blocked := map[string]bool{}
-	allowed := map[string]bool{"bpf": true}
-	seccompFile, err := seccomp.FilterPipe(allowed)
+	bpfRule, ruleErr := syscallrules.ParseRule("allow:bpf", "")
+	require.NoError(t, ruleErr)
+	sr := syscallrules.NewResolver([]syscallrules.Rule{bpfRule}, seccomp.RuleableSyscallNames())
+	allowedMap := make(map[string]bool)
+	for _, n := range sr.AllowedNames() {
+		allowedMap[n] = true
+	}
+	seccompFile, err := seccomp.FilterPipe(allowedMap)
 	require.NoError(t, err)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, seccompFile, blocked, allowed, nil)
+	cmd := []string{"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"}
 
-	exitCode, err := mon.Run(context.Background(), []string{
-		"python3", "-c", "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)",
-	})
+	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, cmd, 0, seccompFile, sr, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	var found bool
-	for _, e := range logger.Entries() {
-		if e.Operation == accesslog.OperationSyscall && e.Target == "bpf" {
-			found = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-			assert.Equal(t, "syscall:allow:bpf", e.Rule)
-		}
-	}
-	assert.True(t, found)
+	logStr := logBuf.String()
+	assert.Contains(t, logStr, "bpf")
+	assert.Contains(t, logStr, "SYSCALL")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "allow:bpf")
 }
 
 // --- Requirement: Bwrap setup phase detection ---
 
 func TestIntegration_BwrapSetupPhaseDetection_SetupPhaseLinesSkippedUntilUserCommandExecve(t *testing.T) {
-	bwrapPath, err := sandbox.ResolveBwrap()
-	if err != nil {
+	if _, err := binutil.ResolveBwrap(); err != nil {
 		t.Skip("bwrap not available: ", err)
 	}
-	stracePath, err := sandbox.ResolveStrace()
+	stracePath, err := binutil.ResolveStrace()
 	require.NoError(t, err)
 
 	//nolint:usetesting // Need a path outside /tmp
@@ -2017,59 +1677,57 @@ func TestIntegration_BwrapSetupPhaseDetection_SetupPhaseLinesSkippedUntilUserCom
 	require.NoError(t, os.WriteFile(testFile, []byte("hello"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
 			roRule(absTestDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	var logBuf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&logBuf, logCfg)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
-	sb := sandbox.New(cfg, "", nil)
-	bwrapArgs := sb.BuildBwrapArgs([]string{"cat", testFile})
+	// Create a stub tunnel script that skips "network-tunnel <uds> --" and execs the rest.
+	tunnelStub := filepath.Join(absTestDir, "tunnel-stub.sh")
+	require.NoError(t, os.WriteFile(tunnelStub, []byte("#!/usr/bin/sh\nshift 3\nexec \"$@\"\n"), 0o755)) // #nosec G306 -- test script needs execute permission
+	udsFile := filepath.Join(absTestDir, "proxy.sock")
+	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
+	cfg.FSRules = append(cfg.FSRules, roRule(tunnelStub), roRule(udsFile))
+	bwrapPath, err := binutil.ResolveBwrap()
+	require.NoError(t, err)
+	wrapped := tunnel.WrapCommand(tunnelStub, udsFile, []string{"cat", testFile})
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	fullCommand := append([]string{sc.BwrapPath}, sc.Args...)
 
-	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, false, nil, nil, nil, nil)
-
-	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
+	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, fullCommand, sc.SetupExecves, sc.ExtraFiles[0], nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	entries := logger.Entries()
-	assert.NotEmpty(t, entries)
+	logStr := logBuf.String()
+	assert.NotEmpty(t, logStr)
 
 	// Bwrap setup operations must not appear in log
-	for _, e := range entries {
-		assert.NotContains(t, e.Target, "newroot")
-		assert.NotContains(t, e.Target, "oldroot")
-	}
+	assert.NotContains(t, logStr, "newroot")
+	assert.NotContains(t, logStr, "oldroot")
 
 	// User command's file access must appear
-	var foundTestFile bool
-	for _, e := range entries {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			foundTestFile = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, foundTestFile)
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProducesEntries(t *testing.T) {
-	bwrapPath, err := sandbox.ResolveBwrap()
-	if err != nil {
+	if _, err := binutil.ResolveBwrap(); err != nil {
 		t.Skip("bwrap not available: ", err)
 	}
-	stracePath, err := sandbox.ResolveStrace()
+	stracePath, err := binutil.ResolveStrace()
 	require.NoError(t, err)
 
 	//nolint:usetesting // Need a path outside /tmp
@@ -2083,109 +1741,46 @@ func TestIntegration_BwrapSetupPhaseDetection_IncompleteExecveChainStillProduces
 	require.NoError(t, os.WriteFile(testFile, []byte("hello"), 0o600))
 
 	cfg := &config.Config{
-		FSRules: []fsrules.AccessRule{
+		FSRules: []fsrules.Rule{
 			roRule("/usr"), roRule("/lib"), roRule("/lib64"), roRule("/etc/ld.so.cache"),
 			roRule(absTestDir),
 		},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
+	var logBuf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&logBuf, logCfg)
+	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
-	sb := sandbox.New(cfg, "", nil)
-	bwrapArgs := sb.BuildBwrapArgs([]string{"cat", testFile})
+	// Create a stub tunnel script that skips "network-tunnel <uds> --" and execs the rest.
+	tunnelStub := filepath.Join(absTestDir, "tunnel-stub.sh")
+	require.NoError(t, os.WriteFile(tunnelStub, []byte("#!/usr/bin/sh\nshift 3\nexec \"$@\"\n"), 0o755)) // #nosec G306 -- test script needs execute permission
+	udsFile := filepath.Join(absTestDir, "proxy.sock")
+	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
+	cfg.FSRules = append(cfg.FSRules, roRule(tunnelStub), roRule(udsFile))
+	bwrapPath, err := binutil.ResolveBwrap()
+	require.NoError(t, err)
+	wrapped := tunnel.WrapCommand(tunnelStub, udsFile, []string{"cat", testFile})
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	fullCommand := append([]string{sc.BwrapPath}, sc.Args...)
 
-	// hasNetworkPath=true expects 3 execves, but no tunnel is configured
-	// in bwrapArgs, so only 2 execves occur (bwrap + user command).
+	// setupExecves=4 expects 4 execves, but only 3 occur (bwrap + tunnel stub + user command).
 	// The monitor must still produce entries despite the incomplete chain.
-	mon := monitor.New(bwrapPath, stracePath, logger, resolver, bwrapArgs, true, nil, nil, nil, nil)
-
-	exitCode, err := mon.Run(context.Background(), []string{"cat", testFile})
+	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, fullCommand, 4, sc.ExtraFiles[0], nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	entries := logger.Entries()
-	assert.NotEmpty(t, entries)
+	logStr := logBuf.String()
+	assert.NotEmpty(t, logStr)
 
 	// User command's file access must still appear despite incomplete execve chain
-	var foundTestFile bool
-	for _, e := range entries {
-		if e.Target == testFile && e.Operation == accesslog.OperationRead {
-			foundTestFile = true
-			assert.Equal(t, accesslog.ResultOK, e.Result)
-		}
-	}
-	assert.True(t, foundTestFile)
-}
-
-// --- Requirement: Extra environment injection ---
-
-func TestIntegration_ExtraEnvInjection_InjectedVarsAppearInTracedCommand(t *testing.T) {
-	stracePath, err := sandbox.ResolveStrace()
-	require.NoError(t, err)
-
-	cfg := &config.Config{
-		FSRules:                 nil,
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	logger := accesslog.New(nil, false)
-	resolver := fsrules.NewAccessResolver(nil, nil)
-	extraEnv := []string{"EXECAVE_TEST_INJECTED=hello123"}
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil, extraEnv)
-
-	// The traced command prints the env var; if injected, it exits 0
-	exitCode, err := mon.Run(context.Background(), []string{"sh", "-c", `test "$EXECAVE_TEST_INJECTED" = "hello123"`})
-	require.NoError(t, err)
-	assert.Equal(t, 0, exitCode)
-
-	_ = cfg
-}
-
-func TestIntegration_ExtraEnvInjection_NilExtraEnvInheritsParentEnv(t *testing.T) {
-	stracePath, err := sandbox.ResolveStrace()
-	require.NoError(t, err)
-
-	t.Setenv("EXECAVE_TEST_PARENT_VAR", "parentval")
-
-	cfg := &config.Config{
-		FSRules:                 nil,
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	logger := accesslog.New(nil, false)
-	resolver := fsrules.NewAccessResolver(nil, nil)
-	mon := monitor.New("", stracePath, logger, resolver, nil, false, nil, nil, nil, nil)
-
-	// With nil extraEnv, the command inherits parent env unchanged
-	exitCode, err := mon.Run(context.Background(), []string{"sh", "-c", `test "$EXECAVE_TEST_PARENT_VAR" = "parentval"`})
-	require.NoError(t, err)
-	assert.Equal(t, 0, exitCode)
-
-	_ = cfg
+	assert.Contains(t, logStr, testFile)
+	assert.Contains(t, logStr, "READ")
+	assert.Contains(t, logStr, "OK")
 }

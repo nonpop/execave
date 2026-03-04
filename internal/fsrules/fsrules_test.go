@@ -1,8 +1,6 @@
 package fsrules
 
 import (
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +21,7 @@ func TestParseRule_Valid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, err := ParseAccessRule(tt.rule, "/tmp")
+			rule, err := ParseRule(tt.rule, "/tmp", "")
 			require.NoError(t, err)
 
 			assert.Equal(t, tt.expectedPerm, rule.Permission)
@@ -44,118 +42,54 @@ func TestParseRule_InvalidFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseAccessRule(tt.rule, "/tmp")
+			_, err := ParseRule(tt.rule, "/tmp", "")
 			assert.ErrorContains(t, err, "malformed rule")
 		})
 	}
 }
 
 func TestParseRule_InvalidPermission(t *testing.T) {
-	_, err := ParseAccessRule("readonly:/path", "/tmp")
+	_, err := ParseRule("readonly:/path", "/tmp", "")
 	assert.ErrorContains(t, err, "invalid permission type")
 }
 
-func TestNormalizePath_AbsolutePath(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("/home/user/../user/project/./src", configDir)
+// --- Identity ---
+
+func TestIdentity_ReadWriteRule(t *testing.T) {
+	rule, err := ParseRule("rw:/home/user", "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/project/src", result)
+	assert.Equal(t, "rw:/home/user", rule.Canonical())
 }
 
-func TestNormalizePath_TrailingSlash(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("/home/user/project/", configDir)
+func TestIdentity_ReadOnlyRule(t *testing.T) {
+	rule, err := ParseRule("ro:/usr/bin", "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/project", result)
+	assert.Equal(t, "ro:/usr/bin", rule.Canonical())
 }
 
-func TestNormalizePath_RelativePath(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("./src", configDir)
+func TestIdentity_NoneRule(t *testing.T) {
+	rule, err := ParseRule("none:/secrets", "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "/home/user/myproject/src", result)
+	assert.Equal(t, "none:/secrets", rule.Canonical())
 }
 
-func TestNormalizePath_RelativeWithParent(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("../shared", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/shared", result)
-}
+func TestCanonicalRoundTrip(t *testing.T) {
+	cases := []string{
+		"rw:/home/user",
+		"ro:/usr/bin",
+		"none:/secrets",
+	}
+	for _, tc := range cases {
+		t.Run(tc, func(t *testing.T) {
+			rule1, err := ParseRule(tc, "/tmp", "")
+			require.NoError(t, err)
+			canonical1 := rule1.Canonical()
 
-func TestNormalizePath_TrulyRelative(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("src", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/myproject/src", result)
-}
+			rule2, err := ParseRule(canonical1, "/tmp", "")
+			require.NoError(t, err)
+			canonical2 := rule2.Canonical()
 
-func TestNormalizePath_CurrentDir(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath(".", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/myproject", result)
-}
-
-func TestNormalizePath_TildeSlashExpanded(t *testing.T) {
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	result, err := normalizePath("~/project", "/")
-	require.NoError(t, err)
-	assert.Equal(t, homeDir+"/project", result)
-}
-
-func TestNormalizePath_BareTildeExpanded(t *testing.T) {
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	result, err := normalizePath("~", "/")
-	require.NoError(t, err)
-	assert.Equal(t, homeDir, result)
-}
-
-func TestNormalizePath_TildePathCleaned(t *testing.T) {
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	result, err := normalizePath("~/project/../other", "/")
-	require.NoError(t, err)
-	assert.Equal(t, homeDir+"/other", result)
-}
-
-func TestNormalizePath_TildeUsernameRejected(t *testing.T) {
-	_, err := normalizePath("~otheruser/data", "/home/user")
-	require.Error(t, err)
-	assert.True(t,
-		strings.Contains(err.Error(), "~username") || strings.Contains(err.Error(), "not supported"))
-}
-
-func TestNormalizePath_EmptyPath(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/myproject", result)
-}
-
-func TestNormalizePath_RootPath(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("/", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/", result)
-}
-
-func TestNormalizePath_MultipleSlashes(t *testing.T) {
-	configDir := "/home/user/myproject"
-	result, err := normalizePath("/home//user///project", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/project", result)
-}
-
-func TestNormalizePath_ParentTraversalBeyondRoot(t *testing.T) {
-	// Traversing beyond root stops at root.
-	configDir := "/home/user"
-	result, err := normalizePath("../../../..", configDir)
-	require.NoError(t, err)
-	assert.Equal(t, "/", result)
+			assert.Equal(t, canonical1, canonical2)
+		})
+	}
 }

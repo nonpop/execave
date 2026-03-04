@@ -12,50 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Requirement: Host-side TCP bridge ---
-
-func TestIntegration_StartBridge_ForwardsTCPToUDS(t *testing.T) {
-	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	listener, err := net.Listen("unix", udsPath)
-	require.NoError(t, err)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = fmt.Fprint(w, "bridge-ok")
-	})
-	server := &http.Server{Handler: mux} //nolint:gosec // test code
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close() })
-
-	port, stop, err := tunnel.StartBridge(t.Context(), udsPath)
-	require.NoError(t, err)
-	t.Cleanup(stop)
-
-	// Verify bridge forwards a TCP connection to the UDS
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", port))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestIntegration_StartBridge_StopClosesCleanly(t *testing.T) {
-	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	listener, err := net.Listen("unix", udsPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = listener.Close() })
-
-	port, stop, err := tunnel.StartBridge(t.Context(), udsPath)
-	require.NoError(t, err)
-	assert.Positive(t, port)
-
-	// Stop should return without hanging
-	stop()
-
-	// After stop, new connections should be refused
-	_, dialErr := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	assert.Error(t, dialErr)
-}
-
 // --- Requirement: TCP-to-UDS bridge ---
 
 func TestIntegration_TCPToUDSBridge_TCPConnectionBridgedToUDS(t *testing.T) {

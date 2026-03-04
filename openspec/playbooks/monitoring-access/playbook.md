@@ -11,7 +11,7 @@ The user enables monitoring to see what resources a sandboxed command accesses. 
 The user runs monitor mode to view access log entries in text format on stderr or in a file, with operation type, target, result, and matched rule columns. Filesystem target paths are displayed in shortened form. By default, only DENY and UNKNOWN entries are shown; the user can include OK entries with `--show-allowed`.
 
 - **GIVEN** a config at `/home/user/project/execave.toml` with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
-- **WHEN** the user runs `execave monitor --output - -- ls /usr/lib`
+- **WHEN** the user runs `execave monitor -- ls /usr/lib`
 - **THEN** the access log is printed to stderr after the process exits
 - **AND** by default only `DENY` and `UNKNOWN` entries are shown
 - **AND** with `--show-allowed`, all entries including `OK` are shown
@@ -25,7 +25,7 @@ The user runs monitor mode to view access log entries in text format on stderr o
 The user writes the access log to a file and tails it in real time as the monitored command runs.
 
 - **GIVEN** a config with rule `fs:ro:/home/user/data`
-- **WHEN** the user runs `execave monitor --output access.log -- long-running-command`
+- **WHEN** the user runs `execave monitor --output-path access.log -- long-running-command`
 - **AND** runs `tail -f access.log` in another terminal
 - **THEN** new log entries appear in the tail output while the command is still running
 
@@ -157,80 +157,6 @@ The user uses `--show-allowed` to include OK entries in the text log.
 - **WHEN** the user runs `execave --monitor --show-allowed -- ls /usr/lib`
 - **THEN** the text log displays all entries including `OK` entries for reads under `/usr/lib`
 
-### Use Case: Suppress expected denies with fs:nolog
-
-The user adds an `fs:nolog` rule to suppress known harmless deny entries from a path.
-
-- **GIVEN** a config with rules `fs:ro:/home/user/project` and `fs:nolog:/home/user/project/cache`
-- **AND** the sandboxed app always tries to write to `/home/user/project/cache/data` on startup (which is denied by the ro rule, but the app tolerates the failure)
-- **WHEN** the user runs `execave --monitor -- myapp`
-- **THEN** the text log does not display the `WRITE /home/user/project/cache/data DENY` entry
-- **AND** other entries under `/home/user/project` are still displayed
-
-### Use Case: Override nolog with fs:log for a subtree
-
-The user nologs a broad directory but overrides with `fs:log` for a specific child path they still want to monitor.
-
-- **GIVEN** a config with rules `fs:ro:/home/user/project`, `fs:nolog:/home/user/project`, and `fs:log:/home/user/project/secret`
-- **WHEN** the user runs `execave --monitor --show-allowed -- sh -c "cat /home/user/project/data.txt; cat /home/user/project/secret/key.pem"`
-- **THEN** the text log does not display entries for `/home/user/project/data.txt` (suppressed by nolog)
-- **AND** the text log displays entries for `/home/user/project/secret/key.pem` (overridden by the more specific log rule)
-
-### Use Case: Suppress expected network denies with net:nolog
-
-The user adds a `net:nolog` rule to suppress known harmless network deny entries.
-
-- **GIVEN** a config with rules `net:http:api.example.com:443` and `net:nolog:telemetry.example.com:443`
-- **AND** the sandboxed app always tries to reach `telemetry.example.com:443` on startup (denied, but the app continues fine)
-- **WHEN** the user runs `execave --monitor -- myapp`
-- **THEN** the text log does not display the `HTTP telemetry.example.com:443 DENY` entry
-- **AND** other network entries are still displayed
-
-### Use Case: Override net:nolog with net:log for specific endpoint
-
-The user nologs a wildcard domain but overrides with `net:log` for a specific subdomain.
-
-- **GIVEN** a config with rules `net:http:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
-- **WHEN** the user runs `execave --monitor --show-allowed -- sh -c "curl https://cdn.example.com/ || true; curl https://api.example.com/ || true"`
-- **THEN** the text log does not display entries for `cdn.example.com:443` (suppressed by nolog)
-- **AND** the text log displays entries for `api.example.com:443` (overridden by the more specific log rule)
-
-### Use Case: Toggle to show nolog-suppressed entries
-
-The user uses `--show-nolog` to include entries suppressed by nolog rules.
-
-- **GIVEN** a config with rules `fs:ro:/home/user/project` and `fs:nolog:/home/user/project`
-- **WHEN** the user runs `execave --monitor --show-nolog --show-allowed -- ls /home/user/project`
-- **THEN** the text log displays all entries for `/home/user/project`, including those that would normally be suppressed
-
-### Use Case: Both filters are independent
-
-Both the denied-only and nolog filters operate independently. An entry must pass both filters to be displayed.
-
-- **GIVEN** a config with rules `fs:ro:/usr/lib`, `fs:rw:/home/user/project`, and `fs:nolog:/usr/lib`
-- **WHEN** the user runs `execave --monitor --show-allowed -- ls /usr/lib /home/user/project`
-- **THEN** the text log displays OK entries for `/home/user/project` (passes both filters)
-- **AND** does not display OK entries for `/usr/lib` (passes mode filter but blocked by nolog)
-
-### Use Case: Log rule specificity matches access rule semantics for fs
-
-Filesystem log rules use longest-prefix-match, same as access rules. The most specific log/nolog rule for a path wins.
-
-- **GIVEN** a config with rules `fs:ro:/home/user`, `fs:nolog:/home/user`, `fs:log:/home/user/project`, and `fs:nolog:/home/user/project/vendor`
-- **WHEN** the user runs `execave --monitor --show-allowed -- sh -c "cat /home/user/.bashrc; cat /home/user/project/main.go; cat /home/user/project/vendor/lib.go"`
-- **THEN** entries for `/home/user/.bashrc` are suppressed (matches `fs:nolog:/home/user`)
-- **AND** entries for `/home/user/project/main.go` are displayed (matches `fs:log:/home/user/project`)
-- **AND** entries for `/home/user/project/vendor/lib.go` are suppressed (matches `fs:nolog:/home/user/project/vendor`)
-
-### Use Case: Log rule specificity matches access rule semantics for net
-
-Network log rules use the same specificity ranking as access rules. Exact domain beats wildcard; longer CIDR prefix beats shorter.
-
-- **GIVEN** a config with rules `net:http:*.example.com:443`, `net:nolog:*.example.com:443`, and `net:log:api.example.com:443`
-- **WHEN** the user runs `execave --monitor --show-allowed -- sh -c "curl https://cdn.example.com/ || true; curl https://api.example.com/ || true"`
-- **THEN** entries for `cdn.example.com:443` are suppressed (matches wildcard nolog)
-- **AND** entries for `api.example.com:443` are displayed (exact match log overrides wildcard nolog)
-
 ### Use Case: Write access log to file
 
 The user writes the access log to a file, useful when TUI apps cover the terminal.
@@ -242,7 +168,6 @@ The user writes the access log to a file, useful when TUI apps cover the termina
 - **AND** entries are written to the file as they occur (tailable with `tail -f access.log`)
 - **AND** each line contains result, operation, target path (shortened), and matched rule
 - **AND** by default only DENY and UNKNOWN entries are written (OK entries are hidden)
-- **AND** entries matching nolog rules are hidden by default
 - **AND** filesystem paths are shortened (relative to config dir, or `~/` form)
 
 ### Use Case: Write access log to stderr after process exits
@@ -262,32 +187,6 @@ The user includes OK entries in the text log output using the `--show-allowed` f
 - **GIVEN** a config with rules `fs:ro:/usr/lib` and `fs:rw:~/project`
 - **WHEN** the user runs `execave --monitor=access.log --show-allowed -- ls /usr/lib`
 - **THEN** `access.log` contains both OK and DENY/UNKNOWN entries
-
-### Use Case: Show nolog entries in text log
-
-The user includes entries suppressed by nolog rules using the `--show-nolog` flag.
-
-- **GIVEN** a config with rules `fs:ro:/home/user/project` and `fs:nolog:/home/user/project/cache`
-- **WHEN** the user runs `execave --monitor=access.log --show-nolog -- myapp`
-- **THEN** `access.log` contains entries for paths under `/home/user/project/cache` that would normally be hidden by the nolog rule
-
-### Use Case: Filter flags control text log output
-
-The user uses `--show-allowed` and `--show-nolog` to include OK and nolog entries in text log output.
-
-- **GIVEN** a config with rules `fs:ro:/usr/lib` and `fs:nolog:/usr/lib`
-- **WHEN** the user runs `execave --monitor --show-allowed --show-nolog -- ls /usr/lib`
-- **THEN** the text log includes OK entries (not just denied)
-- **AND** the text log includes entries that match nolog rules
-
-### Use Case: Text log applies both filters independently
-
-Both the denied-only and nolog filters operate independently in text log output.
-
-- **GIVEN** a config with rules `fs:ro:/usr/lib`, `fs:rw:/home/user/project`, and `fs:nolog:/usr/lib`
-- **WHEN** the user runs `execave --monitor=access.log --show-allowed -- ls /usr/lib /home/user/project`
-- **THEN** `access.log` contains OK entries for `/home/user/project` (passes both filters)
-- **AND** `access.log` does not contain entries for `/usr/lib` (passes mode filter but blocked by nolog)
 
 ### Use Case: Text log survives SIGINT
 
@@ -344,6 +243,6 @@ The user attempts to run with `--no-sandbox` but forgets to specify `--monitor`.
 The user uses monitor-only behavior through the `monitor` subcommand, while root flags remain global.
 
 - **GIVEN** a valid config file
-- **WHEN** the user runs `execave --config ./execave.toml monitor --show-allowed --show-nolog --no-sandbox --output monitor.log -- command`
+- **WHEN** the user runs `execave --config ./execave.toml monitor --show-allowed --no-sandbox --output-path monitor.log -- command`
 - **THEN** monitor mode runs with those flags applied
 - **AND** `--config` is accepted before the subcommand as a global option

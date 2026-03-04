@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
@@ -36,8 +38,8 @@ func TestProxy_StopRemovesUDS(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
 	resolver := newTestResolver(t, "http:example.com:443")
-	p := proxy.New(resolver, nil)
-	err := p.Start(udsPath)
+	p := proxy.New(nil, resolver, udsPath, false)
+	err := p.Start()
 	require.NoError(t, err)
 
 	err = p.Stop()
@@ -161,12 +163,14 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	host, port := hostPort(t, tlsServer.Listener.Addr().String())
 	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, ruleBody)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	err := p.Start(udsPath)
+	p := proxy.New(logger, resolver, udsPath, false)
+	err := p.Start()
 	require.NoError(t, err)
 	defer func() { _ = p.Stop() }()
 
@@ -175,19 +179,21 @@ func TestProxy_AccessLogAllowed(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = resp.Body.Close() }()
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
-	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
+	logStr := logBuf.String()
+	require.Equal(t, 1, strings.Count(logStr, "\n"))
+	assert.Contains(t, logStr, "HTTP")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestProxy_AccessLogDenied(t *testing.T) {
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	err := p.Start(udsPath)
+	p := proxy.New(logger, resolver, udsPath, false)
+	err := p.Start()
 	require.NoError(t, err)
 	defer func() { _ = p.Stop() }()
 
@@ -200,11 +206,11 @@ func TestProxy_AccessLogDenied(t *testing.T) {
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
-	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
-	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
+	logStr := logBuf.String()
+	require.Equal(t, 1, strings.Count(logStr, "\n"))
+	assert.Contains(t, logStr, "HTTP")
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, "("+accesslog.RuleNoMatch+")")
 }
 
 // --- helpers ---
@@ -259,23 +265,22 @@ func startTestProxy(t *testing.T, ruleBodies ...string) (*proxy.Proxy, string, f
 	resolver := newTestResolver(t, ruleBodies...)
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
-	p := proxy.New(resolver, nil)
-	err := p.Start(udsPath)
+	p := proxy.New(nil, resolver, udsPath, false)
+	err := p.Start()
 	require.NoError(t, err)
 
 	return p, udsPath, func() { _ = p.Stop() }
 }
 
-func newTestResolver(t *testing.T, ruleBodies ...string) *netrules.AccessResolver {
+func newTestResolver(t *testing.T, ruleBodies ...string) *netrules.Resolver {
 	t.Helper()
-	rules := make([]netrules.AccessRule, 0, len(ruleBodies))
+	rules := make([]netrules.Rule, 0, len(ruleBodies))
 	for _, body := range ruleBodies {
-		rule, err := netrules.ParseAccessRule(body)
+		rule, err := netrules.ParseAccessRule(body, "")
 		require.NoError(t, err)
-		rule.RawRule = "net:" + body
 		rules = append(rules, rule)
 	}
-	return netrules.NewAccessResolver(rules)
+	return netrules.NewResolver(rules)
 }
 
 func hostPort(t *testing.T, addr string) (string, string) {

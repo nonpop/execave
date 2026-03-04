@@ -1,6 +1,7 @@
 package proxy_test
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -94,12 +95,14 @@ func TestIntegration_PlainHTTPForwarding_DeniedHTTPRequestRejected(t *testing.T)
 }
 
 func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allowed(t *testing.T) {
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:localhost:80")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(logger, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	client := httpClientViaUDS(udsPath, false)
@@ -109,19 +112,21 @@ func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allow
 
 	// The forward may fail (nothing on port 80), but the access log
 	// shows the rule check passed with the defaulted port.
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-	assert.Equal(t, "localhost:80", entries[0].Target)
-	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
+	logStr := logBuf.String()
+	require.NotEmpty(t, logStr)
+	assert.Contains(t, logStr, "localhost:80")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denied(t *testing.T) {
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:other.example.com:80")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(logger, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	client := httpClientViaUDS(udsPath, false)
@@ -130,10 +135,10 @@ func TestIntegration_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denie
 	_ = resp.Body.Close()
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-	assert.Equal(t, "evil.example.com:80", entries[0].Target)
-	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
+	logStr := logBuf.String()
+	require.NotEmpty(t, logStr)
+	assert.Contains(t, logStr, "evil.example.com:80")
+	assert.Contains(t, logStr, "DENY")
 }
 
 // --- Requirement: Malformed request handling ---
@@ -171,15 +176,17 @@ func TestIntegration_MalformedRequestHandling_CONNECTWithMissingHost(t *testing.
 // --- Requirement: Allowlist enforcement ---
 
 func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *testing.T) {
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t,
 		"http:*.example.com:443",
 		"none:evil.example.com:443",
 	)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(logger, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -192,10 +199,10 @@ func TestIntegration_AllowlistEnforcement_RequestAllowedByMostSpecificRule(t *te
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-	assert.Equal(t, "api.example.com:443", entries[0].Target)
-	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
+	logStr := logBuf.String()
+	require.NotEmpty(t, logStr)
+	assert.Contains(t, logStr, "api.example.com:443")
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_AllowlistEnforcement_RequestDeniedByMostSpecificRule(t *testing.T) {
@@ -227,12 +234,14 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 	host, port := hostPort(t, server.Listener.Addr().String())
 	ruleBody := fmt.Sprintf("http:%s:%s", host, port)
 
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, ruleBody)
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(logger, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	client := httpClientViaUDS(udsPath, true)
@@ -240,20 +249,22 @@ func TestIntegration_AccessLogIntegration_AllowedRequestLogged(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
-	assert.Equal(t, net.JoinHostPort(host, port), entries[0].Target)
-	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
+	logStr := logBuf.String()
+	require.NotEmpty(t, logStr)
+	assert.Contains(t, logStr, "HTTP")
+	assert.Contains(t, logStr, net.JoinHostPort(host, port))
+	assert.Contains(t, logStr, "OK")
 }
 
 func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
-	logger := accesslog.New(nil, false)
+	var logBuf bytes.Buffer
+	cfg := &accesslog.Config{ShowAllowed: true}
+	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:allowed.example.com:443")
 
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-	p := proxy.New(resolver, logger)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(logger, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -265,12 +276,12 @@ func TestIntegration_AccessLogIntegration_DeniedRequestLogged(t *testing.T) {
 	buf := make([]byte, 1024)
 	_, _ = conn.Read(buf)
 
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-	assert.Equal(t, accesslog.OperationHTTP, entries[0].Operation)
-	assert.Equal(t, "evil.example.com:443", entries[0].Target)
-	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
-	assert.Equal(t, accesslog.RuleNoMatch, entries[0].Rule)
+	logStr := logBuf.String()
+	require.NotEmpty(t, logStr)
+	assert.Contains(t, logStr, "HTTP")
+	assert.Contains(t, logStr, "evil.example.com:443")
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, "("+accesslog.RuleNoMatch+")")
 }
 
 // --- Requirement: Proxy lifecycle ---
@@ -285,8 +296,8 @@ func TestIntegration_ProxyLifecycle_ProxyStart(t *testing.T) {
 func TestIntegration_ProxyLifecycle_ProxyStop(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 	resolver := newTestResolver(t, "http:example.com:443")
-	p := proxy.New(resolver, nil)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(nil, resolver, udsPath, false)
+	require.NoError(t, p.Start())
 
 	require.NoError(t, p.Stop())
 
@@ -294,97 +305,7 @@ func TestIntegration_ProxyLifecycle_ProxyStop(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- Requirement: SetResolver ---
-
-func TestIntegration_SetResolver_DenyToAllow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	host, port := hostPort(t, server.Listener.Addr().String())
-	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-
-	// Start with deny-all (no rules)
-	prx := proxy.New(netrules.NewAccessResolver(nil), nil)
-	require.NoError(t, prx.Start(udsPath))
-	defer func() { _ = prx.Stop() }()
-
-	client := httpClientViaUDS(udsPath, false)
-
-	// Initially denied
-	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-
-	// Update resolver to allow
-	prx.SetResolver(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)))
-
-	// Now allowed
-	resp, err = client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestIntegration_SetResolver_AllowToDeny(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	host, port := hostPort(t, server.Listener.Addr().String())
-	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-
-	// Start with allow rule
-	prx := proxy.New(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)), nil)
-	require.NoError(t, prx.Start(udsPath))
-	defer func() { _ = prx.Stop() }()
-
-	client := httpClientViaUDS(udsPath, false)
-
-	// Initially allowed
-	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	// Update resolver to deny-all
-	prx.SetResolver(netrules.NewAccessResolver(nil))
-
-	// Now denied
-	resp, err = client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
-}
-
-func TestIntegration_SetResolver_DenyAllToAllow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	host, port := hostPort(t, server.Listener.Addr().String())
-	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
-
-	// Start with deny-all resolver
-	p := proxy.New(netrules.NewAccessResolver(nil), nil)
-	require.NoError(t, p.Start(udsPath))
-	defer func() { _ = p.Stop() }()
-
-	// Update to allow
-	p.SetResolver(newTestResolver(t, fmt.Sprintf("http:%s:%s", host, port)))
-
-	client := httpClientViaUDS(udsPath, false)
-	resp, err := client.Get(fmt.Sprintf("http://%s/", net.JoinHostPort(host, port)))
-	require.NoError(t, err)
-	_ = resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-// --- Requirement: SetNoEnforce ---
+// --- Requirement: noEnforce (log-only mode) ---
 
 func TestIntegration_SetNoEnforce_HTTPRequestForwardedDespiteNoMatchingRule(t *testing.T) {
 	testNoEnforceForwardsDespiteNoMatchingRule(t, false)
@@ -413,9 +334,8 @@ func testNoEnforceForwardsDespiteNoMatchingRule(t *testing.T, useTLS bool) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
 	// Empty rules (deny-all) but noEnforce=true
-	p := proxy.New(netrules.NewAccessResolver(nil), nil)
-	p.SetNoEnforce(true)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(nil, netrules.NewResolver(nil), udsPath, true)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	scheme := "http"
@@ -439,9 +359,8 @@ func TestIntegration_SetNoEnforce_DenyRuleDoesNotBlockRequest(t *testing.T) {
 	udsPath := filepath.Join(t.TempDir(), "proxy.sock")
 
 	// Explicit deny rule but noEnforce=true
-	p := proxy.New(newTestResolver(t, fmt.Sprintf("none:%s:%s", host, port)), nil)
-	p.SetNoEnforce(true)
-	require.NoError(t, p.Start(udsPath))
+	p := proxy.New(nil, newTestResolver(t, fmt.Sprintf("none:%s:%s", host, port)), udsPath, true)
+	require.NoError(t, p.Start())
 	defer func() { _ = p.Stop() }()
 
 	client := httpClientViaUDS(udsPath, false)

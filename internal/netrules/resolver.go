@@ -5,25 +5,25 @@ import (
 	"strings"
 )
 
-// ResolveResult represents the outcome of resolving a network request against rules.
-type ResolveResult struct {
+// AccessResult represents the outcome of resolving a network request against rules.
+type AccessResult struct {
 	// Allowed is true if the request is permitted by a matching rule.
 	Allowed bool
-	// Rule is the raw rule string that matched, or "no-matching-rule" if no rule matched.
-	Rule string
+	// Rule is the raw rule string that matched, or nil if no rule matched.
+	Rule *string
 }
 
-// AccessResolver evaluates network requests against a set of net access rules.
-type AccessResolver struct {
-	rules []AccessRule
+// Resolver evaluates network requests against a set of net access rules.
+type Resolver struct {
+	rules []Rule
 }
 
-// NewAccessResolver creates a new AccessResolver from the given net rules.
-func NewAccessResolver(rules []AccessRule) *AccessResolver {
-	return &AccessResolver{rules: rules}
+// NewResolver creates a new Resolver from the given net rules.
+func NewResolver(rules []Rule) *Resolver {
+	return &Resolver{rules: rules}
 }
 
-// Resolve evaluates a request against the rules and returns the result.
+// CheckAccess evaluates a request against the rules and returns the result.
 // host is the domain name or IP address from the request (without brackets for IPv6).
 // port is the numeric port from the request.
 //
@@ -31,18 +31,16 @@ func NewAccessResolver(rules []AccessRule) *AccessResolver {
 //   - Domains: exact match beats wildcard
 //   - IPs: longer CIDR prefix beats shorter
 //   - Default: deny
-func (r *AccessResolver) Resolve(protocol protocol, host string, port uint16) ResolveResult {
+func (r *Resolver) CheckAccess(protocol protocol, host string, port uint16) AccessResult {
 	lowerHost := strings.ToLower(host)
 
 	// Try to parse the host as an IP address
 	parsedIP := net.ParseIP(lowerHost)
 
-	var bestRule *AccessRule
+	var bestRule *Rule
 	bestSpecificity := -1
 
-	for i := range r.rules {
-		rule := &r.rules[i]
-
+	for _, rule := range r.rules {
 		if !protocolCompatible(rule.protocol, protocol) {
 			continue
 		}
@@ -51,23 +49,24 @@ func (r *AccessResolver) Resolve(protocol protocol, host string, port uint16) Re
 			continue
 		}
 
-		specificity := targetSpecificity(rule, lowerHost, parsedIP)
+		specificity := targetSpecificity(&rule, lowerHost, parsedIP)
 		if specificity < 0 {
 			continue
 		}
 
 		if specificity > bestSpecificity {
 			bestSpecificity = specificity
-			bestRule = rule
+			bestRule = &rule
 		}
 	}
 
 	if bestRule == nil {
-		return ResolveResult{Allowed: false, Rule: "no-matching-rule"}
+		return AccessResult{Allowed: false, Rule: nil}
 	}
 
-	allowed := bestRule.protocol != protocolNone
-	return ResolveResult{Allowed: allowed, Rule: bestRule.RawRule}
+	allowed := bestRule.protocol == ProtocolHTTP
+	rawRule := bestRule.RawRule
+	return AccessResult{Allowed: allowed, Rule: &rawRule}
 }
 
 // protocolCompatible checks if a rule's protocol matches the request protocol.
@@ -89,10 +88,7 @@ func portMatches(rulePort port, requestPort uint16) bool {
 // targetSpecificity returns the specificity of a rule's target match against
 // the request. Returns -1 if the target does not match. Higher values are
 // more specific.
-//
-// For domains: exact match returns label count + 1, wildcard returns label count.
-// For IPs: returns CIDR prefix length.
-func targetSpecificity(rule *AccessRule, lowerHost string, addr net.IP) int {
+func targetSpecificity(rule *Rule, lowerHost string, addr net.IP) int {
 	switch rule.target.kind {
 	case targetDomain:
 		if addr != nil {
@@ -115,8 +111,8 @@ func targetSpecificity(rule *AccessRule, lowerHost string, addr net.IP) int {
 
 // domainSpecificity returns the specificity of a domain rule match.
 // Returns -1 if the domain does not match.
-// Exact match: label count + 1 (always beats wildcard with same suffix).
-// Wildcard match: label count of the wildcard pattern.
+// Exact match: label count (always beats wildcard with same suffix).
+// Wildcard match: non-wildcard label count
 func domainSpecificity(ruleTarget target, host string) int {
 	if ruleTarget.wildcard {
 		// *.example.com matches exactly one subdomain level
@@ -129,13 +125,12 @@ func domainSpecificity(ruleTarget target, host string) int {
 		if len(prefix) == 0 || strings.Contains(prefix, ".") {
 			return -1
 		}
-		return strings.Count(ruleTarget.domain, ".") + 1
+		return strings.Count(ruleTarget.domain, ".")
 	}
 
 	// Exact match
 	if host == ruleTarget.domain {
-		labelCount := strings.Count(ruleTarget.domain, ".") + 1
-		return labelCount + 1
+		return strings.Count(ruleTarget.domain, ".") + 1
 	}
 
 	return -1

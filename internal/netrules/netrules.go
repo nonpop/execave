@@ -4,7 +4,6 @@
 // classification (domain, IPv4, IPv6, CIDR), cross-rule validation (duplicate
 // identity, mixed port patterns), and rule resolution (single-dimension target
 // specificity, protocol compatibility, default-deny).
-// The resource prefix ("net:") is stripped by the config layer before parsing.
 package netrules
 
 import (
@@ -18,10 +17,12 @@ import (
 type protocol int
 
 const (
+	// protocolUnknown is the zero value; it must not appear in validated rules.
 	protocolUnknown protocol = iota
-	// ProtocolHTTP allows HTTP and CONNECT (tunneled) requests.
-	ProtocolHTTP
+	// protocolNone denies all requests matching the rule's target and port.
 	protocolNone
+	// ProtocolHTTP allows HTTP and CONNECT (HTTPS) requests.
+	ProtocolHTTP
 )
 
 const (
@@ -53,64 +54,71 @@ type port struct {
 	number     uint16 // Port number. Only meaningful when isWildcard is false.
 }
 
-// AccessRule represents a parsed network access rule.
-type AccessRule struct {
-	protocol   protocol
-	target     target
-	port       port
-	RawRule    string // Original rule string including "net:" prefix, set by config layer.
-	rawTarget  string // Canonical target pattern for validation identity.
-	rawPort    string // Raw port string ("443" or "*") for validation identity.
-	SourcePath string // Config file path that produced this rule.
+// Rule represents a parsed network access rule.
+type Rule struct {
+	protocol        protocol
+	target          target
+	port            port
+	RawRule         string // Original rule for error messages and logging
+	canonicalTarget string // Canonical target pattern for validation identity.
+	canonicalPort   string // Raw port string ("443" or "*") for validation identity.
+	SourcePath      string // Config file path that produced this rule.
 }
 
-// Identity returns the canonical key used to deduplicate net rules.
-func (r AccessRule) Identity() string {
-	return fmt.Sprintf("%d:%s:%s", r.protocol, r.rawTarget, r.rawPort)
+// Canonical returns the canonical version of the rule, suitable for deduplication, comparison, and rendering.
+func (r Rule) Canonical() string {
+	var proto string
+	switch r.protocol {
+	case ProtocolHTTP:
+		proto = "http"
+	case protocolNone:
+		proto = "none"
+	default:
+		panic(fmt.Sprintf("unknown protocol %d", r.protocol))
+	}
+	return fmt.Sprintf("%s:%s:%s", proto, r.canonicalTarget, r.canonicalPort)
 }
 
 // ParseAccessRule parses an access rule body in the format "action:target:port".
-// The resource prefix ("net:") must be stripped by the caller before passing.
-func ParseAccessRule(ruleBody string) (AccessRule, error) {
-	action, rest, ok := strings.Cut(ruleBody, ":")
+func ParseAccessRule(rawRule, configPath string) (Rule, error) {
+	action, rest, ok := strings.Cut(rawRule, ":")
 	if !ok {
-		return AccessRule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
+		return Rule{}, fmt.Errorf("malformed rule %q: expected format: action:target:port", rawRule)
+	}
+	targetStr, portStr, err := splitTargetPort(rest)
+	if err != nil {
+		return Rule{}, fmt.Errorf("malformed rule %q: expected format: action:target:port", rawRule)
 	}
 
 	protocol, err := parseProtocol(action)
 	if err != nil {
-		return AccessRule{}, err
-	}
-
-	targetStr, portStr, err := splitTargetPort(rest)
-	if err != nil {
-		return AccessRule{}, fmt.Errorf("malformed rule %q (expected format: action:target:port)", ruleBody)
+		return Rule{}, fmt.Errorf("malformed rule %q: %w", rawRule, err)
 	}
 
 	parsedPort, rawPort, err := parsePort(portStr)
 	if err != nil {
-		return AccessRule{}, err
+		return Rule{}, fmt.Errorf("malformed rule %q: %w", rawRule, err)
 	}
 
 	parsedTarget, rawTarget, err := parseTarget(targetStr)
 	if err != nil {
-		return AccessRule{}, err
+		return Rule{}, fmt.Errorf("malformed rule %q: %w", rawRule, err)
 	}
 
-	return AccessRule{
-		protocol:   protocol,
-		target:     parsedTarget,
-		port:       parsedPort,
-		RawRule:    "",
-		rawTarget:  rawTarget,
-		rawPort:    rawPort,
-		SourcePath: "",
+	return Rule{
+		protocol:        protocol,
+		target:          parsedTarget,
+		port:            parsedPort,
+		RawRule:         rawRule,
+		canonicalTarget: rawTarget,
+		canonicalPort:   rawPort,
+		SourcePath:      configPath,
 	}, nil
 }
 
-// ValidateAccessRules performs cross-rule validation: checks for duplicate (target, port)
+// ValidateRules performs cross-rule validation: checks for duplicate (target, port)
 // identity and mixed port patterns (wildcard + specific on the same target).
-func ValidateAccessRules(rules []AccessRule) error {
+func ValidateRules(rules []Rule) error {
 	if err := validateNoDuplicateAccessIdentity(rules); err != nil {
 		return err
 	}
@@ -127,7 +135,7 @@ func parseProtocol(action string) (protocol, error) {
 	case "none":
 		return protocolNone, nil
 	default:
-		return protocolUnknown, fmt.Errorf("invalid action %q (must be 'http' or 'none')", action)
+		return protocolUnknown, fmt.Errorf("invalid action %q: must be 'http' or 'none'", action)
 	}
 }
 
@@ -149,7 +157,7 @@ func parsePort(portStr string) (port, string, error) {
 
 	n, err := strconv.ParseUint(portStr, 10, 32)
 	if err != nil || n < 1 || n > 65535 {
-		return port{}, "", fmt.Errorf("invalid port %q (must be 1-65535 or '*')", portStr)
+		return port{}, "", fmt.Errorf("invalid port %q: must be 1-65535 or '*'", portStr)
 	}
 
 	return port{number: uint16(n), isWildcard: false}, portStr, nil
@@ -164,12 +172,17 @@ func parsePort(portStr string) (port, string, error) {
 //  3. Exact IP (net.ParseIP)
 //  4. Domain pattern
 func parseTarget(targetStr string) (target, string, error) {
-	// Step 1: Bracketed IPv6
+	// Step 1: Bracketed IPv6 or IPv6 CIDR
 	if strings.HasPrefix(targetStr, "[") {
 		return parseBracketedIPv6(targetStr)
 	}
 
-	// Step 2: CIDR
+	// Reject unbracketed IPv6 (contains a colon but didn't start with '[')
+	if strings.Contains(targetStr, ":") {
+		return target{}, "", fmt.Errorf("invalid target %q: IPv6 addresses must be bracketed", targetStr)
+	}
+
+	// Step 2: IPv4 CIDR
 	_, ipNet, err := net.ParseCIDR(targetStr)
 	if err == nil {
 		prefixLen, _ := ipNet.Mask.Size()
@@ -183,7 +196,7 @@ func parseTarget(targetStr string) (target, string, error) {
 		}, canonical, nil
 	}
 
-	// Step 3: Exact IP
+	// Step 3: Exact IPv4
 	ip := net.ParseIP(targetStr)
 	if ip != nil {
 		return makeExactIPTarget(ip)
@@ -228,7 +241,7 @@ func parseBracketedIPv6(targetStr string) (target, string, error) {
 			return target{}, "", fmt.Errorf("invalid target %q: invalid IPv6 CIDR: %w", targetStr, err)
 		}
 		prefixLen, _ := ipNet.Mask.Size()
-		canonical := ipNet.String()
+		canonical := fmt.Sprintf("[%s]/%d", ipNet.IP.String(), prefixLen)
 		return target{
 			kind:      targetIP,
 			domain:    "",
@@ -257,13 +270,14 @@ func makeExactIPTarget(addr net.IP) (target, string, error) {
 
 	mask := net.CIDRMask(ipv6PrefixLen, ipv6PrefixLen)
 	ipNet := &net.IPNet{IP: addr, Mask: mask}
+	canonical := fmt.Sprintf("[%s]/%d", addr.String(), ipv6PrefixLen)
 	return target{
 		kind:      targetIP,
 		domain:    "",
 		wildcard:  false,
 		ipNet:     ipNet,
 		prefixLen: ipv6PrefixLen,
-	}, ipNet.String(), nil
+	}, canonical, nil
 }
 
 func parseDomainTarget(targetStr string) (target, string, error) {
@@ -282,8 +296,8 @@ func parseDomainTarget(targetStr string) (target, string, error) {
 		return target{}, "", fmt.Errorf("invalid domain pattern %q: wildcard must be single '*' in leftmost position only", targetStr)
 	}
 
-	if err := validateDomainLabels(domainToValidate, targetStr); err != nil {
-		return target{}, "", err
+	if err := validateDomainLabels(domainToValidate); err != nil {
+		return target{}, "", fmt.Errorf("invalid domain pattern %q: %w", targetStr, err)
 	}
 
 	return target{
@@ -297,15 +311,15 @@ func parseDomainTarget(targetStr string) (target, string, error) {
 
 // validateDomainLabels validates domain labels per RFC 1123.
 // The last label must contain at least one alphabetic character (rejects all-numeric TLDs).
-func validateDomainLabels(domain, originalTarget string) error {
+func validateDomainLabels(domain string) error {
 	labels := strings.Split(domain, ".")
 	for i, label := range labels {
-		if err := validateLabel(label, originalTarget); err != nil {
-			return err
+		if err := validateLabel(label); err != nil {
+			return fmt.Errorf("invalid label %q: %w", label, err)
 		}
 		if i == len(labels)-1 {
-			if err := validateTLD(label, originalTarget); err != nil {
-				return err
+			if err := validateTLD(label); err != nil {
+				return fmt.Errorf("invalid label %q: %w", label, err)
 			}
 		}
 	}
@@ -313,37 +327,32 @@ func validateDomainLabels(domain, originalTarget string) error {
 }
 
 // validateLabel validates a single DNS label per RFC 1123.
-func validateLabel(label, originalTarget string) error {
+func validateLabel(label string) error {
 	if len(label) == 0 {
-		return fmt.Errorf("invalid domain %q: empty label", originalTarget)
+		return fmt.Errorf("empty")
 	}
 	if len(label) > maxDNSLabelLen {
-		return fmt.Errorf("invalid domain %q: label exceeds %d characters", originalTarget, maxDNSLabelLen)
+		return fmt.Errorf("exceeds %d characters", maxDNSLabelLen)
 	}
 	if label[0] == '-' || label[len(label)-1] == '-' {
-		return fmt.Errorf("invalid domain %q: label must not start or end with hyphen", originalTarget)
+		return fmt.Errorf("must not start or end with hyphen")
 	}
 	for _, c := range label {
 		if !isLabelChar(c) {
-			return fmt.Errorf("invalid domain %q: label contains invalid character %q", originalTarget, c)
+			return fmt.Errorf("contains invalid character %q", c)
 		}
 	}
 	return nil
 }
 
 // validateTLD ensures the TLD contains at least one alphabetic character.
-func validateTLD(label, originalTarget string) error {
-	hasAlpha := false
+func validateTLD(label string) error {
 	for _, c := range label {
 		if c >= 'a' && c <= 'z' {
-			hasAlpha = true
-			break
+			return nil
 		}
 	}
-	if !hasAlpha {
-		return fmt.Errorf("invalid target %q: last label must contain at least one alphabetic character", originalTarget)
-	}
-	return nil
+	return fmt.Errorf("last label must contain at least one alphabetic character")
 }
 
 func isLabelChar(c rune) bool {
@@ -352,19 +361,23 @@ func isLabelChar(c rune) bool {
 
 // validateNoDuplicateAccessIdentity rejects configs where two access rules have the same
 // (target-pattern, port-pattern) pair.
-func validateNoDuplicateAccessIdentity(rules []AccessRule) error {
+func validateNoDuplicateAccessIdentity(rules []Rule) error {
 	type identity struct {
 		target string
 		port   string
 	}
-	seen := make(map[identity]AccessRule)
+	seen := make(map[identity]Rule)
 	for _, rule := range rules {
-		ruleID := identity{target: rule.rawTarget, port: rule.rawPort}
+		ruleID := identity{target: rule.canonicalTarget, port: rule.canonicalPort}
 		if existing, ok := seen[ruleID]; ok {
-			return fmt.Errorf("duplicate net rule identity (%s, %s): %s (%q) and %s (%q)",
-				rule.rawTarget, rule.rawPort,
-				existing.RawRule, describeNetRuleSource(existing),
-				rule.RawRule, describeNetRuleSource(rule))
+			if existing.SourcePath != "" && existing.SourcePath == rule.SourcePath {
+				return fmt.Errorf("duplicate net rule identity (%s, %s) in %s: %q and %q",
+					rule.canonicalTarget, rule.canonicalPort, existing.SourcePath, existing.RawRule, rule.RawRule)
+			}
+			return fmt.Errorf("duplicate net rule identity (%s, %s): %q (%q) and %q (%q)",
+				rule.canonicalTarget, rule.canonicalPort,
+				existing.RawRule, existing.SourcePath,
+				rule.RawRule, rule.SourcePath)
 		}
 		seen[ruleID] = rule
 	}
@@ -373,22 +386,22 @@ func validateNoDuplicateAccessIdentity(rules []AccessRule) error {
 
 // validateNoMixedPortAccessPatterns rejects configs where a target has both wildcard
 // and specific port access rules.
-func validateNoMixedPortAccessPatterns(rules []AccessRule) error {
+func validateNoMixedPortAccessPatterns(rules []Rule) error {
 	type portInfo struct {
 		hasWildcard bool
 		hasSpecific bool
-		firstRule   AccessRule
+		firstRule   Rule
 	}
 	byTarget := make(map[string]*portInfo)
 	for _, rule := range rules {
-		info, ok := byTarget[rule.rawTarget]
+		info, ok := byTarget[rule.canonicalTarget]
 		if !ok {
 			info = &portInfo{
 				hasWildcard: false,
 				hasSpecific: false,
 				firstRule:   rule,
 			}
-			byTarget[rule.rawTarget] = info
+			byTarget[rule.canonicalTarget] = info
 		}
 		if rule.port.isWildcard {
 			info.hasWildcard = true
@@ -397,15 +410,8 @@ func validateNoMixedPortAccessPatterns(rules []AccessRule) error {
 		}
 		if info.hasWildcard && info.hasSpecific {
 			return fmt.Errorf("mixed port patterns for target %q: rules %q and %q have both wildcard and specific ports",
-				rule.rawTarget, info.firstRule.RawRule, rule.RawRule)
+				rule.canonicalTarget, info.firstRule.RawRule, rule.RawRule)
 		}
 	}
 	return nil
-}
-
-func describeNetRuleSource(rule AccessRule) string {
-	if rule.SourcePath == "" {
-		return "<synthetic>"
-	}
-	return rule.SourcePath
 }

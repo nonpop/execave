@@ -21,7 +21,6 @@ func FuzzLoad(f *testing.F) {
 
 	// Seed with syscall rules
 	f.Add(`syscall = ["allow:ptrace"]`)
-	f.Add(`syscall = ["nolog:bpf"]`)
 
 	// Seed with some invalid examples
 	f.Add(`fs = ["invalid"]`)
@@ -40,7 +39,7 @@ syscall = []`)
 			t.Fatal("failed to write config file")
 		}
 
-		cfg, err := config.Load(configPath, nil)
+		cfg, err := config.Load(configPath, nil, "", "", "")
 		if err != nil {
 			return // Invalid input is fine
 		}

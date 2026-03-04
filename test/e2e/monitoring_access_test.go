@@ -17,7 +17,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_MonitoringAccess_ViewAccessLogInTextOutput tests that monitor --output=- writes
+// TestE2E_MonitoringAccess_DefaultOutputIsStderr tests that monitor without --output-path
+// writes access log entries to stderr by default.
+func TestE2E_MonitoringAccess_DefaultOutputIsStderr(t *testing.T) {
+	s := newScenario(t)
+	failIfNoStrace(t)
+	data := s.givenDir("data")
+	dataFile := data.file("file.txt", "test data")
+
+	s.givenRules("fs:ro:" + data.String())
+
+	result := runExecave(t, "", "--config", s.configPath, "monitor", "--show-allowed", "--", "cat", dataFile)
+	s.lastResult = &result
+
+	s.thenExitCode(0)
+	s.thenStderrHasEntry("READ", data.rel("file.txt"), "OK", "ro:"+data.String())
+}
+
+// TestE2E_MonitoringAccess_ViewAccessLogInTextOutput tests that monitor writes
 // access log entries with all four columns (operation, target, result, rule) to stderr.
 func TestE2E_MonitoringAccess_ViewAccessLogInTextOutput(t *testing.T) {
 	s := newScenario(t)
@@ -29,7 +46,7 @@ func TestE2E_MonitoringAccess_ViewAccessLogInTextOutput(t *testing.T) {
 	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", dataFile)
 
 	s.thenExitCode(0)
-	s.thenStderrHasEntry("READ", data.rel("file.txt"), "OK", "fs:ro:"+data.String())
+	s.thenStderrHasEntry("READ", data.rel("file.txt"), "OK", "ro:"+data.String())
 }
 
 // TestE2E_MonitoringAccess_MonitorNetworkAccess tests that monitoring with net rules
@@ -89,7 +106,7 @@ func TestE2E_MonitoringAccess_MonitorWithoutNetRules(t *testing.T) {
 
 	s.givenRules() // no net rules
 
-	s.whenRunTextLog("-", "curl", "-sf", "--max-time", "5",
+	s.whenRunTextLog("", "curl", "-sf", "--max-time", "5",
 		fmt.Sprintf("http://%s/", srv.hostPort()))
 
 	// Denied network request logged
@@ -109,7 +126,7 @@ func TestE2E_MonitoringAccess_AccessLogAfterSIGINT(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", s.configPath,
-		"monitor", "--output="+logFile,
+		"monitor", "--output-path="+logFile,
 		"--",
 		"sleep", "60")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -166,8 +183,8 @@ func TestE2E_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 
 	// Both the symlink hop and the resolved target are logged
 	s.thenExitCode(0)
-	s.thenStderrHasEntry("READ", mount.rel("link.txt"), "OK", "fs:ro:"+mount.String())
-	s.thenStderrHasEntry("READ", mount.rel("real.txt"), "OK", "fs:ro:"+mount.String())
+	s.thenStderrHasEntry("READ", mount.rel("link.txt"), "OK", "ro:"+mount.String())
+	s.thenStderrHasEntry("READ", mount.rel("real.txt"), "OK", "ro:"+mount.String())
 }
 
 // TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyLogged tests that
@@ -185,8 +202,8 @@ func TestE2E_MonitoringAccess_VerifyFilesystemEnforcementDecisionsAreAccuratelyL
 		"sh", "-c", "cat "+allowedFile+" || true; cat "+deniedFile+" || true")
 
 	// Verify enforcement decisions in the text log
-	s.thenStderrHasEntry("READ", data.rel("allowed.txt"), "OK", "fs:ro:"+allowedFile)
-	s.thenStderrHasEntry("READ", data.rel("denied.txt"), "DENY", "fs:none:"+deniedFile)
+	s.thenStderrHasEntry("READ", data.rel("allowed.txt"), "OK", "ro:"+allowedFile)
+	s.thenStderrHasEntry("READ", data.rel("denied.txt"), "DENY", "none:"+deniedFile)
 }
 
 // TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged tests that
@@ -208,8 +225,8 @@ func TestE2E_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogg
 			"curl -sf http://%s/ || true; curl -sf http://%s/ || true",
 			allowed.hostPort(), denied.hostPort()))
 
-	s.thenStderrHasEntry("HTTP", allowed.addr(), "OK", "net:http:"+allowed.addr())
-	s.thenStderrHasEntry("HTTP", denied.addr(), "DENY", "net:none:"+denied.addr())
+	s.thenStderrHasEntry("HTTP", allowed.addr(), "OK", "http:"+allowed.addr())
+	s.thenStderrHasEntry("HTTP", denied.addr(), "DENY", "none:"+denied.addr())
 }
 
 // TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly tests that most-specific rule
@@ -234,9 +251,9 @@ func TestE2E_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly(t
 
 	// First two operations succeed, last one fails
 	s.thenExitCode(0)
-	s.thenStderrHasEntry("WRITE", project.rel("main.go"), "OK", "fs:rw:"+project.String())
-	s.thenStderrHasEntry("READ", project.rel(".git/config"), "OK", "fs:ro:"+gitDir)
-	s.thenStderrHasEntry("WRITE", project.rel(".git/config"), "DENY", "fs:ro:"+gitDir)
+	s.thenStderrHasEntry("WRITE", project.rel("main.go"), "OK", "rw:"+project.String())
+	s.thenStderrHasEntry("READ", project.rel(".git/config"), "OK", "ro:"+gitDir)
+	s.thenStderrHasEntry("WRITE", project.rel(".git/config"), "DENY", "ro:"+gitDir)
 }
 
 // TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly tests that
@@ -259,9 +276,9 @@ func TestE2E_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly(t *t
 			allowedPort, deniedPort))
 
 	// Allowed port: broad CIDR matches (no specific deny for this port)
-	s.thenStderrHasEntry("HTTP", "127.0.0.1:"+allowedPort, "OK", "net:http:127.0.0.0/8:*")
+	s.thenStderrHasEntry("HTTP", "127.0.0.1:"+allowedPort, "OK", "http:127.0.0.0/8:*")
 	// Denied port: specific /32 deny overrides broad /8 allow
-	s.thenStderrHasEntry("HTTP", "127.0.0.1:"+deniedPort, "DENY", "net:none:127.0.0.1/32:"+deniedPort)
+	s.thenStderrHasEntry("HTTP", "127.0.0.1:"+deniedPort, "DENY", "none:127.0.0.1/32:"+deniedPort)
 }
 
 // TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog tests that bare-path
@@ -290,7 +307,7 @@ func TestE2E_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog(t *tes
 	// The bare-path access should be resolved to absolute path with rule matching
 	s.thenExitCode(0)
 	s.thenStderrHasEntry("READ", project.rel(".git/config"), "OK",
-		"fs:ro:"+testDir(s.tmpDir).String())
+		"ro:"+testDir(s.tmpDir).String())
 }
 
 // TestE2E_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked tests that bare-path
@@ -322,7 +339,7 @@ void _start(void) {
 
 	s.givenRules("fs:ro:" + testDir(s.tmpDir).String())
 
-	s.whenRunTextLog("-", cBinary)
+	s.whenRunTextLog("", cBinary)
 
 	// The relative path should appear as UNKNOWN since no cwd was tracked
 	s.thenExitCode(0)
@@ -338,49 +355,11 @@ func TestE2E_MonitoringAccess_DeniedOnlyDefaultView(t *testing.T) {
 
 	s.givenRules("fs:ro:" + data.String())
 
-	s.whenRunTextLog("-", "cat", data.join("file.txt"))
+	s.whenRunTextLog("", "cat", data.join("file.txt"))
 
 	s.thenExitCode(0)
 	// OK entries are absent from stderr by default
 	s.thenStderrNotContains(data.rel("file.txt"))
-}
-
-// TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries tests that fs:nolog rules
-// suppress matching entries from the text log by default.
-func TestE2E_MonitoringAccess_FsNologRuleSuppressesEntries(t *testing.T) {
-	s := newScenario(t)
-	project := s.givenDir("project")
-	cacheDir := project.join("cache")
-	cacheFile := project.file("cache/data.bin", "cache data")
-
-	s.givenRules("fs:ro:"+project.String(), "fs:nolog:"+cacheDir)
-
-	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", cacheFile)
-
-	// Entry is suppressed because of nolog rule
-	s.thenExitCode(0)
-	s.thenStderrNotContains(project.rel("cache/data.bin"))
-}
-
-// TestE2E_MonitoringAccess_FsLogOverridesNolog tests that a more specific fs:log
-// rule overrides a broader fs:nolog rule.
-func TestE2E_MonitoringAccess_FsLogOverridesNolog(t *testing.T) {
-	s := newScenario(t)
-	project := s.givenDir("project")
-	secretDir := project.join("secret")
-	secretFile := project.file("secret/key.pem", "secret")
-
-	s.givenRules(
-		"fs:ro:"+project.String(),
-		"fs:nolog:"+project.String(),
-		"fs:log:"+secretDir,
-	)
-
-	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "cat", secretFile)
-
-	// Entry appears because log rule overrides nolog
-	s.thenExitCode(0)
-	s.thenStderrHasEntry("READ", project.rel("secret/key.pem"), "OK")
 }
 
 // TestE2E_NoSandbox_UnenforcedEntriesAppearInLog verifies that --no-sandbox --monitor
@@ -398,7 +377,7 @@ func TestE2E_MonitoringAccess_ObserveNativeNetworkAccessesWithoutIsolation(t *te
 	// No net rules — proxy starts with deny-all, but in no-sandbox mode it must not block.
 	s.givenRules()
 
-	s.whenRunNoSandboxMonitorFile("-",
+	s.whenRunNoSandboxMonitorFile("",
 		"curl", "-sf", fmt.Sprintf("http://%s/", srv.hostPort()))
 
 	// Request must succeed (not blocked with 403).
@@ -421,7 +400,7 @@ func TestE2E_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 	// Only allow the data directory; blocked directory has no rule.
 	s.givenRules("fs:ro:" + data.String())
 
-	s.whenRunNoSandboxMonitorFile("-", "cat", blocked.join("secret.txt"))
+	s.whenRunNoSandboxMonitorFile("", "cat", blocked.join("secret.txt"))
 
 	// In no-sandbox mode the process is not blocked; cat still reads the file.
 	s.thenExitCode(0)
@@ -479,9 +458,9 @@ func TestE2E_MonitoringAccess_ViewSeccompDeniedSyscallAttemptsInAccessLog(t *tes
 	s.givenPython3()
 	s.givenRules()
 
-	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+	s.whenRunTextLog("", "python3", "-c", bpfPythonCmd)
 
-	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "no-matching-rule")
 }
 
 // TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntries tests that
@@ -492,8 +471,8 @@ func TestE2E_MonitoringAccess_VerifySeccompFilterIsActiveByPresenceOfSyscallEntr
 	s.givenPython3()
 	s.givenRules()
 
-	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
-	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+	s.whenRunTextLog("", "python3", "-c", bpfPythonCmd)
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "no-matching-rule")
 
 	s.whenRunTextLogWithFlags([]string{"--no-sandbox"}, "python3", "-c", bpfPythonCmd)
 	s.thenStderrHasEntry("UNENFORCED", "SYSCALL", "bpf")
@@ -508,10 +487,10 @@ func TestE2E_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated(t *testing
 	s.givenPython3()
 	s.givenRules()
 
-	s.whenRunTextLog("-", "python3", "-c",
+	s.whenRunTextLog("", "python3", "-c",
 		"import ctypes; l=ctypes.CDLL(None); l.syscall(321,0,0,0); l.syscall(321,0,0,0)")
 
-	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "seccomp")
+	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY", "no-matching-rule")
 	var count int
 	for line := range strings.SplitSeq(s.lastResult.Stderr, "\n") {
 		if strings.Contains(line, "SYSCALL") && strings.Contains(line, "bpf") {
@@ -519,21 +498,6 @@ func TestE2E_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated(t *testing
 		}
 	}
 	assert.Equal(t, 1, count)
-}
-
-// TestE2E_MonitoringAccess_SuppressExpectedSyscallDenialsWithSyscallNolog tests that a
-// syscall:nolog rule hides the DENY entry by default and reveals it with --show-nolog.
-func TestE2E_MonitoringAccess_SuppressExpectedSyscallDenialsWithSyscallNolog(t *testing.T) {
-	requireAMD64(t)
-	s := newScenario(t)
-	s.givenPython3()
-	s.givenRules("syscall:nolog:bpf")
-
-	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
-	s.thenStderrNotContains("bpf")
-
-	s.whenRunTextLogWithFlags([]string{"--show-nolog"}, "python3", "-c", bpfPythonCmd)
-	s.thenStderrHasEntry("SYSCALL", "bpf", "DENY")
 }
 
 // TestE2E_MonitoringAccess_AllowedSyscallLoggedAsOk tests that a syscall:allow rule causes
@@ -544,9 +508,9 @@ func TestE2E_MonitoringAccess_AllowedSyscallLoggedAsOk(t *testing.T) {
 	s.givenPython3()
 	s.givenRules("syscall:allow:bpf")
 
-	s.whenRunTextLog("-", "python3", "-c", bpfPythonCmd)
+	s.whenRunTextLog("", "python3", "-c", bpfPythonCmd)
 	s.thenStderrNotContains("bpf")
 
 	s.whenRunTextLogWithFlags([]string{"--show-allowed"}, "python3", "-c", bpfPythonCmd)
-	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "syscall:allow:bpf")
+	s.thenStderrHasEntry("SYSCALL", "bpf", "OK", "allow:bpf")
 }

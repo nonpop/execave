@@ -100,21 +100,12 @@ func auditArch() uint32 {
 	case "arm64":
 		return unix.AUDIT_ARCH_AARCH64
 	default:
-		panic("seccomp: unsupported architecture: " + runtime.GOARCH)
+		panic("unsupported architecture: " + runtime.GOARCH)
 	}
-}
-
-// BlockedSyscallNames returns the kernel names of all blocked syscalls in slice order.
-func BlockedSyscallNames() []string {
-	names := make([]string, len(blockedSyscalls))
-	for i, sc := range blockedSyscalls {
-		names[i] = sc.name
-	}
-	return names
 }
 
 // RuleableSyscallNames returns the kernel names of blocked syscalls that can be
-// used in syscall:allow and syscall:nolog config rules. Defense-in-depth syscalls
+// used in syscall:allow config rules. Defense-in-depth syscalls
 // are excluded because the kernel already prevents them inside bwrap's
 // user-namespace sandbox — allowing them would have no effect.
 func RuleableSyscallNames() []string {
@@ -136,7 +127,49 @@ func extractNrs(syscalls []blockedSyscall) []uint32 {
 	return nrs
 }
 
-// Filter returns the compiled classic BPF deny-list filter as a byte slice.
+// FilterPipe writes a BPF filter to a pipe, excluding syscalls named in allowed.
+// Allowed syscalls are removed from the deny list before building the filter.
+// If allowed is nil or empty, the full deny list is used.
+// The caller is responsible for closing the returned file.
+func FilterPipe(allowed map[string]bool) (*os.File, error) {
+	effective := make([]blockedSyscall, 0, len(blockedSyscalls))
+	for _, sc := range blockedSyscalls {
+		if !allowed[sc.name] {
+			effective = append(effective, sc)
+		}
+	}
+	data := filterFromNrs(extractNrs(effective))
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("create seccomp filter pipe: %w", err)
+	}
+	if _, err := w.Write(data); err != nil {
+		_ = r.Close()
+		_ = w.Close()
+		return nil, fmt.Errorf("write seccomp filter to pipe: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		_ = r.Close()
+		return nil, fmt.Errorf("close seccomp filter pipe write end: %w", err)
+	}
+	return r, nil
+}
+
+// filterFromNrs compiles a BPF deny-list filter from raw syscall numbers.
+func filterFromNrs(nrs []uint32) []byte {
+	insns := buildFilter(nrs, auditArch())
+	var buf bytes.Buffer
+	for _, insn := range insns {
+		if err := binary.Write(&buf, binary.NativeEndian, insn); err != nil {
+			// bytes.Buffer never returns write errors; SockFilter is a fixed-size struct.
+			panic("serialize BPF instruction: " + err.Error())
+		}
+	}
+	return buf.Bytes()
+}
+
+// buildFilter constructs the BPF program as a slice of SockFilter instructions.
+// blocked contains the syscall numbers to deny; arch is the AUDIT_ARCH_* constant.
 //
 // The filter structure:
 //
@@ -147,56 +180,6 @@ func extractNrs(syscalls []blockedSyscall) []uint32 {
 //	[3+N]     RET SECCOMP_RET_ALLOW
 //	[3+N+1]   RET SECCOMP_RET_ERRNO|EPERM
 //	[3+N+2]   RET SECCOMP_RET_KILL_PROCESS
-func Filter() []byte {
-	return filterFromNrs(extractNrs(blockedSyscalls))
-}
-
-// filterFromNrs compiles a BPF deny-list filter from raw syscall numbers.
-func filterFromNrs(nrs []uint32) []byte {
-	insns := buildFilter(nrs, auditArch())
-	var buf bytes.Buffer
-	for _, insn := range insns {
-		if err := binary.Write(&buf, binary.NativeEndian, insn); err != nil {
-			// bytes.Buffer never returns write errors; SockFilter is a fixed-size struct.
-			panic("seccomp: serialize BPF instruction: " + err.Error())
-		}
-	}
-	return buf.Bytes()
-}
-
-// FilterPipe writes a BPF filter to a pipe, excluding syscalls named in allowed.
-// Allowed syscalls are removed from the deny list before building the filter.
-// If allowed is nil or empty, the full deny list is used.
-// The caller is responsible for closing the returned file.
-func FilterPipe(allowed map[string]bool) (*os.File, error) {
-	effective := blockedSyscalls
-	if len(allowed) > 0 {
-		effective = make([]blockedSyscall, 0, len(blockedSyscalls))
-		for _, sc := range blockedSyscalls {
-			if !allowed[sc.name] {
-				effective = append(effective, sc)
-			}
-		}
-	}
-	data := filterFromNrs(extractNrs(effective))
-	pipeR, pipeW, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("create seccomp filter pipe: %w", err)
-	}
-	if _, err := pipeW.Write(data); err != nil {
-		_ = pipeR.Close()
-		_ = pipeW.Close()
-		return nil, fmt.Errorf("write seccomp filter to pipe: %w", err)
-	}
-	if err := pipeW.Close(); err != nil {
-		_ = pipeR.Close()
-		return nil, fmt.Errorf("close seccomp filter pipe write end: %w", err)
-	}
-	return pipeR, nil
-}
-
-// buildFilter constructs the BPF program as a slice of SockFilter instructions.
-// blocked contains the syscall numbers to deny; arch is the AUDIT_ARCH_* constant.
 func buildFilter(blocked []uint32, arch uint32) []unix.SockFilter {
 	n := len(blocked)
 	// filterOverhead: 1 LD-arch + 1 JEQ-arch + 1 LD-nr + 1 ALLOW + 1 DENY + 1 KILL

@@ -15,7 +15,7 @@ import (
 func loadTestConfig(t *testing.T, content string) (*config.Config, error) {
 	t.Helper()
 	configPath := writeTestConfig(t, content)
-	return config.Load(configPath, nil) //nolint:wrapcheck
+	return config.Load(configPath, nil, "", "", "") //nolint:wrapcheck
 }
 
 // writeTestConfig writes content to a temp config file and returns the path.
@@ -46,13 +46,13 @@ func TestLoad_ValidConfig(t *testing.T) {
 }
 
 func TestLoad_FileNotFound(t *testing.T) {
-	_, err := config.Load("/nonexistent/path/execave.toml", nil)
-	assert.ErrorContains(t, err, "config file not found")
+	_, err := config.Load("/nonexistent/path/execave.toml", nil, "", "", "")
+	assert.ErrorContains(t, err, "file not found")
 }
 
 func TestLoad_InvalidTOML(t *testing.T) {
 	_, err := loadTestConfig(t, "invalid toml [[[")
-	assert.ErrorContains(t, err, "parse config")
+	assert.ErrorContains(t, err, "parse")
 }
 
 func TestLoad_UnknownResourceType(t *testing.T) {
@@ -73,18 +73,6 @@ net = [
 	assert.Len(t, cfg.NetRules, 1)
 }
 
-func TestLoad_HasNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `net = ["http:api.anthropic.com:443"]`)
-	require.NoError(t, err)
-	assert.True(t, cfg.HasNetRules())
-}
-
-func TestLoad_HasNoNetRules(t *testing.T) {
-	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]`)
-	require.NoError(t, err)
-	assert.False(t, cfg.HasNetRules())
-}
-
 func TestLoad_ExtendsRelativePath(t *testing.T) {
 	dir := t.TempDir()
 	basePath := writeConfigFile(t, dir, "base.toml", `fs = ["ro:/usr/bin"]`)
@@ -94,7 +82,7 @@ fs = ["ro:/home/project"]
 `
 	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
 
-	cfg, err := config.Load(rootPath, nil)
+	cfg, err := config.Load(rootPath, nil, "", "", "")
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 2)
 	assert.Equal(t, []string{basePath, rootPath}, cfg.ConfigPaths)
@@ -105,7 +93,7 @@ func TestLoad_ExtendsCycleDetected(t *testing.T) {
 	aPath := writeConfigFile(t, dir, "a.toml", `extends = ["b.toml"]`)
 	writeConfigFile(t, dir, "b.toml", `extends = ["a.toml"]`)
 
-	_, err := config.Load(aPath, nil)
+	_, err := config.Load(aPath, nil, "", "", "")
 	require.ErrorContains(t, err, "cycle detected")
 }
 
@@ -121,7 +109,7 @@ fs = ["ro:/var/log"]
 `
 	rootPath := writeConfigFile(t, rootDir, "execave.toml", rootContent)
 
-	cfg, err := config.Load(rootPath, nil)
+	cfg, err := config.Load(rootPath, nil, "", "", "")
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 2)
 	assert.Equal(t, []string{filepath.Join(homeDir, "shared.toml"), rootPath}, cfg.ConfigPaths)
@@ -136,7 +124,7 @@ fs = ["ro:/usr/bin"]
 `
 	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
 
-	cfg, err := config.Load(rootPath, nil)
+	cfg, err := config.Load(rootPath, nil, "", "", "")
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
 }
@@ -150,7 +138,7 @@ fs = ["rw:/etc/config"]
 `
 	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
 
-	_, err := config.Load(rootPath, nil)
+	_, err := config.Load(rootPath, nil, "", "", "")
 	require.ErrorContains(t, err, "duplicate path")
 	require.ErrorContains(t, err, basePath)
 	assert.ErrorContains(t, err, rootPath)
@@ -165,7 +153,7 @@ fs = ["rw:` + basePath + `"]
 `
 	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
 
-	_, err := config.Load(rootPath, nil)
+	_, err := config.Load(rootPath, nil, "", "", "")
 	require.ErrorContains(t, err, "must not be writable")
 	require.ErrorContains(t, err, basePath)
 	assert.ErrorContains(t, err, rootPath)
@@ -180,9 +168,10 @@ syscall = ["allow:ptrace"]
 `
 	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
 
-	cfg, err := config.Load(rootPath, nil)
+	cfg, err := config.Load(rootPath, nil, "", "", "")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
+	require.Len(t, cfg.SyscallRules, 1)
+	assert.Equal(t, "ptrace", cfg.SyscallRules[0].Name)
 }
 
 func TestLoad_InvalidNetRule(t *testing.T) {
@@ -250,137 +239,35 @@ func TestDuplicatePaths_TrailingSlash_Rejected(t *testing.T) {
 	assert.ErrorContains(t, err, "/foo")
 }
 
-// --- ParseRules tests ---
-
-func TestParseRules_ValidFsAndNetRules(t *testing.T) {
-	cfg, err := config.ParseRules(
-		[]string{"fs:ro:/usr/bin", "net:http:api.example.com:443"},
-		"/some/dir", "/some/dir/execave.toml", nil,
-	)
-	require.NoError(t, err)
-	assert.Len(t, cfg.FSRules, 1)
-	assert.Len(t, cfg.NetRules, 1)
-}
-
-func TestParseRules_EmptyRules(t *testing.T) {
-	cfg, err := config.ParseRules([]string{}, "/some/dir", "/some/dir/execave.toml", nil)
-	require.NoError(t, err)
-	assert.Empty(t, cfg.FSRules)
-	assert.Empty(t, cfg.NetRules)
-}
-
-func TestParseRules_TildeExpansion(t *testing.T) {
-	homeDir, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	cfg, err := config.ParseRules(
-		[]string{"fs:rw:~/projects"},
-		"/some/dir", "/some/dir/execave.toml", nil,
-	)
-	require.NoError(t, err)
-	require.Len(t, cfg.FSRules, 1)
-	assert.Equal(t, filepath.Join(homeDir, "projects"), cfg.FSRules[0].Path)
-}
-
-func TestParseRules_RelativePathResolvedAgainstConfigDir(t *testing.T) {
-	cfg, err := config.ParseRules(
-		[]string{"fs:ro:data"},
-		"/home/user/myproject", "/home/user/myproject/execave.toml", nil,
-	)
-	require.NoError(t, err)
-	require.Len(t, cfg.FSRules, 1)
-	assert.Equal(t, "/home/user/myproject/data", cfg.FSRules[0].Path)
-}
-
-func TestParseRules_InvalidRuleRejected(t *testing.T) {
-	_, err := config.ParseRules(
-		[]string{"badprefix:something"},
-		"/some/dir", "/some/dir/execave.toml", nil,
-	)
-	assert.ErrorContains(t, err, "unknown resource type")
-}
-
-func TestParseRules_DuplicatePathsRejected(t *testing.T) {
-	_, err := config.ParseRules(
-		[]string{"fs:ro:/usr/bin", "fs:rw:/usr/bin"},
-		"/some/dir", "/some/dir/execave.toml", nil,
-	)
-	assert.ErrorContains(t, err, "duplicate path")
-}
-
-func TestParseRules_ManagedPathRejected(t *testing.T) {
-	_, err := config.ParseRules(
-		[]string{"fs:ro:/dev"},
-		"/some/dir", "/some/dir/execave.toml", []string{"/dev"},
-	)
-	assert.ErrorContains(t, err, "managed path")
-}
-
-func TestParseRules_ConfigWritabilityRejected(t *testing.T) {
-	// The check fires when a rule names the config file path exactly as rw.
-	_, err := config.ParseRules(
-		[]string{"fs:rw:/home/user/execave.toml"},
-		"/home/user", "/home/user/execave.toml", nil,
-	)
-	assert.ErrorContains(t, err, "must not be writable")
-}
-
-func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
-	managedPaths := []string{"/proc", "/dev"}
-	cfg, err := config.ParseRules(
-		[]string{"fs:ro:/usr/bin"},
-		"/some/dir", "/some/dir/execave.toml", managedPaths,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, managedPaths, cfg.ManagedPaths)
-}
-
 // --- Syscall rule tests ---
 
 func TestLoad_ValidSyscallRules(t *testing.T) {
 	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/lib"]
-syscall = ["allow:ptrace", "nolog:bpf"]`)
+syscall = ["allow:ptrace"]`)
 	require.NoError(t, err)
 	assert.Len(t, cfg.FSRules, 1)
-	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
-	assert.Equal(t, []string{"bpf"}, cfg.SyscallNologRules)
+	require.Len(t, cfg.SyscallRules, 1)
+	assert.Equal(t, "ptrace", cfg.SyscallRules[0].Name)
 }
 
 func TestLoad_InvalidSyscallNameRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `syscall = ["allow:ptraec"]`)
-	assert.ErrorContains(t, err, "not a ruleable syscall name")
+	assert.ErrorContains(t, err, "invalid syscall:allow target")
 }
 
 func TestLoad_NonBlockedSyscallNameRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `syscall = ["allow:read"]`)
-	assert.ErrorContains(t, err, "not a ruleable syscall name")
+	assert.ErrorContains(t, err, "invalid syscall:allow target")
 }
 
 func TestLoad_DefenseInDepthSyscallRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `syscall = ["allow:syslog"]`)
-	assert.ErrorContains(t, err, "not a ruleable syscall name")
-}
-
-func TestLoad_DefenseInDepthSyscallNologRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `syscall = ["nolog:syslog"]`)
-	assert.ErrorContains(t, err, "not a ruleable syscall name")
+	assert.ErrorContains(t, err, "invalid syscall:allow target")
 }
 
 func TestLoad_DuplicateSyscallAllowRejected(t *testing.T) {
 	_, err := loadTestConfig(t, `syscall = ["allow:ptrace", "allow:ptrace"]`)
 	assert.ErrorContains(t, err, "duplicate syscall allow rule")
-}
-
-func TestLoad_DuplicateSyscallNologRejected(t *testing.T) {
-	_, err := loadTestConfig(t, `syscall = ["nolog:ptrace", "nolog:ptrace"]`)
-	assert.ErrorContains(t, err, "duplicate syscall nolog rule")
-}
-
-func TestLoad_SameNameAllowAndNologPermitted(t *testing.T) {
-	cfg, err := loadTestConfig(t, `syscall = ["allow:ptrace", "nolog:ptrace"]`)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
-	assert.Equal(t, []string{"ptrace"}, cfg.SyscallNologRules)
 }
 
 func TestLoad_UnknownSyscallActionRejected(t *testing.T) {
@@ -396,53 +283,15 @@ func TestLoad_MalformedSyscallRuleRejected(t *testing.T) {
 func TestLoad_EmptyRulesHasNoSyscallRules(t *testing.T) {
 	cfg, err := loadTestConfig(t, ``)
 	require.NoError(t, err)
-	assert.Empty(t, cfg.SyscallAllowRules)
-	assert.Empty(t, cfg.SyscallNologRules)
-}
-
-func TestParseTOML_ValidTOML(t *testing.T) {
-	content := `fs = ["ro:/usr/bin"]
-net = ["http:api.example.com:443"]`
-	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
-	require.NoError(t, err)
-	assert.Len(t, cfg.FSRules, 1)
-	assert.Len(t, cfg.NetRules, 1)
-}
-
-func TestParseTOML_EmptyBytes(t *testing.T) {
-	cfg, err := config.ParseTOML([]byte{}, "/some/dir", "/some/dir/execave.toml", nil)
-	require.NoError(t, err)
-	assert.Empty(t, cfg.FSRules)
-	assert.Empty(t, cfg.NetRules)
-}
-
-func TestParseTOML_InvalidTOML(t *testing.T) {
-	_, err := config.ParseTOML([]byte("invalid toml [[["), "/some/dir", "/some/dir/execave.toml", nil)
-	assert.ErrorContains(t, err, "parse config")
-}
-
-func TestParseTOML_InvalidRules(t *testing.T) {
-	content := `fs = ["invalid rule without colon"]`
-	_, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
-	assert.ErrorContains(t, err, "malformed rule")
-}
-
-func TestParseTOML_CommentsPreservedThroughParsing(t *testing.T) {
-	content := "# Comment at top\nfs = [\n    # Another comment\n    \"ro:/usr/bin\",\n]"
-	cfg, err := config.ParseTOML([]byte(content), "/some/dir", "/some/dir/execave.toml", nil)
-	require.NoError(t, err)
-	assert.Len(t, cfg.FSRules, 1)
-}
-
-func TestParseTOML_NonAbsoluteConfigPathPanics(t *testing.T) {
-	assert.Panics(t, func() {
-		_, _ = config.ParseTOML([]byte{}, "/some/dir", "relative/execave.toml", nil)
-	})
+	assert.Empty(t, cfg.SyscallRules)
 }
 
 func TestPermission_Strictness(t *testing.T) {
-	assert.Greater(t, fsrules.PermissionNone, fsrules.PermissionReadOnly)
-	assert.Greater(t, fsrules.PermissionReadOnly, fsrules.PermissionReadWrite)
+	// Higher values are more permissive; Unknown is below None so unhandled
+	// Unknown values are at least as strict as an explicit deny.
+	assert.Less(t, fsrules.PermissionUnknown, fsrules.PermissionNone)
+	assert.Less(t, fsrules.PermissionNone, fsrules.PermissionReadOnly)
+	assert.Less(t, fsrules.PermissionReadOnly, fsrules.PermissionReadWrite)
 }
 
 func TestValidate_ConfigFileExplicitlyWritable_Rejected(t *testing.T) {
@@ -454,7 +303,7 @@ func TestValidate_ConfigFileExplicitlyWritable_Rejected(t *testing.T) {
 	err := os.WriteFile(configPath, []byte(content), 0o600)
 	require.NoError(t, err)
 
-	_, err = config.Load(configPath, nil)
+	_, err = config.Load(configPath, nil, "", "", "")
 	require.ErrorContains(t, err, "must not be writable")
 }
 
@@ -477,7 +326,7 @@ func TestValidate_ManagedPath_Rejected(t *testing.T) {
 			content := `fs = [` + tt.rule + `]`
 			configPath := writeTestConfig(t, content)
 
-			_, err := config.Load(configPath, managedPaths)
+			_, err := config.Load(configPath, managedPaths, "", "", "")
 			require.ErrorContains(t, err, "managed path")
 			assert.ErrorContains(t, err, tt.wantErr)
 		})
@@ -503,8 +352,75 @@ func TestValidate_ManagedPath_SimilarNameAllowed(t *testing.T) {
 			content := `fs = [` + tt.rule + `]`
 			configPath := writeTestConfig(t, content)
 
-			_, err := config.Load(configPath, managedPaths)
+			_, err := config.Load(configPath, managedPaths, "", "", "")
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestLoad_InterpreterRule_AddedWhenNotCovered(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/bin"]`)
+	cfg, err := config.Load(configPath, nil, "/lib64/ld-linux-x86-64.so.2", "", "")
+	require.NoError(t, err)
+
+	require.Len(t, cfg.FSRules, 2)
+	synthetic := cfg.FSRules[1]
+	assert.Equal(t, fsrules.PermissionReadOnly, synthetic.Permission)
+	assert.Equal(t, "/lib64/ld-linux-x86-64.so.2", synthetic.Path)
+	assert.Equal(t, "ro:/lib64/ld-linux-x86-64.so.2", synthetic.RawRule)
+	assert.Equal(t, "", synthetic.SourcePath)
+}
+
+func TestLoad_InterpreterRule_NotAddedWhenReadOnly(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/lib64"]`)
+	cfg, err := config.Load(configPath, nil, "/lib64/ld-linux-x86-64.so.2", "", "")
+	require.NoError(t, err)
+
+	assert.Len(t, cfg.FSRules, 1)
+}
+
+func TestLoad_InterpreterRule_NotAddedWhenReadWrite(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["rw:/lib64"]`)
+	cfg, err := config.Load(configPath, nil, "/lib64/ld-linux-x86-64.so.2", "", "")
+	require.NoError(t, err)
+
+	assert.Len(t, cfg.FSRules, 1)
+}
+
+func TestLoad_InterpreterRule_EmptyPath(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/bin"]`)
+	cfg, err := config.Load(configPath, nil, "", "", "")
+	require.NoError(t, err)
+
+	assert.Len(t, cfg.FSRules, 1)
+}
+
+func TestLoad_TunnelPaths_BothUncovered_BothRulesAdded(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/bin"]`)
+	cfg, err := config.Load(configPath, nil, "", "/usr/local/bin/execave", "/run/user/1000/execave-xyz/proxy.sock")
+	require.NoError(t, err)
+
+	require.Len(t, cfg.FSRules, 3)
+	assert.Equal(t, "/usr/local/bin/execave", cfg.FSRules[1].Path)
+	assert.Equal(t, fsrules.PermissionReadOnly, cfg.FSRules[1].Permission)
+	assert.Equal(t, "/run/user/1000/execave-xyz/proxy.sock", cfg.FSRules[2].Path)
+	assert.Equal(t, fsrules.PermissionReadOnly, cfg.FSRules[2].Permission)
+}
+
+func TestLoad_TunnelPaths_BinaryAlreadyCoveredByParentRORule_OnlyUDSRuleAdded(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/local/bin"]`)
+	cfg, err := config.Load(configPath, nil, "", "/usr/local/bin/execave", "/run/user/1000/execave-xyz/proxy.sock")
+	require.NoError(t, err)
+
+	require.Len(t, cfg.FSRules, 2)
+	assert.Equal(t, "/usr/local/bin", cfg.FSRules[0].Path)
+	assert.Equal(t, "/run/user/1000/execave-xyz/proxy.sock", cfg.FSRules[1].Path)
+}
+
+func TestLoad_TunnelPaths_EmptyPaths_NoRulesAdded(t *testing.T) {
+	configPath := writeTestConfig(t, `fs = ["ro:/usr/bin"]`)
+	cfg, err := config.Load(configPath, nil, "", "", "")
+	require.NoError(t, err)
+
+	assert.Len(t, cfg.FSRules, 1)
 }

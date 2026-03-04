@@ -26,8 +26,6 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 **Network rules:** `<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
-**Log visibility rules:** Control which entries appear in the monitor output. `log:<path>` / `nolog:<path>` show/hide filesystem entries within the `fs` section; `log:<target>:<port>` / `nolog:<target>:<port>` show/hide network entries within the `net` section. Uses the same longest-prefix-match (fs) and target-specificity (net) resolution as access rules. Entries hidden by nolog rules are still enforced — this only affects display.
-
 ```toml
 fs = [
   "ro:/usr",
@@ -37,16 +35,12 @@ fs = [
 
   "rw:~/project",   # tilde expands to home directory
   "none:.",
-
-  "nolog:/etc/fonts",            # hide known-harmless denied reads in monitor
 ]
 
 net = [
   "http:api.example.com:443",
   "http:*.internal.corp:*",
   "none:evil.example.com:443",
-
-  "nolog:telemetry.example.com:*",
 ]
 ```
 
@@ -58,7 +52,7 @@ net = [
 
 **Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `monitor` to narrow down what's actually needed.
 
-**Note on `fs:none`:** Directories are replaced with an empty tmpfs (in-memory). More specific rules can override this—`fs:rw` under `fs:none` writes to the real filesystem. Writes to the tmpfs itself are ephemeral. Files use `/dev/null` and return permission denied.
+**Note on `fs` `none`:** Directories are replaced with an empty tmpfs (in-memory). More specific rules can override this—a `fs` `rw` rule under a `none` path writes to the real filesystem. Writes to the tmpfs itself are ephemeral. Files use `/dev/null` and return permission denied.
 
 See `execave.toml.example` for a comprehensive config that supports most standard tools.
 
@@ -89,7 +83,6 @@ The file mode (`monitor --output <path>`) writes entries in real-time as syscall
 
 **Filter flags** on `monitor` control which entries appear in the output:
 - `--show-allowed`: include OK (allowed) entries. Default: denied only.
-- `--show-nolog`: include entries matching `nolog` rules. Default: hidden.
 
 **Workflow:** Start with `execave.toml.example`, run with `monitor`, check for DENY entries (filesystem paths are shown in shortened form relative to the config directory or home), edit the config, grant only what's necessary, repeat.
 
@@ -108,9 +101,9 @@ The output is TOML with `fs`, `net`, and `syscall` sections plus `# source: ...`
 
 A BPF deny-list blocks dangerous syscalls by default. With `monitor`, blocked attempts appear as `SYSCALL` entries in the access log.
 
-To allow a specific syscall, add `syscall:allow:<name>` to your config. To hide a syscall from the monitor log, add `syscall:nolog:<name>`.
+To allow a specific syscall, add `allow:<name>` to the `syscall` section of your config.
 
-**Note:** When `monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, `syscall:allow:ptrace` will not make ptrace usable inside the sandbox.
+**Note:** When `monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, `allow:ptrace` will not make ptrace usable inside the sandbox.
 
 **Blocked syscalls:**
 

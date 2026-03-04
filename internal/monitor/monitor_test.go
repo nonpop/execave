@@ -1,82 +1,105 @@
 package monitor
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nonpop/execave/internal/accesslog"
+	"github.com/nonpop/execave/internal/binutil"
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/exitcode"
 	"github.com/nonpop/execave/internal/fsrules"
-	"github.com/nonpop/execave/internal/sandbox"
+	"github.com/nonpop/execave/internal/seccomp"
+	"github.com/nonpop/execave/internal/syscallrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// dummySeccompFile creates a pipe to satisfy the monitor.New precondition
-// that seccompFile must be non-nil when syscall maps are provided.
-// The pipe is closed when the test finishes.
-func dummySeccompFile(t *testing.T) *os.File {
-	t.Helper()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	_ = w.Close()
-	t.Cleanup(func() { _ = r.Close() })
-	return r
-}
-
 type monitorTestEnv struct {
-	t      *testing.T
-	TmpDir string
-	logger *accesslog.Logger
-	mon    *Monitor
+	t          *testing.T
+	TmpDir     string
+	logBuf     bytes.Buffer
+	logger     *accesslog.Logger
+	stracePath string
+	resolver   *fsrules.Resolver
 }
 
 func newMonitorTestEnv(t *testing.T, setupConfig func(tmpDir string) *config.Config) *monitorTestEnv {
 	t.Helper()
 
-	stracePath, err := sandbox.ResolveStrace()
+	stracePath, err := binutil.ResolveStrace()
 	require.NoError(t, err)
 
 	tmpDir := t.TempDir()
 	cfg := setupConfig(tmpDir)
 
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := New("", stracePath, logger, resolver, nil, false, nil, nil, nil, nil)
-
-	return &monitorTestEnv{
+	env := &monitorTestEnv{
 		t:      t,
 		TmpDir: tmpDir,
-		logger: logger,
-		mon:    mon,
 	}
+
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	env.logger = accesslog.New(&env.logBuf, logCfg)
+	env.resolver = fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	env.stracePath = stracePath
+
+	return env
 }
 
 func (e *monitorTestEnv) run(cmd []string) (int, error) {
-	return e.mon.Run(context.Background(), cmd)
+	processor := New(e.logger, e.resolver, nil, 0, false)
+	prepared, err := Prepare(e.stracePath, cmd, nil, nil, 3)
+	if err != nil {
+		return 1, err
+	}
+
+	execCmd := exec.CommandContext(context.Background(), prepared.StracePath, prepared.Args...) // #nosec G204
+	execCmd.Stdin = os.Stdin
+	execCmd.Stdout = os.Stdout
+	execCmd.Stderr = os.Stderr
+	execCmd.ExtraFiles = prepared.ExtraFiles
+
+	if startErr := execCmd.Start(); startErr != nil {
+		prepared.Abort()
+		return 1, fmt.Errorf("start strace: %w", startErr)
+	}
+	prepared.Started()
+
+	processingErrCh := make(chan error, 1)
+	go func() {
+		processingErrCh <- processor.Run(prepared.StraceReader)
+		_ = prepared.StraceReader.Close()
+	}()
+
+	waitErr := execCmd.Wait()
+	_ = prepared.StraceReader.Close()
+
+	exitCode, exitErr := exitcode.Extract(waitErr)
+	if exitErr != nil {
+		return exitCode, exitErr
+	}
+
+	processingErr := <-processingErrCh
+	if processingErr != nil {
+		if !errors.Is(processingErr, os.ErrClosed) {
+			return exitCode, processingErr
+		}
+	}
+
+	return exitCode, nil
 }
 
-func (e *monitorTestEnv) entries() []accesslog.Entry {
-	e.t.Helper()
-	return e.logger.Entries()
-}
-
-// readLog returns the formatted log entries as a string for compatibility with existing tests.
+// readLog returns the text log output for assertions.
 func (e *monitorTestEnv) readLog() string {
 	e.t.Helper()
-	entries := e.logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		// Format: <OP> <PATH> <RESULT> <RULE>
-		// Use the same format as the old writeLogEntry method
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
+	logStr := e.logBuf.String()
 	e.t.Logf("Log content:\n%s", logStr)
 	return logStr
 }
@@ -85,62 +108,50 @@ func (e *monitorTestEnv) logLines() []string {
 	return strings.Split(strings.TrimSpace(e.readLog()), "\n")
 }
 
-func roRule(path string) fsrules.AccessRule {
-	return fsrules.AccessRule{
+func mustParseSyscallRule(t *testing.T, ruleBody string) syscallrules.Rule {
+	t.Helper()
+	rule, err := syscallrules.ParseRule(ruleBody, "")
+	require.NoError(t, err)
+	return rule
+}
+
+func roRule(path string) fsrules.Rule {
+	return fsrules.Rule{
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
-		RawRule:    "fs:ro:" + path,
+		RawRule:    "ro:" + path,
 		SourcePath: "",
 	}
 }
 
-// createTestMonitor creates a monitor with a logger for testing.
-// Returns the monitor and the logger.
-func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
+// createTestProcessor creates a Processor with a logger for testing.
+// Returns the processor and the log buffer.
+// setupExecves controls how many execves to skip in strace output.
+func createTestProcessor(t *testing.T, cfg *config.Config, setupExecves int) (*Monitor, *bytes.Buffer) {
 	t.Helper()
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	bwrapPath := ""
-	if len(bwrapArgs) > 0 {
-		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
-	}
-	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil, nil), logger
+	var buf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&buf, logCfg)
+	fsResolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	return New(logger, fsResolver, nil, setupExecves, false), &buf
 }
 
-// createCwdTestMonitor creates a temp dir with a file.txt and a monitor with a ro rule for it.
-// Returns the temp dir, monitor, and logger.
-func createCwdTestMonitor(t *testing.T) (string, *Monitor, *accesslog.Logger) {
+// createCwdTestProcessor creates a temp dir with a file.txt and a processor with a ro rule for it.
+// Returns the temp dir, processor, and log buffer.
+func createCwdTestProcessor(t *testing.T) (string, *Monitor, *bytes.Buffer) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
-	}
-	mon, logger := createTestMonitor(t, cfg, nil)
-	return tmpDir, mon, logger
-}
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
 
-// createTestMonitorWithNetwork creates a monitor with hasNetworkPath=true for testing
-// scenarios where the tunnel adds an extra execve to setup.
-func createTestMonitorWithNetwork(t *testing.T, cfg *config.Config, bwrapArgs []string) (*Monitor, *accesslog.Logger) {
-	t.Helper()
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	bwrapPath := ""
-	if len(bwrapArgs) > 0 {
-		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
+		ConfigPaths: nil,
 	}
-	return New(bwrapPath, "", logger, resolver, bwrapArgs, true, nil, nil, nil, nil), logger
+	proc, buf := createTestProcessor(t, cfg, 0)
+	return tmpDir, proc, buf
 }
 
 // assertLogContainsLine checks that the log contains at least one line
@@ -162,13 +173,29 @@ func assertLogContainsLine(t *testing.T, logStr string, components ...string) {
 	t.Errorf("no line found containing all components: %v", components)
 }
 
-func rwRule(path string) fsrules.AccessRule {
-	return fsrules.AccessRule{
+func rwRule(path string) fsrules.Rule {
+	return fsrules.Rule{
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
-		RawRule:    "fs:rw:" + path,
+		RawRule:    "rw:" + path,
 		SourcePath: "",
 	}
+}
+
+// countLogLines returns the number of log entries in s (one per newline).
+func countLogLines(s string) int {
+	return strings.Count(s, "\n")
+}
+
+// countLinesContaining counts lines in s that contain substr.
+func countLinesContaining(s, substr string) int {
+	count := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, substr) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestMonitor_Integration(t *testing.T) {
@@ -179,17 +206,12 @@ func TestMonitor_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(testFile)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(testFile)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -242,17 +264,12 @@ func TestMonitor_WriteOperation(t *testing.T) {
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{rwRule(absTestDir)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -273,17 +290,12 @@ func TestMonitor_Deduplication(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:                 []fsrules.AccessRule{roRule(testFile)},
-			NetRules:                nil,
-			FSLogRules:              nil,
-			NetLogRules:             nil,
-			SyscallAllowRules:       nil,
-			SyscallNologRules:       nil,
-			ManagedPaths:            nil,
-			InterpreterPath:         "",
-			SyscallAllowRuleSources: nil,
-			SyscallNologRuleSources: nil,
-			ConfigPaths:             nil,
+			FSRules:      []fsrules.Rule{roRule(testFile)},
+			NetRules:     nil,
+			SyscallRules: nil,
+			ManagedPaths: nil,
+
+			ConfigPaths: nil,
 		}
 	})
 
@@ -291,19 +303,9 @@ func TestMonitor_Deduplication(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 
-	entries := env.entries()
-	pathCounts := make(map[string]int)
-	for _, entry := range entries {
-		pathCounts[entry.Target]++
-	}
-
-	t.Logf("Path counts: %v", pathCounts)
-
-	// The test file should appear at most once due to deduplication
-	// (other paths like shared libraries may appear multiple times with different operations/results)
-	testFileCount, exists := pathCounts[testFile]
-	require.True(t, exists, "test file should appear in access log")
-	assert.LessOrEqual(t, testFileCount, 1, "test file should be deduplicated")
+	logStr := env.readLog()
+	require.Contains(t, logStr, testFile)
+	assert.LessOrEqual(t, countLinesContaining(logStr, testFile), 1)
 }
 
 func TestMapSyscallToOperation(t *testing.T) {
@@ -311,27 +313,27 @@ func TestMapSyscallToOperation(t *testing.T) {
 		name     string
 		syscall  string
 		line     string
-		expected OperationType
+		expected operationType
 	}{
-		{"open read", "open", `open("/file", O_RDONLY)`, OperationRead},
-		{"open write", "open", `open("/file", O_WRONLY)`, OperationWrite},
-		{"open rdwr", "open", `open("/file", O_RDWR)`, OperationWrite},
-		{"open create", "open", `open("/file", O_CREAT)`, OperationWrite},
+		{"open read", "open", `open("/file", O_RDONLY)`, operationRead},
+		{"open write", "open", `open("/file", O_WRONLY)`, operationWrite},
+		{"open rdwr", "open", `open("/file", O_RDWR)`, operationWrite},
+		{"open create", "open", `open("/file", O_CREAT)`, operationWrite},
 		// Filenames containing flag names should not cause misclassification
-		{"open read file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_RDONLY) = 3`, OperationRead},
-		{"open read file named O_WRONLY", "openat", `12345 openat(AT_FDCWD, "/tmp/O_WRONLY", O_RDONLY) = 3`, OperationRead},
-		{"open read file named O_RDWR", "openat", `12345 openat(AT_FDCWD, "/tmp/O_RDWR", O_RDONLY) = 3`, OperationRead},
-		{"open read path with O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/test_O_CREAT.txt", O_RDONLY) = 3`, OperationRead},
-		{"open write file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_CREAT|O_WRONLY, 0644) = 3`, OperationWrite},
-		{"stat", "stat", `stat("/file")`, OperationRead},
-		{"fstatat", "fstatat", `fstatat(AT_FDCWD, "/file", ...)`, OperationRead},
-		{"newfstatat", "newfstatat", `newfstatat(AT_FDCWD, "/file", ...)`, OperationRead},
-		{"read", "read", `read(3, ...)`, OperationRead},
-		{"write", "write", `write(3, ...)`, OperationWrite},
-		{"unlink", "unlink", `unlink("/file")`, OperationWrite},
-		{"mkdir", "mkdir", `mkdir("/dir")`, OperationWrite},
-		{"chmod", "chmod", `chmod("/file", 0755)`, OperationWrite},
-		{"execve", "execve", `execve("/bin/sh")`, OperationRead},
+		{"open read file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_RDONLY) = 3`, operationRead},
+		{"open read file named O_WRONLY", "openat", `12345 openat(AT_FDCWD, "/tmp/O_WRONLY", O_RDONLY) = 3`, operationRead},
+		{"open read file named O_RDWR", "openat", `12345 openat(AT_FDCWD, "/tmp/O_RDWR", O_RDONLY) = 3`, operationRead},
+		{"open read path with O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/test_O_CREAT.txt", O_RDONLY) = 3`, operationRead},
+		{"open write file named O_CREAT", "openat", `12345 openat(AT_FDCWD, "/tmp/O_CREAT", O_CREAT|O_WRONLY, 0644) = 3`, operationWrite},
+		{"stat", "stat", `stat("/file")`, operationRead},
+		{"fstatat", "fstatat", `fstatat(AT_FDCWD, "/file", ...)`, operationRead},
+		{"newfstatat", "newfstatat", `newfstatat(AT_FDCWD, "/file", ...)`, operationRead},
+		{"read", "read", `read(3, ...)`, operationRead},
+		{"write", "write", `write(3, ...)`, operationWrite},
+		{"unlink", "unlink", `unlink("/file")`, operationWrite},
+		{"mkdir", "mkdir", `mkdir("/dir")`, operationWrite},
+		{"chmod", "chmod", `chmod("/file", 0755)`, operationWrite},
+		{"execve", "execve", `execve("/bin/sh")`, operationRead},
 	}
 
 	for _, tt := range tests {
@@ -350,7 +352,7 @@ func TestMapSyscallToOperation(t *testing.T) {
 // strace) is another source but less common on modern systems.
 func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 	cfg := new(config.Config)
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	// Synthetic strace output: openat with AT_FDCWD but no path resolution.
 	// The relative path "foo/bar.txt" cannot be resolved to an absolute path.
@@ -358,18 +360,10 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT (No such file or directory)` + "\n",
 	)
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertion
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
 }
@@ -378,20 +372,15 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 // until the user command's execve is detected.
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule("/usr")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule("/usr")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	// Non-nil bwrapArgs enables setup phase detection
-	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
+	// setupExecves=2 enables setup phase detection
+	mon, buf := createTestProcessor(t, cfg, 2)
 
 	// Synthetic strace output mimicking bwrap + user command sequence
 	straceData := strings.NewReader(strings.Join([]string{
@@ -407,18 +396,10 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 		`12345 openat(AT_FDCWD</usr>, "lib/libc.so.6", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	// Setup operations should be skipped
 	assert.NotContains(t, logStr, "newroot")
@@ -433,10 +414,10 @@ func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 }
 
 // TestMonitor_NoSetupPhaseWithoutBwrap tests that setup phase detection is
-// disabled when bwrapArgs is nil (direct strace without bwrap).
+// disabled when setupExecves is 0 (direct strace without bwrap).
 func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 	cfg := new(config.Config)
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	// Without bwrap, all lines should be processed (no setup phase)
 	straceData := strings.NewReader(strings.Join([]string{
@@ -444,18 +425,10 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 		`12345 openat(AT_FDCWD, "foo/bar.txt", O_RDONLY) = -1 ENOENT`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	// All lines should be processed
 	assert.Contains(t, logStr, "/usr/bin/cat")
@@ -463,9 +436,7 @@ func TestMonitor_NoSetupPhaseWithoutBwrap(t *testing.T) {
 }
 
 func TestBuildStraceArgs(t *testing.T) {
-	mon := New("", "", nil, nil, nil, false, nil, nil, nil, nil)
-
-	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
+	args := buildStraceArgs([]string{"echo", "hello"}, 3, nil)
 
 	// Should contain strace flags and original command
 	assert.Contains(t, args, "-f")
@@ -478,12 +449,11 @@ func TestBuildStraceArgs(t *testing.T) {
 }
 
 func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
-	blocked := map[string]bool{"ptrace": true, "mount": true}
-	allowed := map[string]bool{"bpf": true}
-	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", nil, nil, nil, false, dummyPipe, blocked, allowed, nil)
-
-	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
+	sr := syscallrules.NewResolver(
+		[]syscallrules.Rule{mustParseSyscallRule(t, "allow:bpf")},
+		seccomp.RuleableSyscallNames(),
+	)
+	args := buildStraceArgs([]string{"echo", "hello"}, 3, sr)
 
 	// Find the trace= argument
 	var traceArg string
@@ -497,20 +467,17 @@ func TestBuildStraceArgs_WithBlockedSyscalls(t *testing.T) {
 
 	// Should include file,fchdir plus the sorted syscall names
 	assert.Contains(t, traceArg, "file,fchdir")
-	assert.Contains(t, traceArg, "mount")
-	assert.Contains(t, traceArg, "ptrace")
-	assert.Contains(t, traceArg, "bpf")
+	assert.Contains(t, traceArg, ",mount,")
+	assert.Contains(t, traceArg, ",ptrace")
+	assert.Contains(t, traceArg, ",bpf,")
 
-	// Names should be sorted: bpf,mount,ptrace
-	idx := strings.Index(traceArg, "bpf")
-	require.Positive(t, idx)
-	assert.Contains(t, traceArg[idx:], "bpf,mount,ptrace")
+	// bpf < mount < ptrace alphabetically
+	assert.Less(t, strings.Index(traceArg, ",bpf,"), strings.Index(traceArg, ",mount,"))
+	assert.Less(t, strings.Index(traceArg, ",mount,"), strings.Index(traceArg, ",ptrace"))
 }
 
 func TestBuildStraceArgs_WithoutBlockedSyscalls(t *testing.T) {
-	mon := New("", "", nil, nil, nil, false, nil, nil, nil, nil)
-
-	args := mon.buildStraceArgs([]string{"echo", "hello"}, nil)
+	args := buildStraceArgs([]string{"echo", "hello"}, 3, nil)
 
 	// Find the trace= argument
 	var traceArg string
@@ -527,22 +494,23 @@ func TestBuildStraceArgs_WithoutBlockedSyscalls(t *testing.T) {
 // produces a single SYSCALL DENY entry with the expected target name.
 func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
 	t.Helper()
-	blocked := map[string]bool{syscallName: true}
+	sr := syscallrules.NewResolver(nil, seccomp.RuleableSyscallNames())
 	cfg := new(config.Config)
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", logger, resolver, nil, false, dummyPipe, blocked, nil, nil)
+	var buf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&buf, logCfg)
+	fsResolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	mon := New(logger, fsResolver, sr, 0, false)
 
-	err := mon.processStraceOutput(strings.NewReader(straceLine + "\n"))
+	err := mon.Run(strings.NewReader(straceLine + "\n"))
 	require.NoError(t, err)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationSyscall, entries[0].Operation)
-	assert.Equal(t, syscallName, entries[0].Target)
-	assert.Equal(t, accesslog.ResultDeny, entries[0].Result)
-	assert.Equal(t, accesslog.RuleSeccomp, entries[0].Rule)
+	logStr := buf.String()
+	require.Equal(t, 1, countLogLines(logStr))
+	assert.Contains(t, logStr, "SYSCALL")
+	assert.Contains(t, logStr, syscallName)
+	assert.Contains(t, logStr, "DENY")
+	assert.Contains(t, logStr, "("+accesslog.RuleNoMatch+")")
 }
 
 func TestProcessStraceLine_BlockedSyscall(t *testing.T) {
@@ -556,42 +524,36 @@ func TestProcessStraceLine_BlockedSyscall_FileGroup(t *testing.T) {
 }
 
 func TestProcessStraceLine_AllowedSyscall(t *testing.T) {
-	allowed := map[string]bool{"ptrace": true}
+	sr := syscallrules.NewResolver(
+		[]syscallrules.Rule{mustParseSyscallRule(t, "allow:ptrace")},
+		seccomp.RuleableSyscallNames(),
+	)
 	cfg := new(config.Config)
-	logger := accesslog.New(cfg.ManagedPaths, false)
-	resolver := fsrules.NewAccessResolver(cfg.FSRules, cfg.ManagedPaths)
-	dummyPipe := dummySeccompFile(t)
-	mon := New("", "", logger, resolver, nil, false, dummyPipe, nil, allowed, nil)
+	var buf bytes.Buffer
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logger := accesslog.New(&buf, logCfg)
+	fsResolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
+	mon := New(logger, fsResolver, sr, 0, false)
 
 	straceData := strings.NewReader(
 		`12345 ptrace(PTRACE_ATTACH, 999) = 0` + "\n",
 	)
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	entries := logger.Entries()
-	require.Len(t, entries, 1)
-	assert.Equal(t, accesslog.OperationSyscall, entries[0].Operation)
-	assert.Equal(t, "ptrace", entries[0].Target)
-	assert.Equal(t, accesslog.ResultOK, entries[0].Result)
-	assert.Equal(t, "syscall:allow:ptrace", entries[0].Rule)
+	logStr := buf.String()
+	require.Equal(t, 1, countLogLines(logStr))
+	assert.Contains(t, logStr, "SYSCALL")
+	assert.Contains(t, logStr, "ptrace")
+	assert.Contains(t, logStr, "OK")
+	assert.Contains(t, logStr, "(allow:ptrace)")
 }
 
-func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
-	pipeR, pipeW, err := os.Pipe()
-	require.NoError(t, err)
-	defer pipeR.Close() //nolint:errcheck // test cleanup
-	defer pipeW.Close() //nolint:errcheck // test cleanup
-
-	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, pipeR, nil, nil, nil)
-
-	// With seccompFile non-nil, Run() will call InsertSeccompArg(bwrapArgs, 4).
-	// Verify by checking that buildStraceArgs receives modified bwrap args
-	// (this is an indirect test via the internal helper).
-	effectiveBwrap := sandbox.InsertSeccompArg(bwrapArgs, 4)
-	args := mon.buildStraceArgs([]string{"true"}, effectiveBwrap)
+func TestBuildStraceArgs_CommandPassthrough(t *testing.T) {
+	// Verify that a command with --seccomp args passes through to strace args correctly.
+	command := []string{"/usr/bin/bwrap", "--seccomp", "4", "--unshare-all", "--", "true"}
+	args := buildStraceArgs(command, 3, nil)
 
 	// --seccomp 4 should appear in the strace args (bwrap section)
 	found := false
@@ -604,11 +566,9 @@ func TestNew_SeccompFile_PlumbedAsFd4(t *testing.T) {
 	assert.True(t, found)
 }
 
-func TestNew_NilSeccompFile_NoSeccompArgs(t *testing.T) {
-	bwrapArgs := []string{"--unshare-all", "--", "true"}
-	mon := New("/usr/bin/bwrap", "", nil, nil, bwrapArgs, false, nil, nil, nil, nil)
-
-	args := mon.buildStraceArgs([]string{"true"}, mon.bwrapArgs)
+func TestBuildStraceArgs_NoSeccompWhenAbsent(t *testing.T) {
+	command := []string{"/usr/bin/bwrap", "--unshare-all", "--", "true"}
+	args := buildStraceArgs(command, 3, nil)
 
 	for i, a := range args {
 		if a == "--seccomp" {
@@ -620,7 +580,7 @@ func TestNew_NilSeccompFile_NoSeccompArgs(t *testing.T) {
 // testSymlinkAccessHelper sets up a symlink test scenario and validates the access log.
 func testSymlinkAccessHelper(
 	t *testing.T,
-	configRules []fsrules.AccessRule,
+	configRules []fsrules.Rule,
 	straceFlags string,
 	expectedHopOp, expectedTargetOp string,
 ) {
@@ -638,25 +598,17 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil, InterpreterPath: "", SyscallAllowRuleSources: nil, SyscallNologRuleSources: nil, ConfigPaths: nil}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	cfg := &config.Config{FSRules: configRules}
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", ` + straceFlags + `) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.processStraceOutput(straceData)
+	err = mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	assertLogContainsLine(t, logStr, expectedHopOp, linkPath, "OK")
 	assertLogContainsLine(t, logStr, expectedTargetOp, targetPath, "OK")
@@ -665,7 +617,7 @@ func testSymlinkAccessHelper(
 func TestMonitor_SymlinkWithinMount(t *testing.T) {
 	// Use /home prefix to avoid /tmp managed path filtering
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []fsrules.AccessRule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
+	testSymlinkAccessHelper(t, []fsrules.Rule{roRule(testBase)}, "O_RDONLY", "READ", "READ")
 }
 
 func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
@@ -691,36 +643,23 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(mountDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = -1 EACCES`,
 	}, "\n") + "\n")
 
-	err = mon.processStraceOutput(straceData)
+	err = mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	// Hop should be OK, target should be denied
 	assertLogContainsLine(t, logStr, "READ", linkPath, "OK")
@@ -729,7 +668,7 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 
 func TestMonitor_SymlinkWriteOperation(t *testing.T) {
 	testBase := filepath.Join(os.Getenv("HOME"), ".execave-test-"+strings.ReplaceAll(t.Name(), "/", "-"))
-	testSymlinkAccessHelper(t, []fsrules.AccessRule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
+	testSymlinkAccessHelper(t, []fsrules.Rule{rwRule(testBase)}, "O_WRONLY", "READ", "WRITE")
 }
 
 func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
@@ -755,36 +694,23 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(roDir), rwRule(rwDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_WRONLY) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.processStraceOutput(straceData)
+	err = mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	// Hop is READ (symlink in ro dir), target is WRITE (in rw dir)
 	assertLogContainsLine(t, logStr, "READ", linkPath, "OK")
@@ -811,36 +737,23 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{rwRule(mountDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            []string{managedDir},
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{rwRule(mountDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: []string{managedDir},
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(
 		`12345 openat(AT_FDCWD, "` + linkPath + `", O_RDONLY) = 3` + "\n",
 	)
 
-	err = mon.processStraceOutput(straceData)
+	err = mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
+	logStr := formatEntries(t, buf)
 
 	// Original path should be logged as UNKNOWN since symlink target is in managed area
 	assertLogContainsLine(t, logStr, "READ", linkPath, "UNKNOWN", accesslog.RuleSymlinkTargetUnresolvable)
@@ -864,57 +777,31 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(testBase)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(testBase)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD, "` + link1 + `", O_RDONLY) = 3`,
 		`12345 openat(AT_FDCWD, "` + link2 + `", O_RDONLY) = 3`,
 	}, "\n") + "\n")
 
-	err = mon.processStraceOutput(straceData)
+	err = mon.Run(straceData)
 	require.NoError(t, err)
 
-	// Format entries as log string for assertions
-	entries := logger.Entries()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
-	t.Logf("Log content:\n%s", logStr)
-
-	// Target should appear only once
-	targetCount := 0
-	for _, line := range lines {
-		if strings.Contains(line, targetPath) {
-			targetCount++
-		}
-	}
-	assert.Equal(t, 1, targetCount)
+	logStr := formatEntries(t, buf)
+	assert.Equal(t, 1, countLinesContaining(logStr, targetPath))
 }
 
-// formatEntries formats log entries as a string for assertions.
-func formatEntries(t *testing.T, entries []accesslog.Entry) string {
+// formatEntries returns the log buffer contents for assertions.
+func formatEntries(t *testing.T, buf *bytes.Buffer) string {
 	t.Helper()
-	var lines []string
-	for _, entry := range entries {
-		line := fmt.Sprintf("%-5s %-50s %-4s  %s", entry.Operation, entry.Target, entry.Result, entry.Rule)
-		lines = append(lines, line)
-	}
-	logStr := strings.Join(lines, "\n")
+	logStr := buf.String()
 	t.Logf("Log content:\n%s", logStr)
 	return logStr
 }
@@ -929,19 +816,14 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// AT_FDCWD annotation establishes cwd for pid 12345
@@ -950,27 +832,27 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 		`12345 access(".git/config", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, ".git/config"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, ".git/config"), "OK", "ro:"+tmpDir)
 }
 
 // TestMonitor_NoCwdForPidStillUnresolved tests that bare-path syscalls from
 // a pid with no prior AT_FDCWD/chdir/fchdir produce UNKNOWN entries.
 func TestMonitor_NoCwdForPidStillUnresolved(t *testing.T) {
 	cfg := new(config.Config)
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(
 		`12345 access("foo/bar.txt", R_OK) = -1 ENOENT` + "\n",
 	)
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
+	logStr := formatEntries(t, buf)
 	assertLogContainsLine(t, logStr, "READ", "foo/bar.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
 }
 
@@ -986,19 +868,14 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(dirA), roRule(dirB)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 openat(AT_FDCWD<` + dirA + `>, "src/main.go", O_RDONLY) = 3`,
@@ -1007,10 +884,10 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 		`12346 access(".git/config", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
+	logStr := formatEntries(t, buf)
 	assertLogContainsLine(t, logStr, "READ", filepath.Join(dirA, ".git/config"), "OK")
 	assertLogContainsLine(t, logStr, "READ", filepath.Join(dirB, ".git/config"), "OK")
 }
@@ -1028,19 +905,14 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(hostDir, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(projectDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(projectDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
+	mon, buf := createTestProcessor(t, cfg, 2)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Setup phase — AT_FDCWD annotation should NOT be tracked
@@ -1054,10 +926,10 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 		`12345 access(".git/config", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
+	logStr := formatEntries(t, buf)
 	assertLogContainsLine(t, logStr, "READ", filepath.Join(projectDir, ".git/config"), "OK")
 	assert.NotContains(t, logStr, hostDir)
 }
@@ -1065,18 +937,18 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 // TestMonitor_ChdirUpdatesTrackedCwd tests that chdir with an absolute path
 // updates cwdByPid and subsequent bare-path calls resolve correctly.
 func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
-	tmpDir, mon, logger := createCwdTestMonitor(t)
+	tmpDir, mon, buf := createCwdTestProcessor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 chdir("` + tmpDir + `") = 0`,
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "ro:"+tmpDir)
 }
 
 // TestMonitor_RelativeChdirJoinedWithExistingCwd tests that a relative chdir
@@ -1088,19 +960,14 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule(tmpDir)},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Establish cwd via AT_FDCWD annotation
@@ -1111,18 +978,18 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(subDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(subDir, "file.txt"), "OK", "ro:"+tmpDir)
 }
 
 // TestMonitor_RelativeChdirWithNoPriorCwdIgnored tests that a relative chdir
 // from a pid with no tracked cwd is silently ignored.
 func TestMonitor_RelativeChdirWithNoPriorCwdIgnored(t *testing.T) {
 	cfg := new(config.Config)
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Relative chdir with no prior cwd — silently skipped
@@ -1131,10 +998,10 @@ func TestMonitor_RelativeChdirWithNoPriorCwdIgnored(t *testing.T) {
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
+	logStr := formatEntries(t, buf)
 	assertLogContainsLine(t, logStr, "READ", "file.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
 }
 
@@ -1142,7 +1009,7 @@ func TestMonitor_RelativeChdirWithNoPriorCwdIgnored(t *testing.T) {
 // corrupt the tracked cwd, so subsequent bare-path accesses still resolve
 // against the original cwd.
 func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
-	tmpDir, mon, logger := createCwdTestMonitor(t)
+	tmpDir, mon, buf := createCwdTestProcessor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Establish cwd via AT_FDCWD annotation
@@ -1153,18 +1020,18 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "ro:"+tmpDir)
 }
 
 // TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd tests that a failed fchdir does not
 // corrupt the tracked cwd, so subsequent bare-path accesses still resolve
 // against the original cwd.
 func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
-	tmpDir, mon, logger := createCwdTestMonitor(t)
+	tmpDir, mon, buf := createCwdTestProcessor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Establish cwd via AT_FDCWD annotation
@@ -1175,11 +1042,11 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "ro:"+tmpDir)
 }
 
 // TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd tests that fchdir without
@@ -1188,7 +1055,7 @@ func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
 // so the line is silently skipped and subsequent bare-path calls remain UNKNOWN.
 func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
 	cfg := new(config.Config)
-	mon, logger := createTestMonitor(t, cfg, nil)
+	mon, buf := createTestProcessor(t, cfg, 0)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// fchdir with no <path> annotation — strace couldn't resolve the fd
@@ -1197,10 +1064,10 @@ func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
+	logStr := formatEntries(t, buf)
 	assertLogContainsLine(t, logStr, "READ", "file.txt", "UNKNOWN", accesslog.RuleUnresolvedRelativePath)
 }
 
@@ -1209,20 +1076,15 @@ func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
 // the last execve seen is still processed and produces log entries.
 func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:                 []fsrules.AccessRule{roRule("/usr")},
-		NetRules:                nil,
-		FSLogRules:              nil,
-		NetLogRules:             nil,
-		SyscallAllowRules:       nil,
-		SyscallNologRules:       nil,
-		ManagedPaths:            nil,
-		InterpreterPath:         "",
-		SyscallAllowRuleSources: nil,
-		SyscallNologRuleSources: nil,
-		ConfigPaths:             nil,
+		FSRules:      []fsrules.Rule{roRule("/usr")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+
+		ConfigPaths: nil,
 	}
-	// hasNetworkPath=true expects 3 execves, but we only provide 2
-	mon, logger := createTestMonitorWithNetwork(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
+	// setupExecves=3 expects 3 execves, but we only provide 2
+	mon, buf := createTestProcessor(t, cfg, 3)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// execve 1: bwrap
@@ -1238,13 +1100,11 @@ func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 		// EOF — no 3rd execve (user command never started)
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	entries := logger.Entries()
-	require.NotEmpty(t, entries)
-
-	logStr := formatEntries(t, entries)
+	logStr := formatEntries(t, buf)
+	require.NotEmpty(t, logStr)
 	// The last execve should be processed as the best-effort user command
 	assertLogContainsLine(t, logStr, "READ", "/usr/bin/ls")
 	// Lines after the last execve should also be replayed and processed
@@ -1254,16 +1114,16 @@ func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 // TestMonitor_FchdirUpdatesTrackedCwd tests that fchdir with an fd-annotated
 // path updates cwdByPid and subsequent bare-path calls resolve correctly.
 func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
-	tmpDir, mon, logger := createCwdTestMonitor(t)
+	tmpDir, mon, buf := createCwdTestProcessor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 fchdir(3<` + tmpDir + `>) = 0`,
 		`12345 access("file.txt", R_OK) = 0`,
 	}, "\n") + "\n")
 
-	err := mon.processStraceOutput(straceData)
+	err := mon.Run(straceData)
 	require.NoError(t, err)
 
-	logStr := formatEntries(t, logger.Entries())
-	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "fs:ro:"+tmpDir)
+	logStr := formatEntries(t, buf)
+	assertLogContainsLine(t, logStr, "READ", filepath.Join(tmpDir, "file.txt"), "OK", "ro:"+tmpDir)
 }

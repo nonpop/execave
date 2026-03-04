@@ -1,7 +1,6 @@
 package commands
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -37,7 +36,7 @@ func runTunnel(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(targetArgv) == 0 {
-		return errors.New("no command specified")
+		return fmt.Errorf("no command specified")
 	}
 
 	exitCode, err := tunnel.Run(udsPath, targetArgv)

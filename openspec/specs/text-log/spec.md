@@ -74,41 +74,6 @@ The text log writer SHALL hide entries with result OK by default. When `showAllo
 - **THEN** output contains DENY, UNKNOWN, and UNENFORCED entries
 - **AND** output does not contain OK entries
 
-### Requirement: Nolog filter
-
-The text log writer SHALL hide entries matching nolog rules by default. When `showNolog` is true, nolog entries SHALL be included in the output.
-
-#### Scenario: Nolog entries hidden by default
-
-- **WHEN** Writer is created with showNolog=false
-- **AND** config contains `fs:nolog:/home/user/project/cache`
-- **AND** Logger contains a DENY entry for `/home/user/project/cache/data`
-- **THEN** output does not contain the entry
-
-#### Scenario: Nolog entries shown when showNolog is true
-
-- **WHEN** Writer is created with showNolog=true
-- **AND** config contains `fs:nolog:/home/user/project/cache`
-- **AND** Logger contains a DENY entry for `/home/user/project/cache/data`
-- **THEN** output contains the entry
-
-### Requirement: Independent filter axes
-
-The denied-only filter and nolog filter SHALL operate independently. An entry MUST pass both filters to appear in the output.
-
-#### Scenario: OK nolog entry hidden even with showAllowed
-
-- **WHEN** Writer is created with showAllowed=true and showNolog=false
-- **AND** config contains `fs:nolog:/usr/lib`
-- **AND** Logger contains an OK entry for `/usr/lib/libc.so`
-- **THEN** output does not contain the entry (blocked by nolog filter)
-
-#### Scenario: Both filters disabled shows all entries
-
-- **WHEN** Writer is created with showAllowed=true and showNolog=true
-- **AND** Logger contains entries of all result types including nolog matches
-- **THEN** output contains all entries
-
 ### Requirement: Real-time streaming to output
 
 The Writer SHALL subscribe to the Logger and write entries as they arrive via the pub/sub notification system. Each entry SHALL be written immediately on notification (not batched). On context cancellation, the Writer SHALL perform a final drain of any unwritten entries before returning.

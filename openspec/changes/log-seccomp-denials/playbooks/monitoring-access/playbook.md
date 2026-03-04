@@ -14,7 +14,7 @@ The user runs a command that attempts dangerous syscalls (e.g., ptrace, mount). 
 The user verifies the seccomp filter is enforcing by observing that blocked syscall attempts produce `SYSCALL DENY` entries in sandboxed mode. In `--no-sandbox` mode (monitoring only, no bwrap or seccomp), the same attempts appear as `UNENFORCED SYSCALL` instead, confirming that seccomp is the enforcement mechanism.
 
 - **GIVEN** a config with rule `fs:ro:/usr/lib`
-- **WHEN** the user runs `execave monitor --output=- -- python3 -c "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"` in sandboxed mode
+- **WHEN** the user runs `execave monitor -- python3 -c "import ctypes; ctypes.CDLL(None).syscall(321, 0, 0, 0)"` in sandboxed mode
 - **THEN** the text log displays a `SYSCALL bpf DENY seccomp` entry
 - **AND** when the user reruns with `--no-sandbox`
 - **THEN** the text log displays `UNENFORCED SYSCALL bpf` instead of `DENY`

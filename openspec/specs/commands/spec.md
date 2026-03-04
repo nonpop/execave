@@ -36,7 +36,7 @@ The CLI SHALL support explicit execution via `run` and implicit execution when a
 Monitor-specific flags SHALL be defined on `monitor` and MUST NOT affect `run` or `config show`.
 
 #### Scenario: Monitor flags accepted on monitor command
-- **WHEN** the user runs `execave monitor --show-allowed --show-nolog --no-sandbox --output - -- true`
+- **WHEN** the user runs `execave monitor --show-allowed --no-sandbox --output - -- true`
 - **THEN** monitor mode runs with those options applied
 
 #### Scenario: Monitor flags rejected on run command

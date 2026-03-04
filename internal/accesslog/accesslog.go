@@ -1,15 +1,19 @@
-// Package accesslog provides in-memory access log storage with deduplication and filtering.
+// Package accesslog provides access logging with deduplication and filtering.
 //
-// The Logger stores access log entries for filesystem and network operations, handling:
+// The Logger stores access log entries for filesystem, network, and syscall operations, handling:
 // - Deduplication (each unique operation+target+result logged once)
 // - Infrastructure path filtering (/dev, /proc, /tmp) for filesystem entries
-// - Entry retrieval and change notification for consumers
+// - Optional real-time text output to a caller-provided writer
 package accesslog
 
 import (
+	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/nonpop/execave/internal/pathutil"
 )
 
 // OperationType classifies access operations.
@@ -45,8 +49,6 @@ const (
 	RuleUnresolvedRelativePath = "unresolved-relative-path"
 	// RuleNoMatch is used when no matching rule was found for a path.
 	RuleNoMatch = "no-matching-rule"
-	// RuleSeccomp is used for syscalls denied by the active seccomp filter.
-	RuleSeccomp = "seccomp"
 	// RuleSymlinkTargetUnresolvable is used when a symlink chain enters a managed path
 	// where host-side resolution is unreliable (e.g., sandbox tmpfs).
 	RuleSymlinkTargetUnresolvable = "symlink-target-unresolvable"
@@ -59,12 +61,24 @@ const (
 type Entry struct {
 	// Operation is the type of operation (READ, WRITE, HTTP, or SYSCALL).
 	Operation OperationType
-	// Target is the absolute path for filesystem ops, host:port for network ops.
+	// Target is the absolute path for filesystem ops, host:port for network ops, syscall name for SYSCALL ops.
 	Target string
 	// Result is the outcome of the access check (OK, DENY, UNKNOWN, or UNENFORCED).
 	Result ResultType
-	// Rule is the rule that matched or a reason string for why access was denied.
+	// Rule is the config rule that matched, or a reason code if no rule matched (e.g., no-matching-rule).
 	Rule string
+}
+
+// Config configures the output for a Logger.
+type Config struct {
+	// ManagedPaths contains infrastructure paths (/dev, /proc, /tmp) that should not be logged.
+	ManagedPaths []string
+	// HomeDir is used for tilde-shortening paths in formatted output.
+	HomeDir string
+	// ConfigDir is used for config-relative shortening of paths in formatted output.
+	ConfigDir string
+	// ShowAllowed controls whether ResultOK entries are emitted.
+	ShowAllowed bool
 }
 
 // accessKey uniquely identifies a log entry for deduplication.
@@ -74,47 +88,48 @@ type accessKey struct {
 	result    ResultType
 }
 
-// Logger stores access log entries in memory with deduplication and filtering.
+// Logger writes access log entries to the configured output with deduplication and filtering.
 // Logger is safe for concurrent use by multiple goroutines.
 type Logger struct {
-	mu          sync.Mutex
-	entries     []Entry
-	seen        map[accessKey]bool
-	managed     []string
-	unenforced  bool
-	subscribers map[chan struct{}]bool
+	mu       sync.Mutex
+	seen     map[accessKey]bool
+	out      io.Writer
+	cfg      *Config
+	writeErr error
 }
 
 // New creates a new Logger.
-// managedPaths contains infrastructure paths (/dev, /proc, /tmp) that should not be logged.
-// When unenforced is true, the Result of every logged entry is overridden to ResultUnenforced,
-// regardless of the result supplied by the caller.
-func New(managedPaths []string, unenforced bool) *Logger {
+// out is the writer for text log output; nil means no output.
+// cfg configures filtering and formatting; must be non-nil.
+func New(out io.Writer, cfg *Config) *Logger {
+	if cfg == nil {
+		panic("cfg must not be nil")
+	}
+	// All other Config fields have valid zero values: empty HomeDir/ConfigDir means
+	// no path shortening, empty ManagedPaths means no infrastructure filtering,
+	// and ShowAllowed is a plain bool.
 	return &Logger{
-		mu:          sync.Mutex{},
-		entries:     make([]Entry, 0),
-		seen:        make(map[accessKey]bool),
-		managed:     managedPaths,
-		unenforced:  unenforced,
-		subscribers: make(map[chan struct{}]bool),
+		seen: make(map[accessKey]bool),
+		out:  out,
+		cfg:  cfg,
 	}
 }
 
-// Log stores an access log entry if it passes all filters:
+// Log writes an access log entry if it passes all filters:
 // - Not a managed/infrastructure path.
 // - Not already logged (deduplication).
-// When the logger is in unenforced mode, the entry's Result is overridden to ResultUnenforced.
-// After storing the entry, notifies all subscribers via non-blocking send.
+// - Not blocked by ShowAllowed setting.
+// If out is set, the entry is written to the configured output (if visible).
 func (l *Logger) Log(entry Entry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.isManagedPath(entry.Target) {
+	if l.out == nil || l.writeErr != nil {
 		return
 	}
 
-	if l.unenforced {
-		entry.Result = ResultUnenforced
+	if !l.isVisible(entry) {
+		return
 	}
 
 	key := accessKey{
@@ -127,56 +142,50 @@ func (l *Logger) Log(entry Entry) {
 	}
 	l.seen[key] = true
 
-	l.entries = append(l.entries, entry)
-	l.notifySubscribers()
-}
-
-// Entries returns a copy of all logged entries.
-func (l *Logger) Entries() []Entry {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entries := make([]Entry, len(l.entries))
-	copy(entries, l.entries)
-	return entries
-}
-
-// Subscribe registers a channel to receive notifications when new entries are logged.
-// The channel receives a non-blocking signal on each new entry.
-// Callers should use Entries() to retrieve the current entry snapshot.
-// The returned channel should only be used for receiving.
-func (l *Logger) Subscribe() chan struct{} {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	ch := make(chan struct{}, 1)
-	l.subscribers[ch] = true
-	return ch
-}
-
-// Unsubscribe removes a previously registered subscriber channel.
-func (l *Logger) Unsubscribe(ch chan struct{}) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	delete(l.subscribers, ch)
-}
-
-// notifySubscribers sends a non-blocking notification to all subscribers.
-// Must be called with l.mu held.
-func (l *Logger) notifySubscribers() {
-	for ch := range l.subscribers {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
+	line := l.formatEntry(entry) + "\n"
+	if _, err := fmt.Fprint(l.out, line); err != nil {
+		l.writeErr = fmt.Errorf("write log entry: %w", err)
 	}
+}
+
+// Close returns the first write error encountered during logging, if any.
+func (l *Logger) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writeErr
+}
+
+// isVisible reports whether entry should be emitted given the cfg filters.
+func (l *Logger) isVisible(entry Entry) bool {
+	// Unenforced entries are always visible: the user explicitly requested
+	// observation mode, so everything accessed should be shown.
+	if entry.Result == ResultUnenforced {
+		return true
+	}
+	if (entry.Operation == OperationRead || entry.Operation == OperationWrite) && l.isManagedPath(entry.Target) {
+		return false
+	}
+	if !l.cfg.ShowAllowed && entry.Result == ResultOK {
+		return false
+	}
+	return true
+}
+
+// formatEntry returns a formatted log line.
+// Format: %-10s %-7s  %s  (%s)
+// Example: UNENFORCED READ     ~/.ssh/id_rsa  (no-matching-rule)
+func (l *Logger) formatEntry(entry Entry) string {
+	target := entry.Target
+	if (entry.Operation == OperationRead || entry.Operation == OperationWrite) && filepath.IsAbs(target) {
+		target = pathutil.ShortenPath(target, l.cfg.HomeDir, l.cfg.ConfigDir)
+	}
+	return fmt.Sprintf("%-10s %-7s  %s  (%s)", entry.Result, entry.Operation, target, entry.Rule)
 }
 
 func (l *Logger) isManagedPath(path string) bool {
 	cleanPath := filepath.Clean(path)
 
-	for _, dir := range l.managed {
+	for _, dir := range l.cfg.ManagedPaths {
 		if cleanPath == dir || strings.HasPrefix(cleanPath, dir+string(filepath.Separator)) {
 			return true
 		}

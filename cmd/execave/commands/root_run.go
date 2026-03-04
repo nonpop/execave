@@ -2,7 +2,7 @@
 package commands
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"strings"
 
@@ -42,20 +42,21 @@ func rootUsageFunc(cmd *cobra.Command) error {
 		}
 		return nil
 	}
-	usage := `Usage:
+	var usage strings.Builder
+	usage.WriteString(`Usage:
   execave [--config PATH] [--] TARGET_COMMAND [ARG...]
   execave [--config PATH] SUBCOMMAND [flags]
 
 Subcommands:
-`
+`)
 	for _, subcmd := range cmd.Commands() {
 		if subcmd.IsAvailableCommand() || subcmd.Name() == "help" {
-			usage += "  " + subcmd.Name() + strings.Repeat(" ", 16-len(subcmd.Name())) + subcmd.Short + "\n"
+			usage.WriteString("  " + subcmd.Name() + strings.Repeat(" ", 16-len(subcmd.Name())) + subcmd.Short + "\n")
 		}
 	}
-	usage += "\nFlags:\n"
-	usage += cmd.LocalFlags().FlagUsages()
-	cmd.Print(usage)
+	usage.WriteString("\nFlags:\n")
+	usage.WriteString(cmd.LocalFlags().FlagUsages())
+	cmd.Print(usage.String())
 	return nil
 }
 
@@ -68,13 +69,13 @@ var rootCmd = &cobra.Command{
 Runs a target command with bubblewrap-enforced sandbox policy and optional access monitoring.`,
 	Example: `  execave run -- python
   execave -- python
-  execave monitor --output - -- bash -c 'ls /etc'
+  execave monitor --output-path /tmp/access.log -- bash -c 'ls /etc'
   execave config show`,
 	Args:          validateTargetArgv,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(cmd, args, configPath, "", false, false, false)
+		return runCommand(cmd, args)
 	},
 }
 
@@ -85,7 +86,7 @@ var runCmd = &cobra.Command{
 	Args:         validateTargetArgv,
 	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(cmd, args, configPath, "", false, false, false)
+		return runCommand(cmd, args)
 	},
 }
 
@@ -94,30 +95,33 @@ func validateTargetArgv(cmd *cobra.Command, args []string) error {
 	argsLenAtDash := cmd.ArgsLenAtDash()
 	if argsLenAtDash == -1 {
 		if len(args) == 0 {
-			return errors.New("no command specified")
+			return fmt.Errorf("no command specified")
 		}
 		return nil
 	}
 	if argsLenAtDash >= len(args) {
-		return errors.New("no command specified")
+		return fmt.Errorf("no command specified")
 	}
 	return nil
 }
 
-func runCommand(cmd *cobra.Command, args []string, cfgPath, monitor string, showAllowed, showNolog bool, noSandbox bool) error {
-	exitCode, err := run.Run(extractCommand(cmd, args), cfgPath, monitor, showAllowed, showNolog, noSandbox)
+func runCommand(cmd *cobra.Command, args []string) error {
+	targetArgv := args
+	argsLenAtDash := cmd.ArgsLenAtDash()
+	if argsLenAtDash >= 0 {
+		targetArgv = args[argsLenAtDash:]
+	}
+
+	sandboxCfg := run.SandboxConfig{
+		ConfigPath:    configPath,
+		TargetArgv:    targetArgv,
+		MonitorConfig: nil,
+	}
+
+	exitCode, err := run.Run(sandboxCfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("run: %w", err)
 	}
 	os.Exit(exitCode)
 	return nil
-}
-
-// extractCommand extracts the command to run from cobra arguments.
-func extractCommand(cmd *cobra.Command, args []string) []string {
-	argsLenAtDash := cmd.ArgsLenAtDash()
-	if argsLenAtDash == -1 {
-		return args
-	}
-	return args[argsLenAtDash:]
 }

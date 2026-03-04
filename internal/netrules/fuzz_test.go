@@ -37,7 +37,7 @@ func FuzzParse(f *testing.F) {
 	f.Add("http:[::1:443")
 
 	f.Fuzz(func(t *testing.T, input string) {
-		rule, err := ParseAccessRule(input)
+		rule, err := ParseAccessRule(input, "")
 		if err != nil {
 			return
 		}
@@ -55,8 +55,8 @@ func FuzzParse(f *testing.F) {
 			assert.NotZero(t, rule.port.number)
 		}
 
-		assert.NotEmpty(t, rule.rawTarget)
-		assert.NotEmpty(t, rule.rawPort)
+		assert.NotEmpty(t, rule.canonicalTarget)
+		assert.NotEmpty(t, rule.canonicalPort)
 
 		// Target-kind-specific invariants.
 		switch rule.target.kind {
@@ -106,31 +106,33 @@ func FuzzResolve(f *testing.F) {
 		"http:localhost:3000",
 	}
 
-	rules := make([]AccessRule, len(ruleSpecs))
+	rules := make([]Rule, len(ruleSpecs))
 	validRuleStrings := make(map[string]protocol)
 	for i, spec := range ruleSpecs {
 		rules[i] = mustParse(f, spec)
 		validRuleStrings[rules[i].RawRule] = rules[i].protocol
 	}
-	resolver := NewAccessResolver(rules)
+	resolver := NewResolver(rules)
 
 	f.Fuzz(func(t *testing.T, host string, port uint16) {
-		result := resolver.Resolve(ProtocolHTTP, host, port)
+		result := resolver.CheckAccess(ProtocolHTTP, host, port)
 
 		// Allowed results must cite an actual non-none rule.
 		if result.Allowed {
-			assert.NotEqual(t, "no-matching-rule", result.Rule)
-			ruleProto, ok := validRuleStrings[result.Rule]
-			assert.True(t, ok)
-			if ok {
-				assert.NotEqual(t, protocolNone, ruleProto)
+			assert.NotNil(t, result.Rule)
+			if result.Rule != nil {
+				ruleProto, ok := validRuleStrings[*result.Rule]
+				assert.True(t, ok)
+				if ok {
+					assert.NotEqual(t, protocolNone, ruleProto)
+				}
 			}
 		}
 
-		// Denied results must cite either no-matching-rule or a none rule.
+		// Denied results must cite either no rule or a none rule.
 		if !result.Allowed {
-			if result.Rule != "no-matching-rule" {
-				ruleProto, ok := validRuleStrings[result.Rule]
+			if result.Rule != nil {
+				ruleProto, ok := validRuleStrings[*result.Rule]
 				assert.True(t, ok)
 				if ok {
 					assert.Equal(t, protocolNone, ruleProto)
@@ -139,17 +141,16 @@ func FuzzResolve(f *testing.F) {
 		}
 
 		// Determinism: same input must give the same result.
-		result2 := resolver.Resolve(ProtocolHTTP, host, port)
+		result2 := resolver.CheckAccess(ProtocolHTTP, host, port)
 		assert.Equal(t, result, result2)
 	})
 }
 
-func mustParse(f *testing.F, ruleBody string) AccessRule {
+func mustParse(f *testing.F, ruleBody string) Rule {
 	f.Helper()
-	rule, err := ParseAccessRule(ruleBody)
+	rule, err := ParseAccessRule(ruleBody, "")
 	if err != nil {
 		f.Fatalf("parse rule %q: %v", ruleBody, err)
 	}
-	rule.RawRule = "net:" + ruleBody
 	return rule
 }

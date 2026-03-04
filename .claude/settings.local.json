@@ -33,7 +33,8 @@
       "mcp__ide__getDiagnostics",
       "Bash(curl:*)",
       "Bash(strace:*)",
-      "Bash(gcc:*)"
+      "Bash(gcc:*)",
+      "Bash(go:*)"
     ]
   }
 }

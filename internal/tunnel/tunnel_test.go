@@ -13,6 +13,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWrapCommand(t *testing.T) {
+	got := tunnel.WrapCommand("/usr/bin/execave", "/tmp/proxy.sock", []string{"echo", "hello"})
+	assert.Equal(t, []string{"/usr/bin/execave", "network-tunnel", "/tmp/proxy.sock", "--", "echo", "hello"}, got)
+}
+
+func TestWrapCommand_EmptyCommandPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		tunnel.WrapCommand("/usr/bin/execave", "/tmp/proxy.sock", []string{})
+	})
+}
+
 func TestRun_ExitCodePropagation(t *testing.T) {
 	udsPath := startEchoUDS(t)
 

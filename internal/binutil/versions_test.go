@@ -1,4 +1,4 @@
-package sandbox
+package binutil
 
 import (
 	"testing"
@@ -50,15 +50,15 @@ func TestParseBwrapVersion_MissingPatchComponent_Error(t *testing.T) {
 // --- parseStraceVersion ---
 
 func TestParseStraceVersion_ValidFirstLine(t *testing.T) {
-	v, err := parseStraceVersion("strace -- version 6.18\n")
+	v, err := parseStraceVersion("strace -- version 6.19\n")
 	require.NoError(t, err)
-	assert.Equal(t, [2]int{6, 18}, v)
+	assert.Equal(t, [2]int{6, 19}, v)
 }
 
 func TestParseStraceVersion_ValidSecondLine(t *testing.T) {
-	v, err := parseStraceVersion("strace\nversion 6.18 something\n")
+	v, err := parseStraceVersion("strace\nversion 6.19 something\n")
 	require.NoError(t, err)
-	assert.Equal(t, [2]int{6, 18}, v)
+	assert.Equal(t, [2]int{6, 19}, v)
 }
 
 func TestParseStraceVersion_ExtractsFirstMatch(t *testing.T) {
@@ -110,15 +110,15 @@ func TestBwrapCompatLevel_MajorBump_Error(t *testing.T) {
 // --- straceCompatLevel ---
 
 func TestStraceCompatLevel_OlderMinor_Error(t *testing.T) {
-	assert.Equal(t, compatError, straceCompatLevel([2]int{6, 17}))
+	assert.Equal(t, compatError, straceCompatLevel([2]int{6, 18}))
 }
 
 func TestStraceCompatLevel_PinnedVersion_OK(t *testing.T) {
-	assert.Equal(t, compatOK, straceCompatLevel([2]int{6, 18}))
+	assert.Equal(t, compatOK, straceCompatLevel([2]int{6, 19}))
 }
 
 func TestStraceCompatLevel_HigherMinor_Warn(t *testing.T) {
-	assert.Equal(t, compatWarn, straceCompatLevel([2]int{6, 19}))
+	assert.Equal(t, compatWarn, straceCompatLevel([2]int{6, 20}))
 }
 
 func TestStraceCompatLevel_HighMinorStill6x_Warn(t *testing.T) {
