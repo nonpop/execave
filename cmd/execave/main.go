@@ -37,50 +37,98 @@ func main() {
 
 func newRootCommand() *cobra.Command {
 	var configPath string
-	var monitor string
-	var showAllowed bool
-	var showNolog bool
-	var noSandbox bool
 	cmd := &cobra.Command{
-		Use:   "execave [flags] [--] <command>",
+		Use:   "execave [--config PATH] <command>",
 		Short: "Filesystem sandbox for command execution",
 		Long: `execave - Filesystem sandbox for command execution
 
 Wraps command execution with bubblewrap to enforce filesystem access rules.`,
-		Example: `  execave python
-  execave --monitor -- bash -c 'ls /etc'
-  execave --monitor=access.log -- bash -c 'ls /etc'`,
-		Args: func(cmd *cobra.Command, args []string) error {
-			// Check if -- was used
-			argsLenAtDash := cmd.ArgsLenAtDash()
-			if argsLenAtDash == -1 {
-				// No -- found, treat all args as command
-				if len(args) == 0 {
-					return errors.New("no command specified")
-				}
-				return nil
-			}
-			// -- was used, check args after it
-			if argsLenAtDash >= len(args) {
-				return errors.New("no command specified after --")
-			}
-			return nil
-		},
+		Example: `  execave run -- python
+  execave -- python
+  execave monitor --output - -- bash -c 'ls /etc'
+  execave config show`,
+		Args:          validateCommandArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(c *cobra.Command, args []string) error {
-			return runCommand(c, args, configPath, monitor, showAllowed, showNolog, noSandbox)
+			return runCommand(c, args, configPath, "", false, false, false)
 		},
 	}
 
-	cmd.Flags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
-	cmd.Flags().StringVar(&monitor, "monitor", "", "Enable access monitoring. Without a value writes text log to stderr after process exits. With a path writes text log to that file in real-time.")
-	cmd.Flags().Lookup("monitor").NoOptDefVal = "-"
-	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only).")
-	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden).")
-	cmd.Flags().BoolVar(&noSandbox, "no-sandbox", false, "Run without bwrap sandbox (strace monitoring only). Requires --monitor.")
+	cmd.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
+	cmd.AddCommand(newRunCommand(&configPath))
+	cmd.AddCommand(newMonitorCommand(&configPath))
+	cmd.AddCommand(newConfigCommand(&configPath))
 	cmd.AddCommand(newNetworkTunnelCommand())
 
+	return cmd
+}
+
+func validateCommandArgs(cmd *cobra.Command, args []string) error {
+	argsLenAtDash := cmd.ArgsLenAtDash()
+	if argsLenAtDash == -1 {
+		if len(args) == 0 {
+			return errors.New("no command specified")
+		}
+		return nil
+	}
+	if argsLenAtDash >= len(args) {
+		return errors.New("no command specified after --")
+	}
+	return nil
+}
+
+func newRunCommand(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:          "run [--] <command>",
+		Short:        "Run a command in the sandbox",
+		Args:         validateCommandArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCommand(cmd, args, *configPath, "", false, false, false)
+		},
+	}
+}
+
+func newMonitorCommand(configPath *string) *cobra.Command {
+	var outputPath string
+	var showAllowed bool
+	var showNolog bool
+	var noSandbox bool
+
+	cmd := &cobra.Command{
+		Use:          "monitor [flags] [--] <command>",
+		Short:        "Run command with strace-based access monitoring",
+		Args:         validateCommandArgs,
+		SilenceUsage: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			return runCommand(c, args, *configPath, outputPath, showAllowed, showNolog, noSandbox)
+		},
+	}
+
+	cmd.Flags().StringVar(&outputPath, "output", "-", "Text log output path, or '-' to write to stderr after exit")
+	cmd.Flags().BoolVar(&showAllowed, "show-allowed", false, "Include OK entries in text log output (default: denied only).")
+	cmd.Flags().BoolVar(&showNolog, "show-nolog", false, "Include entries matching nolog rules (default: hidden).")
+	cmd.Flags().BoolVar(&noSandbox, "no-sandbox", false, "Run without bwrap sandbox (strace monitoring only).")
+
+	return cmd
+}
+
+func newConfigCommand(configPath *string) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "config",
+		Short:        "Configuration inspection commands",
+		SilenceUsage: true,
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:          "show",
+		Short:        "Show the effective merged configuration as TOML",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return showConfig(*configPath)
+		},
+	})
 	return cmd
 }
 
@@ -131,27 +179,12 @@ func runSandboxed(cmd *cobra.Command, args []string, configPath, monitor string,
 	command := extractCommand(cmd, args)
 
 	if noSandbox && monitor == "" {
-		return 0, errors.New("--no-sandbox requires --monitor")
+		return 0, errors.New("--no-sandbox requires monitor output")
 	}
 
-	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
-	// bwrap is mandatory and re-validated at sandbox launch; if unavailable
-	// here, skip interpreter auto-detection only.
-	var interpPath string
-	if bwrapPath, resolveErr := sandbox.ResolveBwrap(); resolveErr == nil {
-		interpPath = sandbox.InterpreterPath(bwrapPath)
-	}
-	managedPaths := sandbox.ManagedPathsWith(interpPath)
-
-	cfg, err := config.Load(configPath, managedPaths)
+	cfg, absConfigPath, err := loadRuntimeConfig(configPath)
 	if err != nil {
-		return 0, fmt.Errorf("load config from %s: %w", configPath, err)
-	}
-	cfg.InterpreterPath = interpPath
-
-	absConfigPath, err := filepath.Abs(configPath)
-	if err != nil {
-		return 0, fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
+		return 0, err
 	}
 
 	// Prevent SIGINT from terminating the Go process: allows deferred cleanup
@@ -388,4 +421,42 @@ func runMonitoredText(ctx context.Context, cfg *config.Config, rnr *runner.Runne
 		return status.ExitCode, fmt.Errorf("run text log+sandbox: %s", status.Error)
 	}
 	return status.ExitCode, err
+}
+
+func loadRuntimeConfig(configPath string) (*config.Config, string, error) {
+	// Detect ELF interpreter from bwrap to auto-mount the dynamic linker.
+	// bwrap is mandatory and re-validated at sandbox launch; if unavailable
+	// here, skip interpreter auto-detection only.
+	var interpPath string
+	if bwrapPath, resolveErr := sandbox.ResolveBwrap(); resolveErr == nil {
+		interpPath = sandbox.InterpreterPath(bwrapPath)
+	}
+	managedPaths := sandbox.ManagedPathsWith(interpPath)
+
+	cfg, err := config.Load(configPath, managedPaths)
+	if err != nil {
+		return nil, "", fmt.Errorf("load config from %s: %w", configPath, err)
+	}
+	cfg.InterpreterPath = interpPath
+
+	absConfigPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve absolute path for config %s: %w", configPath, err)
+	}
+
+	return cfg, absConfigPath, nil
+}
+
+func showConfig(configPath string) error {
+	cfg, _, err := loadRuntimeConfig(configPath)
+	if err != nil {
+		return err
+	}
+
+	rendered := config.RenderEffectiveTOML(cfg)
+
+	if _, err := io.WriteString(os.Stdout, rendered); err != nil {
+		return fmt.Errorf("write effective config output: %w", err)
+	}
+	return nil
 }

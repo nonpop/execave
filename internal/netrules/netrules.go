@@ -55,12 +55,18 @@ type port struct {
 
 // AccessRule represents a parsed network access rule.
 type AccessRule struct {
-	protocol  protocol
-	target    target
-	port      port
-	RawRule   string // Original rule string including "net:" prefix, set by config layer.
-	rawTarget string // Canonical target pattern for validation identity.
-	rawPort   string // Raw port string ("443" or "*") for validation identity.
+	protocol   protocol
+	target     target
+	port       port
+	RawRule    string // Original rule string including "net:" prefix, set by config layer.
+	rawTarget  string // Canonical target pattern for validation identity.
+	rawPort    string // Raw port string ("443" or "*") for validation identity.
+	SourcePath string // Config file path that produced this rule.
+}
+
+// Identity returns the canonical key used to deduplicate net rules.
+func (r AccessRule) Identity() string {
+	return fmt.Sprintf("%d:%s:%s", r.protocol, r.rawTarget, r.rawPort)
 }
 
 // ParseAccessRule parses an access rule body in the format "action:target:port".
@@ -92,12 +98,13 @@ func ParseAccessRule(ruleBody string) (AccessRule, error) {
 	}
 
 	return AccessRule{
-		protocol:  protocol,
-		target:    parsedTarget,
-		port:      parsedPort,
-		RawRule:   "",
-		rawTarget: rawTarget,
-		rawPort:   rawPort,
+		protocol:   protocol,
+		target:     parsedTarget,
+		port:       parsedPort,
+		RawRule:    "",
+		rawTarget:  rawTarget,
+		rawPort:    rawPort,
+		SourcePath: "",
 	}, nil
 }
 
@@ -352,12 +359,14 @@ func validateNoDuplicateAccessIdentity(rules []AccessRule) error {
 	}
 	seen := make(map[identity]AccessRule)
 	for _, rule := range rules {
-		id := identity{target: rule.rawTarget, port: rule.rawPort}
-		if existing, ok := seen[id]; ok {
-			return fmt.Errorf("duplicate net rule identity (%s, %s): rules %q and %q",
-				rule.rawTarget, rule.rawPort, existing.RawRule, rule.RawRule)
+		ruleID := identity{target: rule.rawTarget, port: rule.rawPort}
+		if existing, ok := seen[ruleID]; ok {
+			return fmt.Errorf("duplicate net rule identity (%s, %s): %s (%q) and %s (%q)",
+				rule.rawTarget, rule.rawPort,
+				existing.RawRule, describeNetRuleSource(existing),
+				rule.RawRule, describeNetRuleSource(rule))
 		}
-		seen[id] = rule
+		seen[ruleID] = rule
 	}
 	return nil
 }
@@ -392,4 +401,11 @@ func validateNoMixedPortAccessPatterns(rules []AccessRule) error {
 		}
 	}
 	return nil
+}
+
+func describeNetRuleSource(rule AccessRule) string {
+	if rule.SourcePath == "" {
+		return "<synthetic>"
+	}
+	return rule.SourcePath
 }

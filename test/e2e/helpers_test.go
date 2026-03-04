@@ -90,31 +90,42 @@ func tomlSection(buf *strings.Builder, key string, values []string) {
 // tomlConfig formats rules as a TOML config file.
 // Rules are grouped by prefix and emitted as flat key sections (fs, net, syscall).
 func tomlConfig(rules []string) []byte {
-	sections := []struct {
-		prefix string
-		key    string
-	}{
-		{"fs:", "fs"},
-		{"net:", "net"},
-		{"syscall:", "syscall"},
-	}
+	// Group rules by prefix
+	fsRules := []string{}
+	netRules := []string{}
+	syscallRules := []string{}
 
-	grouped := make(map[string][]string, len(sections))
 	for _, rule := range rules {
-		for _, s := range sections {
-			if v, ok := strings.CutPrefix(rule, s.prefix); ok {
-				grouped[s.key] = append(grouped[s.key], v)
-				break
-			}
+		switch {
+		case strings.HasPrefix(rule, "fs:"):
+			_, body, _ := strings.Cut(rule, ":")
+			fsRules = append(fsRules, body)
+		case strings.HasPrefix(rule, "net:"):
+			_, body, _ := strings.Cut(rule, ":")
+			netRules = append(netRules, body)
+		case strings.HasPrefix(rule, "syscall:"):
+			_, body, _ := strings.Cut(rule, ":")
+			syscallRules = append(syscallRules, body)
 		}
 	}
 
 	var sb strings.Builder
-	for _, s := range sections {
-		tomlSection(&sb, s.key, grouped[s.key])
-	}
-
+	writeTomlSection(&sb, "fs", fsRules)
+	writeTomlSection(&sb, "net", netRules)
+	writeTomlSection(&sb, "syscall", syscallRules)
 	return []byte(sb.String())
+}
+
+// writeTomlSection emits a TOML array section for the given key and values.
+func writeTomlSection(builder *strings.Builder, key string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	fmt.Fprintf(builder, "%s = [\n", key)
+	for _, v := range values {
+		fmt.Fprintf(builder, "    %q,\n", v)
+	}
+	builder.WriteString("]\n")
 }
 
 func writeConfig(t *testing.T, rules []string) string {
@@ -348,10 +359,11 @@ func (s *scenario) givenRawConfig(content string) {
 // Resets the last result but keeps the config.
 func (s *scenario) whenRun(args ...string) {
 	s.t.Helper()
-	execArgs := make([]string, 0, 4+len(args))
+	execArgs := make([]string, 0, 5+len(args))
 	if s.configPath != "" {
 		execArgs = append(execArgs, "--config", s.configPath)
 	}
+	execArgs = append(execArgs, "run")
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
@@ -361,28 +373,28 @@ func (s *scenario) whenRun(args ...string) {
 // whenRunWithDefaultConfig executes execave without --config, relying on default config location.
 func (s *scenario) whenRunWithDefaultConfig(workDir string, args ...string) {
 	s.t.Helper()
-	execArgs := append([]string{"--"}, args...)
+	execArgs := append([]string{"run", "--"}, args...)
 	result := runExecave(s.t, workDir, execArgs...)
 	s.lastResult = &result
 }
 
-// whenRunTextLog executes execave with --monitor=<monitorArg> for text log tests.
+// whenRunTextLog executes execave monitor mode with --output=<monitorArg> for text log tests.
 func (s *scenario) whenRunTextLog(monitorArg string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
-	execArgs := make([]string, 0, 5+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "--monitor="+monitorArg, "--")
+	execArgs := make([]string, 0, 7+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--output="+monitorArg, "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
 	s.lastResult = &result
 }
 
-// whenRunTextLogWithFlags executes execave with --monitor=- and extra flags.
+// whenRunTextLogWithFlags executes execave monitor mode with --output=- and extra flags.
 func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
-	execArgs := make([]string, 0, 5+len(flags)+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "--monitor=-")
+	execArgs := make([]string, 0, 7+len(flags)+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--output=-")
 	execArgs = append(execArgs, flags...)
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
@@ -390,7 +402,7 @@ func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	s.lastResult = &result
 }
 
-// whenRunNoSandbox executes execave with --no-sandbox but without --monitor.
+// whenRunNoSandbox executes execave with --no-sandbox on root flags.
 func (s *scenario) whenRunNoSandbox(args ...string) {
 	s.t.Helper()
 	execArgs := make([]string, 0, 4+len(args))
@@ -403,8 +415,8 @@ func (s *scenario) whenRunNoSandbox(args ...string) {
 // whenRunNoSandboxMonitorFile executes execave with --no-sandbox --monitor=<file>.
 func (s *scenario) whenRunNoSandboxMonitorFile(monitorFile string, args ...string) {
 	s.t.Helper()
-	execArgs := make([]string, 0, 5+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "--no-sandbox", "--monitor="+monitorFile, "--")
+	execArgs := make([]string, 0, 8+len(args))
+	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--no-sandbox", "--output="+monitorFile, "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
 	s.lastResult = &result

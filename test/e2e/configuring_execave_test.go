@@ -36,6 +36,32 @@ func TestE2E_ConfiguringExecave_CustomConfigPathViaConfig(t *testing.T) {
 	s.thenStdoutContains("hello")
 }
 
+// TestE2E_ConfiguringExecave_ExplicitAndImplicitRunEquivalent tests that explicit
+// run mode and implicit root execution behave equivalently.
+func TestE2E_ConfiguringExecave_ExplicitAndImplicitRunEquivalent(t *testing.T) {
+	s := newScenario(t)
+	s.givenRules()
+
+	explicitResult := runExecave(t, "", "--config", s.configPath, "run", "--", "echo", "hello")
+	implicitResult := runExecave(t, "", "--config", s.configPath, "--", "echo", "hello")
+
+	assertExitCode(t, explicitResult, 0)
+	assertExitCode(t, implicitResult, 0)
+	assert.Equal(t, explicitResult.Stdout, implicitResult.Stdout)
+}
+
+// TestE2E_ConfiguringExecave_MonitorFlagsRejectedOnRun tests that monitor-only flags
+// are rejected on the run subcommand.
+func TestE2E_ConfiguringExecave_MonitorFlagsRejectedOnRun(t *testing.T) {
+	s := newScenario(t)
+	s.givenRules()
+
+	result := runExecave(t, "", "--config", s.configPath, "run", "--show-allowed", "--", "true")
+
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "unknown flag: --show-allowed")
+}
+
 // TestE2E_ConfiguringExecave_MissingConfigFileShowsError tests that a missing config file
 // produces a clear error message.
 func TestE2E_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
@@ -119,7 +145,7 @@ func TestE2E_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.
 	result := runExecave(t, "", "--config", configPath, "--", "true")
 
 	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "config file must not be writable")
+	assert.Contains(t, result.Stderr, "must not be writable")
 }
 
 // TestE2E_ConfiguringExecave_ManagedPathsInRulesRejected tests that rules targeting managed

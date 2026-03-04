@@ -14,6 +14,7 @@ func roRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "ro:" + path,
+		SourcePath: "",
 	}
 }
 
@@ -22,6 +23,7 @@ func rwRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "rw:" + path,
+		SourcePath: "",
 	}
 }
 
@@ -77,7 +79,7 @@ func TestIntegration_DuplicatePathsRejected_DuplicatePathsWithDifferentPermissio
 		rwRule("/home/user"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/config.json", nil)
+	err := fsrules.ValidateAccessRules(rules, []string{"/config.json"}, nil)
 
 	require.ErrorContains(t, err, "duplicate path")
 	require.ErrorContains(t, err, "/home/user")
@@ -89,7 +91,7 @@ func TestIntegration_DuplicatePathsRejected_IdenticalDuplicateRules(t *testing.T
 		roRule("/usr/bin"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/config.json", nil)
+	err := fsrules.ValidateAccessRules(rules, []string{"/config.json"}, nil)
 
 	require.ErrorContains(t, err, "duplicate path")
 	require.ErrorContains(t, err, "/usr/bin")
@@ -102,9 +104,9 @@ func TestIntegration_ConfigFileCannotBeExplicitlyWritable_ConfigFileExplicitlyWr
 		rwRule("/home/user/project/execave.json"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/home/user/project/execave.json", nil)
+	err := fsrules.ValidateAccessRules(rules, []string{"/home/user/project/execave.json"}, nil)
 
-	require.ErrorContains(t, err, "config file must not be writable")
+	require.ErrorContains(t, err, "must not be writable")
 }
 
 // --- Requirement: Managed paths cannot be targeted by rules ---
@@ -114,7 +116,7 @@ func TestIntegration_ManagedPathsCannotBeTargetedByRules_RuleTargetsManagedPathE
 		roRule("/dev"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/config.json", []string{"/dev", "/proc", "/tmp"})
+	err := fsrules.ValidateAccessRules(rules, []string{"/config.json"}, []string{"/dev", "/proc", "/tmp"})
 
 	require.ErrorContains(t, err, "managed path")
 	require.ErrorContains(t, err, "/dev")
@@ -125,7 +127,7 @@ func TestIntegration_ManagedPathsCannotBeTargetedByRules_RuleTargetsDescendantOf
 		rwRule("/proc/self/status"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/config.json", []string{"/dev", "/proc", "/tmp"})
+	err := fsrules.ValidateAccessRules(rules, []string{"/config.json"}, []string{"/dev", "/proc", "/tmp"})
 
 	require.ErrorContains(t, err, "managed path")
 	require.ErrorContains(t, err, "/proc")
@@ -136,7 +138,7 @@ func TestIntegration_ManagedPathsCannotBeTargetedByRules_PathWithManagedPrefixIn
 		roRule("/home/user/dev"),
 	}
 
-	err := fsrules.ValidateAccessRules(rules, "/config.json", []string{"/dev", "/proc", "/tmp"})
+	err := fsrules.ValidateAccessRules(rules, []string{"/config.json"}, []string{"/dev", "/proc", "/tmp"})
 
 	assert.NoError(t, err)
 }
@@ -193,7 +195,7 @@ func TestIntegration_TildeExpandedPathsParticipateInValidation_TildeAndAbsoluteP
 		roRule(homeDir + "/project"),
 	}
 
-	err = fsrules.ValidateAccessRules(rules, "/config.toml", nil)
+	err = fsrules.ValidateAccessRules(rules, []string{"/config.toml"}, nil)
 
 	require.ErrorContains(t, err, "duplicate path")
 }
@@ -210,7 +212,7 @@ func TestIntegration_TildeExpandedPathsParticipateInValidation_TildePathAndEquiv
 
 	rules := []fsrules.AccessRule{tildeRule, relRule}
 
-	err = fsrules.ValidateAccessRules(rules, "/config.toml", nil)
+	err = fsrules.ValidateAccessRules(rules, []string{"/config.toml"}, nil)
 
 	require.ErrorContains(t, err, "duplicate path")
 	require.ErrorContains(t, err, homeDir+"/project")
@@ -224,9 +226,9 @@ func TestIntegration_TildeExpandedPathsParticipateInValidation_TildePathTargetin
 	rule, err := fsrules.ParseAccessRule("rw:~/myproject/execave.toml", "/")
 	require.NoError(t, err)
 
-	err = fsrules.ValidateAccessRules([]fsrules.AccessRule{rule}, configPath, nil)
+	err = fsrules.ValidateAccessRules([]fsrules.AccessRule{rule}, []string{configPath}, nil)
 
-	require.ErrorContains(t, err, "config file must not be writable")
+	require.ErrorContains(t, err, "must not be writable")
 }
 
 // --- Requirement: Most specific rule wins ---
@@ -293,11 +295,11 @@ func TestIntegration_LogRuleSyntaxValidation_RelativePathResolutionInLogRule(t *
 // --- Requirement: Log rule validation ---
 
 func nologRule(path string) fsrules.LogRule {
-	return fsrules.LogRule{Visible: false, Path: path, RawRule: "nolog:" + path}
+	return fsrules.LogRule{Visible: false, Path: path, RawRule: "nolog:" + path, SourcePath: ""}
 }
 
 func logRule(path string) fsrules.LogRule {
-	return fsrules.LogRule{Visible: true, Path: path, RawRule: "log:" + path}
+	return fsrules.LogRule{Visible: true, Path: path, RawRule: "log:" + path, SourcePath: ""}
 }
 
 func TestIntegration_LogRuleValidation_DuplicateLogRulePathsRejected(t *testing.T) {

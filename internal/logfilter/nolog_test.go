@@ -22,7 +22,7 @@ func TestIsNolog_FSWrite_NilResolver_ReturnsFalse(t *testing.T) {
 
 func TestIsNolog_FSRead_VisibleEntry_ReturnsFalse(t *testing.T) {
 	resolver := fsrules.NewLogResolver([]fsrules.LogRule{
-		{Visible: true, Path: "/home/user/project", RawRule: "fs:log:/home/user/project"},
+		{Visible: true, Path: "/home/user/project", RawRule: "fs:log:/home/user/project", SourcePath: ""},
 	})
 	entry := accesslog.Entry{Operation: accesslog.OperationRead, Target: "/home/user/project/main.go", Result: accesslog.ResultOK, Rule: "fs:ro:/home/user"}
 	assert.False(t, IsNolog(entry, resolver, nil, nil))
@@ -30,7 +30,7 @@ func TestIsNolog_FSRead_VisibleEntry_ReturnsFalse(t *testing.T) {
 
 func TestIsNolog_FSRead_NologEntry_ReturnsTrue(t *testing.T) {
 	resolver := fsrules.NewLogResolver([]fsrules.LogRule{
-		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache"},
+		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache", SourcePath: ""},
 	})
 	entry := accesslog.Entry{Operation: accesslog.OperationRead, Target: "/home/user/project/cache/data.bin", Result: accesslog.ResultOK, Rule: "fs:ro:/home/user"}
 	assert.True(t, IsNolog(entry, resolver, nil, nil))

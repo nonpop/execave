@@ -64,7 +64,7 @@ func TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented(t *testing.
 	s.whenRun("sh", "-c", "echo '{}' > "+configPath)
 
 	s.thenExitCodeNonZero()
-	s.thenStderrContains("execave: config file forced read-only")
+	s.thenStderrContains("forced read-only")
 	s.thenStderrContains("execave.toml: Read-only file system")
 
 	s.whenRun("sh", "-c", "echo modified >> "+otherFile)
@@ -148,7 +148,7 @@ func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing
 	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
 	configPath := writeConfig(t, []string{"fs:ro:/usr"})
-	result := runExecave(t, "", "--config", configPath, "--monitor=-", "--", "true")
+	result := runExecave(t, "", "--config", configPath, "monitor", "--output=-", "--", "true")
 
 	assert.NotEqual(t, 0, result.ExitCode)
 	assert.Contains(t, result.Stderr, "not owned by root")

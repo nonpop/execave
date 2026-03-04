@@ -61,7 +61,7 @@ func TestIntegration_TextLog_OKEntriesShownWithShowAllowed(t *testing.T) {
 
 func TestIntegration_TextLog_NologEntriesHiddenByDefault(t *testing.T) {
 	fsRes := fsrules.NewLogResolver([]fsrules.LogRule{
-		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache"},
+		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache", SourcePath: ""},
 	})
 	entries := []accesslog.Entry{
 		{Operation: accesslog.OperationRead, Target: "/home/user/project/cache/data.bin", Result: accesslog.ResultDeny, Rule: "no-matching-rule"},
@@ -75,7 +75,7 @@ func TestIntegration_TextLog_NologEntriesHiddenByDefault(t *testing.T) {
 
 func TestIntegration_TextLog_NologEntriesShownWithShowNolog(t *testing.T) {
 	fsRes := fsrules.NewLogResolver([]fsrules.LogRule{
-		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache"},
+		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache", SourcePath: ""},
 	})
 	entries := []accesslog.Entry{
 		{Operation: accesslog.OperationRead, Target: "/home/user/project/cache/data.bin", Result: accesslog.ResultDeny, Rule: "no-matching-rule"},
@@ -87,7 +87,7 @@ func TestIntegration_TextLog_NologEntriesShownWithShowNolog(t *testing.T) {
 
 func TestIntegration_TextLog_IndependentFilterAxes_ShowAllowedDoesNotEnableNolog(t *testing.T) {
 	fsRes := fsrules.NewLogResolver([]fsrules.LogRule{
-		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache"},
+		{Visible: false, Path: "/home/user/project/cache", RawRule: "fs:nolog:/home/user/project/cache", SourcePath: ""},
 	})
 	entries := []accesslog.Entry{
 		// OK entry that is also nolog — should appear when showAllowed but not showNolog

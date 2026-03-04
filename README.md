@@ -14,7 +14,7 @@ sudo apt install bubblewrap strace
 go install ./cmd/execave
 
 # Run
-execave --config execave.toml.example -- ls -la
+execave --config execave.toml.example run -- ls -la
 
 # If execave command not found, add Go's bin directory to PATH:
 export PATH="$PATH:$(go env GOPATH)/bin"
@@ -56,19 +56,23 @@ net = [
 
 **Intra-sandbox servers:** execave injects `HTTP_PROXY` into the sandboxed process's environment. HTTP clients route all connections—including to `localhost`—through the host-side proxy, which cannot reach servers inside the sandbox's network namespace. To connect to an intra-sandbox server, bypass the proxy: set `NO_PROXY=localhost,127.0.0.1`.
 
-**Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `--monitor` to narrow down what's actually needed.
+**Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `monitor` to narrow down what's actually needed.
 
 **Note on `fs:none`:** Directories are replaced with an empty tmpfs (in-memory). More specific rules can override this—`fs:rw` under `fs:none` writes to the real filesystem. Writes to the tmpfs itself are ephemeral. Files use `/dev/null` and return permission denied.
 
 See `execave.toml.example` for a comprehensive config that supports most standard tools.
 
-### Building your config with --monitor
+### Layered configs via extends
 
-You're not expected to know every path a command needs upfront. Use `--monitor` to trace filesystem and network access. Two output modes are available:
+Configs can load additional files with `extends = ["../base/execave.toml", "~/shared/execave.toml"]`. Each path is expanded (absolute paths stay absolute, relative paths resolve next to the extending file, and `~` expands to the invoking user’s home directory).
+
+### Building your config with monitor
+
+You're not expected to know every path a command needs upfront. Use `monitor` to trace filesystem and network access. Two output modes are available:
 
 ```bash
-execave --monitor -- your-command            # text log to stderr (buffered until exit)
-execave --monitor=access.log -- your-command # text log to file (real-time, tailable)
+execave monitor -- your-command                       # text log to stderr (buffered until exit)
+execave monitor --output access.log -- your-command   # text log to file (real-time, tailable)
 ```
 
 Both modes write one entry per line:
@@ -81,21 +85,32 @@ Both modes write one entry per line:
 | HTTP | api.example.com:443 | OK | http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
-The file mode (`--monitor=<path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (`--monitor` or `--monitor=-`) buffers until the process exits, then writes to stderr.
+The file mode (`monitor --output <path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (default) buffers until the process exits, then writes to stderr.
 
-**Filter flags** control which entries appear in the output:
+**Filter flags** on `monitor` control which entries appear in the output:
 - `--show-allowed`: include OK (allowed) entries. Default: denied only.
 - `--show-nolog`: include entries matching `nolog` rules. Default: hidden.
 
-**Workflow:** Start with `execave.toml.example`, run with `--monitor`, check for DENY entries (filesystem paths are shown in shortened form relative to the config directory or home), edit the config, grant only what's necessary, repeat.
+**Workflow:** Start with `execave.toml.example`, run with `monitor`, check for DENY entries (filesystem paths are shown in shortened form relative to the config directory or home), edit the config, grant only what's necessary, repeat.
+
+### Inspect effective layered config
+
+Use `config show` to inspect the merged effective config that `run` and `monitor` enforce:
+
+```bash
+execave config show
+execave --config /path/to/execave.toml config show
+```
+
+The output is TOML with `fs`, `net`, and `syscall` sections plus `# source: ...` comments for each emitted rule.
 
 ## Seccomp
 
-A BPF deny-list blocks dangerous syscalls by default. With `--monitor`, blocked attempts appear as `SYSCALL` entries in the access log.
+A BPF deny-list blocks dangerous syscalls by default. With `monitor`, blocked attempts appear as `SYSCALL` entries in the access log.
 
 To allow a specific syscall, add `syscall:allow:<name>` to your config. To hide a syscall from the monitor log, add `syscall:nolog:<name>`.
 
-**Note:** When `--monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, `syscall:allow:ptrace` will not make ptrace usable inside the sandbox.
+**Note:** When `monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, `syscall:allow:ptrace` will not make ptrace usable inside the sandbox.
 
 **Blocked syscalls:**
 
@@ -103,7 +118,7 @@ To allow a specific syscall, add `syscall:allow:<name>` to your config. To hide 
 
 ## Requirements
 
-- Linux, Go 1.25+, `bubblewrap` 0.11.x, `strace` 6.18 (for `--monitor`)
+- Linux, Go 1.25+, `bubblewrap` 0.11.x, `strace` 6.18 (for `monitor`)
 
 Execave pins to specific known-good versions of `bwrap` and `strace` and checks the installed versions at startup. Older versions or major-version bumps cause execave to exit with an error; newer minor versions within the same major series print a warning but continue.
 

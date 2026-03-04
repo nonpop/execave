@@ -184,7 +184,7 @@ func TestIntegration_ParseRules_ConfigWritabilityRejected(t *testing.T) {
 		"/home/user", "/home/user/execave.toml", nil,
 	)
 
-	assert.ErrorContains(t, err, "config file must not be writable")
+	assert.ErrorContains(t, err, "must not be writable")
 }
 
 func TestIntegration_ParseRules_NonAbsoluteConfigPathPanics(t *testing.T) {
@@ -293,4 +293,37 @@ net = ["http:api.example.com:443"]`)
 	assert.Equal(t, loadedCfg.FSRules[0].Permission, parsedCfg.FSRules[0].Permission)
 	assert.Equal(t, loadedCfg.FSRules[0].RawRule, parsedCfg.FSRules[0].RawRule)
 	assert.Equal(t, loadedCfg.ManagedPaths, parsedCfg.ManagedPaths)
+}
+
+func TestIntegration_RenderEffectiveTOML_TypedSectionsAndSourceComments(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	rootPath := filepath.Join(dir, "execave.toml")
+
+	baseContent := `fs = ["ro:/usr", "nolog:/usr/share/doc"]
+net = ["http:api.example.com:443", "nolog:telemetry.example.com:*"]
+syscall = ["allow:ptrace", "nolog:bpf"]`
+	rootContent := `extends = ["base.toml"]
+fs = ["rw:./workspace"]
+net = ["none:blocked.example.com:443"]
+syscall = ["allow:reboot"]`
+
+	require.NoError(t, os.WriteFile(basePath, []byte(baseContent), 0o600))
+	require.NoError(t, os.WriteFile(rootPath, []byte(rootContent), 0o600))
+
+	cfg, err := config.Load(rootPath, nil)
+	require.NoError(t, err)
+
+	rendered := config.RenderEffectiveTOML(cfg)
+
+	assert.Contains(t, rendered, "fs = [")
+	assert.Contains(t, rendered, "net = [")
+	assert.Contains(t, rendered, "syscall = [")
+	assert.Contains(t, rendered, "  # "+basePath+"\n  \"ro:/usr\",")
+	assert.Contains(t, rendered, "\"nolog:/usr/share/doc\",\n\n  # "+rootPath+"\n  \"rw:"+filepath.Join(dir, "workspace")+"\",")
+	assert.Contains(t, rendered, "\"http:api.example.com:443\",")
+	assert.Contains(t, rendered, "\"none:blocked.example.com:443\",")
+	assert.Contains(t, rendered, "\"allow:ptrace\",")
+	assert.Contains(t, rendered, "\"allow:reboot\",")
+	assert.Contains(t, rendered, "\"nolog:bpf\",")
 }

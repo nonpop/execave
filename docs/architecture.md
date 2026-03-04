@@ -52,7 +52,7 @@ flowchart TB
 
 ### Config (`internal/config/`)
 
-Loads TOML configuration with typed rule sections (`fs`, `net`, `syscall`) and routes rules to domain-specific parsers. Thin layer focused on TOML parsing and rule routing. The default config filename is `execave.toml`. Rules within each section are prefixed with the resource type internally and passed to their respective validators.
+Loads TOML configuration with typed rule sections (`fs`, `net`, `syscall`) and routes rules to domain-specific parsers. Supports `extends` chains that resolve absolute, relative (to the extending file), or `~`-prefixed paths, reject cycles, validate each file independently, and track provenance so merged rules can point back to their original files before deduplication and validation. Also renders effective merged TOML (for `config show`) with per-rule source comments. Thin layer focused on TOML parsing, rule routing, and effective-config rendering. The default config filename is `execave.toml`. Rules within each section are prefixed with the resource type internally and passed to their respective validators.
 
 ### FS Rules (`internal/fsrules/`)
 
@@ -78,7 +78,7 @@ Shared display logic used by the text log: `ShortenPath` reduces absolute paths 
 
 ### Text Log (`internal/textlog/`)
 
-Monitor output mode. `Writer` subscribes to an `accesslog.Logger`, applies denied-only and nolog filters (controlled by `showAllowed`/`showNolog` constructor parameters), and writes one line per entry in `%-7s %-5s  %s  (%s)` format (result, operation, shortened target, rule). Used by the CLI when `--monitor=<path>` or `--monitor=-` is specified. Performs a final drain on context cancellation to capture entries generated after the last notification.
+Monitor output mode. `Writer` subscribes to an `accesslog.Logger`, applies denied-only and nolog filters (controlled by `showAllowed`/`showNolog` constructor parameters), and writes one line per entry in `%-7s %-5s  %s  (%s)` format (result, operation, shortened target, rule). Used by the CLI `monitor` command. Performs a final drain on context cancellation to capture entries generated after the last notification.
 
 ### Sandbox (`internal/sandbox/`)
 
@@ -120,14 +120,15 @@ TCP-to-UDS bridge running inside sandbox (untrusted side). Listens on loopback, 
 
 ### Monitor (`internal/monitor/`)
 
-Optional filesystem and syscall access tracer (`--monitor`). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. When seccomp is enabled, also traces blocked and allowed syscalls and logs them as `SYSCALL` entries. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for text log output. Note: strace uses ptrace, so if monitoring is enabled, the sandboxed process cannot use ptrace even if allowed by config (see security-model.md Limitations).
+Optional filesystem and syscall access tracer (CLI `monitor` command). Wraps sandbox execution with strace, parses syscalls, and logs filesystem access with rule attribution. When seccomp is enabled, also traces blocked and allowed syscalls and logs them as `SYSCALL` entries. Tracks per-pid cwd from AT_FDCWD annotations, chdir, and fchdir to resolve bare-path relative syscalls. Filters infrastructure noise and resolves symlinks using filesystem rules. Logs to memory for text log output. Note: strace uses ptrace, so if monitoring is enabled, the sandboxed process cannot use ptrace even if allowed by config (see security-model.md Limitations).
 
 ## Data Flow
 
-**Startup:** CLI parses args → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → starts proxy → creates runner (if `--monitor`) → dispatches by monitor mode:
-- `--monitor=<path>`: creates `textlog.Writer` writing to file, calls `runner.Start()`, runs writer goroutine until process exits
-- `--monitor=-` or bare `--monitor`: same as file mode but writes to a buffer, flushed to stderr after exit
-- no `--monitor`: executes `bwrap` directly (no runner, no monitor)
+**Startup:** CLI parses args (`run`, `monitor`, or `config show`) with global `--config` → loads config (routes rules to `fsrules` and `netrules`) → creates resolvers → starts proxy → dispatches by command:
+- `run`: executes `bwrap` directly (no runner, no monitor)
+- `monitor --output <path>`: creates `textlog.Writer` writing to file, calls `runner.Start()`, runs writer goroutine until process exits
+- `monitor` without flags: same as file mode but writes to a buffer, flushed to stderr after exit
+- `config show`: renders effective merged TOML with source comments, no sandbox execution
 
 **Runtime:** Kernel enforces namespace isolation (mount, PID, IPC, network). Inside the sandbox, the tunnel listens on loopback and bridges TCP to the proxy UDS. `HTTP_PROXY`/`HTTPS_PROXY` are injected. The proxy checks each request against net rules (deny-all if none configured) and forwards or denies. Both monitor (filesystem) and proxy (network) log to the same `accesslog`. If monitoring enabled, output goes to text log.
 
@@ -136,5 +137,4 @@ Optional filesystem and syscall access tracer (`--monitor`). Wraps sandbox execu
 ## Dependencies
 
 - `bwrap` (required)
-- `strace` (`--monitor` only)
-
+- `strace` (`monitor` command only)

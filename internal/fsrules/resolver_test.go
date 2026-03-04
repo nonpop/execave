@@ -44,6 +44,7 @@ func fsRule(permission Permission, path string) AccessRule {
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
+		SourcePath: "",
 	}
 }
 

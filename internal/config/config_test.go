@@ -28,6 +28,14 @@ func writeTestConfig(t *testing.T, content string) string {
 	return configPath
 }
 
+func writeConfigFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	err := os.WriteFile(path, []byte(content), 0o600)
+	require.NoError(t, err)
+	return path
+}
+
 func TestLoad_ValidConfig(t *testing.T) {
 	cfg, err := loadTestConfig(t, `fs = [
 	"ro:/usr/bin",
@@ -75,6 +83,106 @@ func TestLoad_HasNoNetRules(t *testing.T) {
 	cfg, err := loadTestConfig(t, `fs = ["ro:/usr/bin"]`)
 	require.NoError(t, err)
 	assert.False(t, cfg.HasNetRules())
+}
+
+func TestLoad_ExtendsRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	basePath := writeConfigFile(t, dir, "base.toml", `fs = ["ro:/usr/bin"]`)
+	rootContent := `
+extends = ["base.toml"]
+fs = ["ro:/home/project"]
+`
+	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
+
+	cfg, err := config.Load(rootPath, nil)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 2)
+	assert.Equal(t, []string{basePath, rootPath}, cfg.ConfigPaths)
+}
+
+func TestLoad_ExtendsCycleDetected(t *testing.T) {
+	dir := t.TempDir()
+	aPath := writeConfigFile(t, dir, "a.toml", `extends = ["b.toml"]`)
+	writeConfigFile(t, dir, "b.toml", `extends = ["a.toml"]`)
+
+	_, err := config.Load(aPath, nil)
+	require.ErrorContains(t, err, "cycle detected")
+}
+
+func TestLoad_ExtendsTildeExpansion(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	writeConfigFile(t, homeDir, "shared.toml", `fs = ["ro:/etc/shared"]`)
+
+	rootDir := t.TempDir()
+	rootContent := `
+extends = ["~/shared.toml"]
+fs = ["ro:/var/log"]
+`
+	rootPath := writeConfigFile(t, rootDir, "execave.toml", rootContent)
+
+	cfg, err := config.Load(rootPath, nil)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 2)
+	assert.Equal(t, []string{filepath.Join(homeDir, "shared.toml"), rootPath}, cfg.ConfigPaths)
+}
+
+func TestLoad_DuplicateRulesAcrossLayersDeduped(t *testing.T) {
+	dir := t.TempDir()
+	writeConfigFile(t, dir, "base.toml", `fs = ["ro:/usr/bin"]`)
+	rootContent := `
+extends = ["base.toml"]
+fs = ["ro:/usr/bin"]
+`
+	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
+
+	cfg, err := config.Load(rootPath, nil)
+	require.NoError(t, err)
+	assert.Len(t, cfg.FSRules, 1)
+}
+
+func TestLoad_ConflictingRulesAcrossLayersRejected(t *testing.T) {
+	dir := t.TempDir()
+	basePath := writeConfigFile(t, dir, "base.toml", `fs = ["ro:/etc/config"]`)
+	rootContent := `
+extends = ["base.toml"]
+fs = ["rw:/etc/config"]
+`
+	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
+
+	_, err := config.Load(rootPath, nil)
+	require.ErrorContains(t, err, "duplicate path")
+	require.ErrorContains(t, err, basePath)
+	assert.ErrorContains(t, err, rootPath)
+}
+
+func TestLoad_RuleMakingExtendedConfigWritableRejected(t *testing.T) {
+	dir := t.TempDir()
+	basePath := writeConfigFile(t, dir, "base.toml", `fs = ["ro:/etc/config"]`)
+	rootContent := `
+extends = ["base.toml"]
+fs = ["rw:` + basePath + `"]
+`
+	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
+
+	_, err := config.Load(rootPath, nil)
+	require.ErrorContains(t, err, "must not be writable")
+	require.ErrorContains(t, err, basePath)
+	assert.ErrorContains(t, err, rootPath)
+}
+
+func TestLoad_SyscallDuplicatesAcrossLayersDeduped(t *testing.T) {
+	dir := t.TempDir()
+	writeConfigFile(t, dir, "base.toml", `syscall = ["allow:ptrace"]`)
+	rootContent := `
+extends = ["base.toml"]
+syscall = ["allow:ptrace"]
+`
+	rootPath := writeConfigFile(t, dir, "execave.toml", rootContent)
+
+	cfg, err := config.Load(rootPath, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ptrace"}, cfg.SyscallAllowRules)
 }
 
 func TestLoad_InvalidNetRule(t *testing.T) {
@@ -214,7 +322,7 @@ func TestParseRules_ConfigWritabilityRejected(t *testing.T) {
 		[]string{"fs:rw:/home/user/execave.toml"},
 		"/home/user", "/home/user/execave.toml", nil,
 	)
-	assert.ErrorContains(t, err, "config file must not be writable")
+	assert.ErrorContains(t, err, "must not be writable")
 }
 
 func TestParseRules_ManagedPathsStoredInConfig(t *testing.T) {
@@ -347,7 +455,7 @@ func TestValidate_ConfigFileExplicitlyWritable_Rejected(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = config.Load(configPath, nil)
-	require.ErrorContains(t, err, "config file must not be writable")
+	require.ErrorContains(t, err, "must not be writable")
 }
 
 func TestValidate_ManagedPath_Rejected(t *testing.T) {

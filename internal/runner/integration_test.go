@@ -414,20 +414,23 @@ func newRunnerTestEnv(t *testing.T) *runnerTestEnv {
 	paths := []string{"/usr", "/lib", "/lib64", "/bin", "/sbin"}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err == nil {
-			rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: p, RawRule: "fs:ro:" + p})
+			rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: p, RawRule: "fs:ro:" + p, SourcePath: ""})
 		}
 	}
-	rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: tmpDir, RawRule: "fs:ro:" + tmpDir})
+	rules = append(rules, fsrules.AccessRule{Permission: fsrules.PermissionReadOnly, Path: tmpDir, RawRule: "fs:ro:" + tmpDir, SourcePath: ""})
 
 	cfg := &config.Config{
-		FSRules:           rules,
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
-		InterpreterPath:   "",
+		FSRules:                 rules,
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	absConfigPath := filepath.Join(tmpDir, "execave.json")
@@ -484,14 +487,17 @@ func TestIntegration_NoSandbox_CommandRunsWithoutBwrap(t *testing.T) {
 	require.NoError(t, os.WriteFile(testFile, []byte("hello"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{{Permission: fsrules.PermissionReadOnly, Path: absTmpDir, RawRule: "fs:ro:" + absTmpDir}},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{{Permission: fsrules.PermissionReadOnly, Path: absTmpDir, RawRule: "fs:ro:" + absTmpDir, SourcePath: ""}},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	absConfigPath := filepath.Join(absTmpDir, "execave.json")
 
@@ -530,37 +536,22 @@ func TestIntegration_NoSandbox_BlockedSyscallLogged(t *testing.T) {
 	_, err := exec.LookPath("strace")
 	require.NoError(t, err)
 
-	// Build a tiny helper binary that calls ptrace(PTRACE_TRACEME).
-	// The call returns EPERM when already traced by strace, but strace
-	// still reports the syscall entry, so the monitor can log it.
-	helperSrc := `package main
-
-import "syscall"
-
-func main() {
-	//nolint:errcheck
-	syscall.RawSyscall(syscall.SYS_PTRACE, uintptr(syscall.PTRACE_TRACEME), 0, 0)
-}
-`
-	tmpDir := t.TempDir()
-	srcFile := filepath.Join(tmpDir, "main.go")
-	require.NoError(t, os.WriteFile(srcFile, []byte(helperSrc), 0o600))
-	helperBin := filepath.Join(tmpDir, "ptrace-helper")
-	buildCmd := exec.Command("go", "build", "-o", helperBin, srcFile) //nolint:gosec // test-controlled args
-	buildOut, buildErr := buildCmd.CombinedOutput()
-	require.NoError(t, buildErr, string(buildOut))
+	helperBin := buildPtraceHelper(t)
 
 	cfg := &config.Config{
-		FSRules:           nil,
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
-		InterpreterPath:   "",
+		FSRules:                 nil,
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
-	absConfigPath := filepath.Join(tmpDir, "execave.json")
+	absConfigPath := filepath.Join(t.TempDir(), "execave.json")
 	rnr := runner.New(cfg, absConfigPath, nil, true)
 	ctx := context.Background()
 
@@ -603,14 +594,17 @@ func TestIntegration_NoSandbox_SeccompNotApplied(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
-		FSRules:           nil,
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
-		InterpreterPath:   "",
+		FSRules:                 nil,
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	absConfigPath := filepath.Join(tmpDir, "execave.json")
 	rnr := runner.New(cfg, absConfigPath, nil, true)
@@ -666,14 +660,17 @@ func TestIntegration_NoSandbox_HTTPProxyInjectedWhenNetPathConfigured(t *testing
 	}
 
 	cfg := &config.Config{
-		FSRules:           nil,
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{"/dev", "/proc", "/sys", "/tmp"},
-		InterpreterPath:   "",
+		FSRules:                 nil,
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{"/dev", "/proc", "/sys", "/tmp"},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	tmpDir := t.TempDir()
@@ -703,6 +700,29 @@ func TestIntegration_NoSandbox_HTTPProxyInjectedWhenNetPathConfigured(t *testing
 	status := rnr.Status()
 	assert.Equal(t, 0, status.ExitCode)
 	assert.Empty(t, status.Error)
+}
+
+// buildPtraceHelper compiles a small binary that calls ptrace(PTRACE_TRACEME)
+// and returns its path. The binary is placed in a t.TempDir().
+func buildPtraceHelper(t *testing.T) string {
+	t.Helper()
+	const helperSrc = `package main
+
+import "syscall"
+
+func main() {
+//nolint:errcheck
+syscall.RawSyscall(syscall.SYS_PTRACE, uintptr(syscall.PTRACE_TRACEME), 0, 0)
+}
+`
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "main.go")
+	require.NoError(t, os.WriteFile(srcFile, []byte(helperSrc), 0o600))
+	helperBin := filepath.Join(tmpDir, "ptrace-helper")
+	buildCmd := exec.Command("go", "build", "-o", helperBin, srcFile) //nolint:gosec // test-controlled args
+	buildOut, buildErr := buildCmd.CombinedOutput()
+	require.NoError(t, buildErr, string(buildOut))
+	return helperBin
 }
 
 // --- Requirement: strace/bwrap version check (via sandbox functions) ---

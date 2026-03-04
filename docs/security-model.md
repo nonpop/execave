@@ -43,7 +43,7 @@ flowchart LR
 | Unlisted paths inaccessible | Default-deny (see architecture.md for mount details) |
 | `..` traversal blocked | `filepath.Clean()` at config parse time |
 | Symlinks can't escape | Target outside namespace → dangling |
-| Config file protected | Config error if explicit; forced read-only if inherited from parent |
+| Config files protected | Rules are merged across the full extends stack, merged validation rejects any `fs:rw` rule that targets any layered config file path, and runtime adds forced read-only overlays when inherited rules still resolve a config file path as writable. |
 | Sandboxed process can't see host processes | PID namespace isolation |
 | Sandboxed process can't signal host processes | PID namespace isolation |
 | Sandboxed process can't share memory with host | IPC namespace isolation |
@@ -72,7 +72,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Path traversal (`../`) | Normalized before sandbox creation | Normalization bugs (fuzz tested) |
 | TOCTOU race | Kernel enforcement, no userspace check | None |
 | Lateral movement | Separate sandboxes per agent | Shared directory misconfiguration |
-| Config tampering | Config error if explicit rw; forced read-only if inherited | Deletion = DoS only |
+| Config tampering | Merged config validation rejects writable rules that target any layered config file; runtime force-overlays each config file as read-only when inherited permissions would otherwise allow writes | Deletion = DoS only |
 | Process enumeration | PID namespace - only sees own processes | None |
 | Kill/signal host processes | PID namespace - host PIDs don't exist | None |
 | Shared memory exploitation | IPC namespace isolation | None |
@@ -94,7 +94,7 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 | Rule resolution | Wrong permission | Longest prefix matching algorithm | Fuzz tests + unit tests + e2e tests |
 | bwrap args | Missing bind, wrong flags | Declarative mount generation | Unit tests + e2e tests |
 | Mount ordering | Conflicting permissions | Parents first; children overlay | Integration tests + e2e tests |
-| Config protection | Future-run escalation | Config validation rejects explicit rw; rule resolver determines inherited permission; synthetic ro rule overlays | Unit tests + e2e tests |
+| Config protection | Future-run escalation | Per-file parsing + merged validation: each config is parsed independently, then merged fs validation rejects `rw` access to any layered config file path; sandbox mount generation computes effective permissions after merge and overlays every writable config path as `ro`. | Unit tests + e2e tests |
 | Net rule resolution | Wrong allow/deny | Single-dimension target specificity: domains (exact > wildcard), IPs (longer CIDR prefix > shorter) | Fuzz tests + unit tests + e2e tests |
 | Proxy allowlist | Unauthorized access | Default-deny; protocol+target+port matching via net rules | Unit tests + e2e tests |
 | Binary validation | Fake bwrap/strace bypasses sandbox | Lstat root-ownership check (uid 0) on path entry (blocks symlink injection) + Stat root-ownership and write-bit check (mode & 0022 == 0) on resolved target; strace is validated because it wraps bwrap from outside (unsandboxed, full host access) | Unit tests |
@@ -104,8 +104,9 @@ This ensures complete visibility: the config file shows the **entire** filesyste
 ## Safe Usage
 
 - **Config:** Version control. Minimal permissions. Only mount necessary secrets as fs:ro (never fs:rw).
-- **Testing:** Use `--monitor` to audit actual access patterns before trusting a config.
-- **Incident:** Check file modifications (timestamps, git status) → review config → assess if access was excessive. (`--monitor` too expensive for regular use, so syscall logs typically unavailable.)
+- **Testing:** Use `monitor` to audit actual access patterns before trusting a config.
+- **Inspection:** Use `config show` to inspect effective merged rules and provenance comments; this output is display-only and does not change enforcement.
+- **Incident:** Check file modifications (timestamps, git status) → review config → assess if access was excessive. (`monitor` is too expensive for regular use, so syscall logs typically unavailable.)
 
 ## Seccomp Visibility
 
@@ -147,5 +148,5 @@ These rules carry no security impact. Using `fs:nolog:/some/dir` to suppress ent
 - Monitor logs `UNKNOWN` for symlinks whose targets fall under managed paths (`/dev`, `/proc`, `/tmp`), because these filesystems exist only inside the sandbox's mount namespace and cannot be resolved from the host
 - Monitor filters nonexistent paths from the log to reduce noise. Ephemeral files (created and deleted during execution) won't appear due to post-execution checking
 - HTTPS enforcement is not possible: the proxy is a non-MITM TCP relay. A `net:http:` rule permits CONNECT tunneling but cannot verify that TLS occurs inside the tunnel; the sandboxed process and remote server can exchange plaintext over the allowed channel
-- When `--monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, the sandboxed process cannot use ptrace even if `syscall:allow:ptrace` is configured
+- When `monitor` is active, strace uses ptrace to trace the sandboxed process. Since Linux allows only one ptracer per process, the sandboxed process cannot use ptrace even if `syscall:allow:ptrace` is configured
 - `syscall:allow` rules selectively weaken the seccomp filter; each allowed syscall expands the kernel attack surface

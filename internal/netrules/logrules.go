@@ -15,9 +15,15 @@ type LogRule struct {
 	// RawRule is the original rule body, for error messages.
 	// Initialized to ruleBody by ParseLogRule; the config layer overwrites it
 	// with the full rule string including the resource prefix.
-	RawRule   string
-	rawTarget string // canonical target pattern for validation identity
-	rawPort   string // raw port string for validation identity
+	RawRule    string
+	rawTarget  string // canonical target pattern for validation identity
+	rawPort    string // raw port string for validation identity
+	SourcePath string // Config file path that produced this rule
+}
+
+// Identity returns the canonical key used to deduplicate net log rules.
+func (r LogRule) Identity() string {
+	return fmt.Sprintf("%t:%s:%s", r.Visible, r.rawTarget, r.rawPort)
 }
 
 // ParseLogRule parses a log rule body in the format "visibility:target:port".
@@ -54,12 +60,13 @@ func ParseLogRule(ruleBody string) (LogRule, error) {
 	}
 
 	return LogRule{
-		Visible:   visible,
-		target:    parsedTarget,
-		port:      parsedPort,
-		RawRule:   ruleBody,
-		rawTarget: rawTarget,
-		rawPort:   rawPort,
+		Visible:    visible,
+		target:     parsedTarget,
+		port:       parsedPort,
+		RawRule:    ruleBody,
+		rawTarget:  rawTarget,
+		rawPort:    rawPort,
+		SourcePath: "",
 	}, nil
 }
 
@@ -84,12 +91,14 @@ func validateNoLogDuplicateIdentity(rules []LogRule) error {
 	}
 	seen := make(map[identity]LogRule)
 	for _, rule := range rules {
-		id := identity{target: rule.rawTarget, port: rule.rawPort}
-		if existing, ok := seen[id]; ok {
-			return fmt.Errorf("duplicate net log rule identity (%s, %s): rules %q and %q",
-				rule.rawTarget, rule.rawPort, existing.RawRule, rule.RawRule)
+		ruleID := identity{target: rule.rawTarget, port: rule.rawPort}
+		if existing, ok := seen[ruleID]; ok {
+			return fmt.Errorf("duplicate net log rule identity (%s, %s): %s (%q) and %s (%q)",
+				rule.rawTarget, rule.rawPort,
+				existing.RawRule, describeNetLogRuleSource(existing),
+				rule.RawRule, describeNetLogRuleSource(rule))
 		}
-		seen[id] = rule
+		seen[ruleID] = rule
 	}
 	return nil
 }
@@ -115,11 +124,20 @@ func validateNoLogMixedPortPatterns(rules []LogRule) error {
 			info.hasSpecific = true
 		}
 		if info.hasWildcard && info.hasSpecific {
-			return fmt.Errorf("mixed port patterns for target %q: rules %q and %q have both wildcard and specific ports",
-				rule.rawTarget, info.firstRule.RawRule, rule.RawRule)
+			return fmt.Errorf("mixed port patterns for target %q: %s (%q) and %s (%q) have both wildcard and specific ports",
+				rule.rawTarget,
+				info.firstRule.RawRule, describeNetLogRuleSource(info.firstRule),
+				rule.RawRule, describeNetLogRuleSource(rule))
 		}
 	}
 	return nil
+}
+
+func describeNetLogRuleSource(rule LogRule) string {
+	if rule.SourcePath == "" {
+		return "<synthetic>"
+	}
+	return rule.SourcePath
 }
 
 // LogResolver determines whether an entry for a given host and port should be displayed.
@@ -151,7 +169,7 @@ func (r *LogResolver) Visible(host string, portNum uint16) bool {
 		}
 
 		// Reuse targetSpecificity by wrapping the log rule target in a Rule struct.
-		tmpRule := &AccessRule{protocol: protocolUnknown, target: rule.target, port: port{isWildcard: false, number: 0}, RawRule: "", rawTarget: "", rawPort: ""}
+		tmpRule := &AccessRule{protocol: protocolUnknown, target: rule.target, port: port{isWildcard: false, number: 0}, RawRule: "", rawTarget: "", rawPort: "", SourcePath: ""}
 		specificity := targetSpecificity(tmpRule, lowerHost, parsedIP)
 		if specificity < 0 {
 			continue

@@ -312,17 +312,7 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 		args = append(args, "--ro-bind", s.cfg.InterpreterPath, s.cfg.InterpreterPath)
 	}
 
-	writableConfig := false
-	if s.configPath != "" {
-		resolver := fsrules.NewAccessResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
-		accessLevel := resolver.PermissionFor(s.configPath)
-		if accessLevel <= fsrules.PermissionReadWrite {
-			writableConfig = true
-			fmt.Fprintln(os.Stderr, "execave: config file forced read-only")
-		}
-	}
-
-	args = s.addRuleMounts(args, writableConfig)
+	args = s.addRuleMounts(args, s.forcedReadOnlyConfigPaths())
 
 	// When net rules are present, bind-mount the proxy UDS and execave binary,
 	// then wrap the user command with the network tunnel.
@@ -341,21 +331,38 @@ func (s *Sandbox) BuildBwrapArgs(command []string) []string {
 	return args
 }
 
-// addRuleMounts adds bind mounts for config rules.
-// If writableConfig, forces config file read-only.
-func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
-	mounted := make(map[string]bool)
-	rules := s.getSortedRules()
-
-	if writableConfig {
-		syntheticRule := fsrules.AccessRule{
-			Permission: fsrules.PermissionReadOnly,
-			Path:       s.configPath,
-			RawRule:    "fs:ro:" + s.configPath,
-		}
-		// Append so it comes after parent directory (overlays with ro permission)
-		rules = append(rules, syntheticRule)
+func (s *Sandbox) forcedReadOnlyConfigPaths() []string {
+	paths := s.cfg.ConfigPaths
+	if len(paths) == 0 && s.configPath != "" {
+		paths = []string{s.configPath}
 	}
+	if len(paths) == 0 {
+		return nil
+	}
+
+	resolver := fsrules.NewAccessResolver(s.cfg.FSRules, s.cfg.ManagedPaths)
+	forced := make([]string, 0, len(paths))
+	seen := make(map[string]struct{})
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		if resolver.PermissionFor(path) <= fsrules.PermissionReadWrite {
+			forced = append(forced, path)
+			fmt.Fprintf(os.Stderr, "execave: config file %s forced read-only\n", path)
+		}
+	}
+	return forced
+}
+
+// addRuleMounts adds bind mounts for config rules and applies forced read-only config paths.
+func (s *Sandbox) addRuleMounts(args []string, forcedReadOnlyPaths []string) []string {
+	mounted := make(map[string]bool)
+	rules := appendForcedReadOnlyRules(s.getSortedRules(), forcedReadOnlyPaths)
 
 	for _, rule := range rules {
 		path := rule.Path
@@ -388,6 +395,31 @@ func (s *Sandbox) addRuleMounts(args []string, writableConfig bool) []string {
 	}
 
 	return args
+}
+
+// appendForcedReadOnlyRules appends synthetic read-only rules for each unique non-empty
+// path in forcedReadOnlyPaths to rules and returns the extended slice.
+func appendForcedReadOnlyRules(rules []fsrules.AccessRule, forcedReadOnlyPaths []string) []fsrules.AccessRule {
+	if len(forcedReadOnlyPaths) == 0 {
+		return rules
+	}
+	seen := make(map[string]struct{})
+	for _, configPath := range forcedReadOnlyPaths {
+		if configPath == "" {
+			continue
+		}
+		if _, ok := seen[configPath]; ok {
+			continue
+		}
+		seen[configPath] = struct{}{}
+		rules = append(rules, fsrules.AccessRule{
+			Permission: fsrules.PermissionReadOnly,
+			Path:       configPath,
+			RawRule:    "fs:ro:" + configPath,
+			SourcePath: "",
+		})
+	}
+	return rules
 }
 
 func (s *Sandbox) getSortedRules() []fsrules.AccessRule {

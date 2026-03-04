@@ -18,6 +18,7 @@ type AccessRule struct {
 	Permission Permission
 	Path       string
 	RawRule    string // Original rule for error messages and logging
+	SourcePath string // Config file path that produced this rule
 }
 
 // Permission represents the access level. Higher values are stricter.
@@ -68,6 +69,7 @@ func ParseAccessRule(ruleBody, configDir string) (AccessRule, error) {
 		Permission: perm,
 		Path:       normalizedPath,
 		RawRule:    ruleBody,
+		SourcePath: "",
 	}, nil
 }
 
@@ -99,13 +101,13 @@ func normalizePath(path, configDir string) (string, error) {
 }
 
 // ValidateAccessRules performs cross-rule validation: checks for duplicate paths,
-// ensures config file is not writable, and ensures no rules target managed paths.
-func ValidateAccessRules(rules []AccessRule, configPath string, managedPaths []string) error {
+// ensures config files are not writable, and ensures no rules target managed paths.
+func ValidateAccessRules(rules []AccessRule, configPaths []string, managedPaths []string) error {
 	if err := validateNoDuplicateAccessPaths(rules); err != nil {
 		return err
 	}
 
-	if err := validateConfigNotWritable(rules, configPath); err != nil {
+	if err := validateConfigNotWritable(rules, configPaths); err != nil {
 		return err
 	}
 
@@ -121,8 +123,8 @@ func validateNoDuplicateAccessPaths(rules []AccessRule) error {
 	seen := make(map[string]AccessRule)
 	for _, rule := range rules {
 		if existing, ok := seen[rule.Path]; ok {
-			return fmt.Errorf("duplicate path %q: rules %q and %q",
-				rule.Path, existing.RawRule, rule.RawRule)
+			return fmt.Errorf("duplicate path %q: %s (%q) and %s (%q)",
+				rule.Path, existing.RawRule, describeRuleSource(existing), rule.RawRule, describeRuleSource(rule))
 		}
 		seen[rule.Path] = rule
 	}
@@ -130,10 +132,13 @@ func validateNoDuplicateAccessPaths(rules []AccessRule) error {
 }
 
 // validateConfigNotWritable rejects configs that explicitly list the config file as writable.
-func validateConfigNotWritable(rules []AccessRule, configPath string) error {
-	for _, rule := range rules {
-		if rule.Path == configPath && rule.Permission == PermissionReadWrite {
-			return fmt.Errorf("config file must not be writable: rule %q", rule.RawRule)
+func validateConfigNotWritable(rules []AccessRule, configPaths []string) error {
+	for _, cfgPath := range configPaths {
+		for _, rule := range rules {
+			if rule.Path == cfgPath && rule.Permission == PermissionReadWrite {
+				return fmt.Errorf("config file %s must not be writable: rule %q from %s",
+					cfgPath, rule.RawRule, describeRuleSource(rule))
+			}
 		}
 	}
 	return nil
@@ -149,4 +154,11 @@ func validateNoManagedPaths(rules []AccessRule, managedPaths []string) error {
 		}
 	}
 	return nil
+}
+
+func describeRuleSource(rule AccessRule) string {
+	if rule.SourcePath == "" {
+		return "<synthetic>"
+	}
+	return rule.SourcePath
 }

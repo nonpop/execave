@@ -90,6 +90,7 @@ func roRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
+		SourcePath: "",
 	}
 }
 
@@ -104,6 +105,29 @@ func createTestMonitor(t *testing.T, cfg *config.Config, bwrapArgs []string) (*M
 		bwrapPath = "/usr/bin/bwrap" // placeholder for unit tests that don't invoke Run
 	}
 	return New(bwrapPath, "", logger, resolver, bwrapArgs, false, nil, nil, nil, nil), logger
+}
+
+// createCwdTestMonitor creates a temp dir with a file.txt and a monitor with a ro rule for it.
+// Returns the temp dir, monitor, and logger.
+func createCwdTestMonitor(t *testing.T) (string, *Monitor, *accesslog.Logger) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
+	cfg := &config.Config{
+		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
+	}
+	mon, logger := createTestMonitor(t, cfg, nil)
+	return tmpDir, mon, logger
 }
 
 // createTestMonitorWithNetwork creates a monitor with hasNetworkPath=true for testing
@@ -143,6 +167,7 @@ func rwRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,
+		SourcePath: "",
 	}
 }
 
@@ -154,14 +179,17 @@ func TestMonitor_Integration(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:           []fsrules.AccessRule{roRule(testFile)},
-			NetRules:          nil,
-			FSLogRules:        nil,
-			NetLogRules:       nil,
-			SyscallAllowRules: nil,
-			SyscallNologRules: nil,
-			ManagedPaths:      nil,
-			InterpreterPath:   "",
+			FSRules:                 []fsrules.AccessRule{roRule(testFile)},
+			NetRules:                nil,
+			FSLogRules:              nil,
+			NetLogRules:             nil,
+			SyscallAllowRules:       nil,
+			SyscallNologRules:       nil,
+			ManagedPaths:            nil,
+			InterpreterPath:         "",
+			SyscallAllowRuleSources: nil,
+			SyscallNologRuleSources: nil,
+			ConfigPaths:             nil,
 		}
 	})
 
@@ -214,14 +242,17 @@ func TestMonitor_WriteOperation(t *testing.T) {
 
 	env := newMonitorTestEnv(t, func(_ string) *config.Config {
 		return &config.Config{
-			FSRules:           []fsrules.AccessRule{rwRule(absTestDir)},
-			NetRules:          nil,
-			FSLogRules:        nil,
-			NetLogRules:       nil,
-			SyscallAllowRules: nil,
-			SyscallNologRules: nil,
-			ManagedPaths:      nil,
-			InterpreterPath:   "",
+			FSRules:                 []fsrules.AccessRule{rwRule(absTestDir)},
+			NetRules:                nil,
+			FSLogRules:              nil,
+			NetLogRules:             nil,
+			SyscallAllowRules:       nil,
+			SyscallNologRules:       nil,
+			ManagedPaths:            nil,
+			InterpreterPath:         "",
+			SyscallAllowRuleSources: nil,
+			SyscallNologRuleSources: nil,
+			ConfigPaths:             nil,
 		}
 	})
 
@@ -242,14 +273,17 @@ func TestMonitor_Deduplication(t *testing.T) {
 		require.NoError(t, err)
 
 		return &config.Config{
-			FSRules:           []fsrules.AccessRule{roRule(testFile)},
-			NetRules:          nil,
-			FSLogRules:        nil,
-			NetLogRules:       nil,
-			SyscallAllowRules: nil,
-			SyscallNologRules: nil,
-			ManagedPaths:      nil,
-			InterpreterPath:   "",
+			FSRules:                 []fsrules.AccessRule{roRule(testFile)},
+			NetRules:                nil,
+			FSLogRules:              nil,
+			NetLogRules:             nil,
+			SyscallAllowRules:       nil,
+			SyscallNologRules:       nil,
+			ManagedPaths:            nil,
+			InterpreterPath:         "",
+			SyscallAllowRuleSources: nil,
+			SyscallNologRuleSources: nil,
+			ConfigPaths:             nil,
 		}
 	})
 
@@ -344,14 +378,17 @@ func TestMonitor_UnresolvedRelativePath(t *testing.T) {
 // until the user command's execve is detected.
 func TestMonitor_SetupPhaseSkipped(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule("/usr")},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule("/usr")},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	// Non-nil bwrapArgs enables setup phase detection
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -601,7 +638,7 @@ func testSymlinkAccessHelper(
 	err = os.Symlink(targetPath, linkPath)
 	require.NoError(t, err)
 
-	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil, InterpreterPath: ""}
+	cfg := &config.Config{FSRules: configRules, NetRules: nil, FSLogRules: nil, NetLogRules: nil, SyscallAllowRules: nil, SyscallNologRules: nil, ManagedPaths: nil, InterpreterPath: "", SyscallAllowRuleSources: nil, SyscallNologRuleSources: nil, ConfigPaths: nil}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
 	straceData := strings.NewReader(strings.Join([]string{
@@ -654,14 +691,17 @@ func TestMonitor_SymlinkDeniedTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(mountDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(mountDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -715,14 +755,17 @@ func TestMonitor_SymlinkWriteThroughReadOnlyLink(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(roDir), rwRule(rwDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -768,14 +811,17 @@ func TestMonitor_SymlinkThroughManagedPath(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{rwRule(mountDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      []string{managedDir},
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{rwRule(mountDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            []string{managedDir},
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -818,14 +864,17 @@ func TestMonitor_SymlinkTargetDeduplicated(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(testBase)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(testBase)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -880,14 +929,17 @@ func TestMonitor_CwdTrackingResolvesBarePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -934,14 +986,17 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dirB, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(dirA), roRule(dirB)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -973,14 +1028,17 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(hostDir, ".git/config"), []byte("[core]"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(projectDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(projectDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
 
@@ -1007,20 +1065,7 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 // TestMonitor_ChdirUpdatesTrackedCwd tests that chdir with an absolute path
 // updates cwdByPid and subsequent bare-path calls resolve correctly.
 func TestMonitor_ChdirUpdatesTrackedCwd(t *testing.T) {
-	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
-
-	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
-	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	tmpDir, mon, logger := createCwdTestMonitor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 chdir("` + tmpDir + `") = 0`,
@@ -1043,14 +1088,17 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(subDir, "file.txt"), []byte("data"), 0o600))
 
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule(tmpDir)},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	mon, logger := createTestMonitor(t, cfg, nil)
 
@@ -1094,20 +1142,7 @@ func TestMonitor_RelativeChdirWithNoPriorCwdIgnored(t *testing.T) {
 // corrupt the tracked cwd, so subsequent bare-path accesses still resolve
 // against the original cwd.
 func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
-	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
-
-	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
-	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	tmpDir, mon, logger := createCwdTestMonitor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Establish cwd via AT_FDCWD annotation
@@ -1129,20 +1164,7 @@ func TestMonitor_FailedChdirDoesNotUpdateTrackedCwd(t *testing.T) {
 // corrupt the tracked cwd, so subsequent bare-path accesses still resolve
 // against the original cwd.
 func TestMonitor_FailedFchdirDoesNotUpdateTrackedCwd(t *testing.T) {
-	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
-
-	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
-	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	tmpDir, mon, logger := createCwdTestMonitor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		// Establish cwd via AT_FDCWD annotation
@@ -1187,14 +1209,17 @@ func TestMonitor_FchdirWithoutAnnotationDoesNotUpdateCwd(t *testing.T) {
 // the last execve seen is still processed and produces log entries.
 func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule("/usr")},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{roRule("/usr")},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	// hasNetworkPath=true expects 3 execves, but we only provide 2
 	mon, logger := createTestMonitorWithNetwork(t, cfg, []string{"--ro-bind", "/usr", "/usr"})
@@ -1229,20 +1254,7 @@ func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 // TestMonitor_FchdirUpdatesTrackedCwd tests that fchdir with an fd-annotated
 // path updates cwdByPid and subsequent bare-path calls resolve correctly.
 func TestMonitor_FchdirUpdatesTrackedCwd(t *testing.T) {
-	tmpDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("data"), 0o600))
-
-	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{roRule(tmpDir)},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
-	}
-	mon, logger := createTestMonitor(t, cfg, nil)
+	tmpDir, mon, logger := createCwdTestMonitor(t)
 
 	straceData := strings.NewReader(strings.Join([]string{
 		`12345 fchdir(3<` + tmpDir + `>) = 0`,

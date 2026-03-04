@@ -1,9 +1,18 @@
-# Comprehensive baseline config for sandboxing most standard tools.
-# Every entry is read-only unless noted. The sandbox starts empty
-# (default-deny), so anything not listed here does not exist inside
-# it (except /dev, /proc, and a private /tmp).
+# Layered configs via `extends`
+#
+# To compose multiple configs, add an `extends` section at the top level:
+# extends = ["~/.config/execave/base.toml", "~/.config/execave/codex.toml"]
+#
+# Paths may be absolute, relative to the extending file, or prefixed with `~`
+# (which expands to the invoking user’s home directory). Extending simply
+# includes all rules from the extended config files.
 
 fs = [
+  # Comprehensive baseline config for sandboxing most standard tools.
+  # Every entry is read-only unless noted. The sandbox starts empty
+  # (default-deny), so anything not listed here does not exist inside
+  # it (except /dev, /proc, and a private /tmp).
+
   # -- Executables and shared libraries --
   # Read-only, system-managed, no user secrets. Binaries and shared
   # libraries (sh, libc, etc.); nothing runs without them.

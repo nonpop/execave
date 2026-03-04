@@ -66,6 +66,7 @@ func roRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "fs:ro:" + path,
+		SourcePath: "",
 	}
 }
 
@@ -74,5 +75,6 @@ func rwRule(path string) fsrules.AccessRule {
 		Permission: fsrules.PermissionReadWrite,
 		Path:       path,
 		RawRule:    "fs:rw:" + path,
+		SourcePath: "",
 	}
 }

@@ -15,6 +15,8 @@ type LogRule struct {
 	// Initialized to ruleBody by ParseLogRule; the config layer overwrites it
 	// with the full rule string including the resource prefix.
 	RawRule string
+	// SourcePath is the config file path that produced this rule.
+	SourcePath string
 }
 
 // ParseLogRule parses a log rule body in the format "visibility:path".
@@ -46,9 +48,10 @@ func ParseLogRule(ruleBody, configDir string) (LogRule, error) {
 	}
 
 	return LogRule{
-		Visible: visible,
-		Path:    normalizedPath,
-		RawRule: ruleBody,
+		Visible:    visible,
+		Path:       normalizedPath,
+		RawRule:    ruleBody,
+		SourcePath: "",
 	}, nil
 }
 
@@ -57,12 +60,21 @@ func ValidateLogRules(rules []LogRule) error {
 	seen := make(map[string]LogRule)
 	for _, rule := range rules {
 		if existing, ok := seen[rule.Path]; ok {
-			return fmt.Errorf("duplicate path %q: rules %q and %q",
-				rule.Path, existing.RawRule, rule.RawRule)
+			return fmt.Errorf("duplicate path %q: %s (%q) and %s (%q)",
+				rule.Path,
+				existing.RawRule, describeFSLogRuleSource(existing),
+				rule.RawRule, describeFSLogRuleSource(rule))
 		}
 		seen[rule.Path] = rule
 	}
 	return nil
+}
+
+func describeFSLogRuleSource(rule LogRule) string {
+	if rule.SourcePath == "" {
+		return "<synthetic>"
+	}
+	return rule.SourcePath
 }
 
 // LogResolver determines whether an entry for a given path should be displayed.

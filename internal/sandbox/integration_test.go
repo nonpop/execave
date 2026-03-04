@@ -35,13 +35,16 @@ func TestIntegration_DefaultDenyFilesystem_NoMatchingRule(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -57,13 +60,16 @@ func TestIntegration_DefaultDenyFilesystem_AllowedPathAccessible(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -81,13 +87,16 @@ func TestIntegration_ReadOnlyAccess_ReadAllowed(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -103,13 +112,16 @@ func TestIntegration_ReadOnlyAccess_WriteDeniedOnReadOnlyPath(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -129,13 +141,16 @@ func TestIntegration_ReadWriteAccess_ReadAllowedOnReadWritePath(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -151,13 +166,16 @@ func TestIntegration_ReadWriteAccess_WriteAllowedOnReadWritePath(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -178,13 +196,16 @@ func TestIntegration_NoAccessRule_ReadDeniedByNoneRule(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -203,13 +224,16 @@ func TestIntegration_NoAccessRule_WriteDeniedByNoneRule(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, secretFile),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -228,13 +252,16 @@ func TestIntegration_NoAccessRule_NoneDirectoryInaccessible(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, blockedDir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -256,13 +283,16 @@ func TestIntegration_NoAccessRule_NoneDirectoryWithChildRuleAllowsChildAccess(t 
 			fsRule(fsrules.PermissionNone, parentDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -282,13 +312,16 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoNetwork(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -303,13 +336,16 @@ func TestIntegration_DefaultDenyNetwork_NoNetRulesMeansNoDNS(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -326,13 +362,16 @@ func TestIntegration_ProxyTunnelPathSetup_NetRulesTriggerProxyTunnelSetup(t *tes
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -353,13 +392,16 @@ func TestIntegration_ProxyTunnelPathSetup_ProxyUDSBindMountedIntoSandbox(t *test
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/test-proxy.sock",
@@ -377,13 +419,16 @@ func TestIntegration_ProxyTunnelPathSetup_ExecaveBinaryBindMountedReadOnly(t *te
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -403,13 +448,16 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_DirectConnectionFai
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -429,13 +477,16 @@ func TestIntegration_ProcessesIgnoringHTTPPROXYHaveNoNetwork_UDPFails(t *testing
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -455,13 +506,16 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithoutNetRules(t *test
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 
@@ -477,13 +531,16 @@ func TestIntegration_CLICommandExecution_CommandExecutionWithNetRules(t *testing
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	netPath := &sandbox.NetworkPath{
 		UDSPath:       "/tmp/proxy.sock",
@@ -512,13 +569,16 @@ func TestIntegration_ConfigFileProtection_ConfigFileInRwDirectoryForcedToRo(t *t
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      sandbox.ManagedDirs,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -538,13 +598,16 @@ func TestIntegration_ConfigFileProtection_ConfigFileProtectionDoesNotBlockSiblin
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      sandbox.ManagedDirs,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -567,13 +630,16 @@ func TestIntegration_ConfigFileProtection_ConfigFileNotMountedStaysUnmounted(t *
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadWrite, workDir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      sandbox.ManagedDirs,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -593,13 +659,16 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      sandbox.ManagedDirs,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, configPath, nil)
 
@@ -609,6 +678,37 @@ func TestIntegration_ConfigFileProtection_ConfigFileAlreadyRoStaysRo(t *testing.
 	assert.True(t, argsContainSequence(args, "--ro-bind", dir, dir))
 	// Should NOT have a separate ro-bind for the config file
 	assert.False(t, argsContainSequence(args, "--ro-bind", configPath, configPath))
+}
+
+func TestIntegration_ConfigFileProtection_LayeredConfigPathsForcedRoAfterMerge(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base.toml")
+	rootPath := filepath.Join(dir, "execave.toml")
+	require.NoError(t, os.WriteFile(basePath, []byte("{}"), 0o600))
+	require.NoError(t, os.WriteFile(rootPath, []byte("{}"), 0o600))
+
+	cfg := &config.Config{
+		FSRules: []fsrules.AccessRule{
+			fsRule(fsrules.PermissionReadWrite, dir),
+		},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             []string{basePath, rootPath},
+	}
+	sb := sandbox.New(cfg, rootPath, nil)
+
+	args := sb.BuildBwrapArgs([]string{"true"})
+
+	assert.True(t, argsContainSequence(args, "--bind", dir, dir))
+	assert.True(t, argsContainSequence(args, "--ro-bind", basePath, basePath))
+	assert.True(t, argsContainSequence(args, "--ro-bind", rootPath, rootPath))
 }
 
 // --- Requirement: Seccomp filtering ---
@@ -633,13 +733,16 @@ func TestIntegration_SeccompFiltering_BlockedSyscallReturnsEPERM(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, "/bin"),
 			fsRule(fsrules.PermissionReadOnly, dir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      sandbox.ManagedDirs,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            sandbox.ManagedDirs,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 	ctx := context.Background()
@@ -738,13 +841,16 @@ func TestIntegration_InterpreterAutoMount_InterpreterMountedInBwrapArgs(t *testi
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		InterpreterPath:   interpPath,
-		ManagedPaths:      sandbox.ManagedPathsWith(interpPath),
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		InterpreterPath:         interpPath,
+		ManagedPaths:            sandbox.ManagedPathsWith(interpPath),
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 	sb := sandbox.New(cfg, "", nil)
 

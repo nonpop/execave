@@ -32,6 +32,7 @@ func fsRule(permission fsrules.Permission, path string) fsrules.AccessRule {
 		Permission: permission,
 		Path:       path,
 		RawRule:    "fs:" + permStr + ":" + path,
+		SourcePath: "",
 	}
 }
 
@@ -40,13 +41,16 @@ func TestBuildBwrapArgs(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "/tmp/execave-test.json", nil)
@@ -95,13 +99,16 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 			fsRule(fsrules.PermissionReadOnly, dir),
 			fsRule(fsrules.PermissionNone, noneDir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -123,13 +130,16 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 			fsRule(fsrules.PermissionNone, noneDir),
 			fsRule(fsrules.PermissionReadWrite, childDir),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -149,13 +159,16 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 			fsRule(fsrules.PermissionReadWrite, dir),
 			fsRule(fsrules.PermissionNone, noneFile),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -170,14 +183,17 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -189,14 +205,17 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 
 func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	netPath := &sandbox.NetworkPath{
@@ -217,14 +236,17 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 
 func TestBuildBwrapArgs_WithoutNetworkPath(t *testing.T) {
 	cfg := &config.Config{
-		FSRules:           []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		FSRules:                 []fsrules.AccessRule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -319,13 +341,16 @@ func TestBuildBwrapArgs_IncludesInterpreterMount(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "/lib64/ld-linux-x86-64.so.2",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "/lib64/ld-linux-x86-64.so.2",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)
@@ -339,13 +364,16 @@ func TestBuildBwrapArgs_NoInterpreterWhenEmpty(t *testing.T) {
 		FSRules: []fsrules.AccessRule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
 		},
-		NetRules:          nil,
-		FSLogRules:        nil,
-		NetLogRules:       nil,
-		SyscallAllowRules: nil,
-		SyscallNologRules: nil,
-		ManagedPaths:      nil,
-		InterpreterPath:   "",
+		NetRules:                nil,
+		FSLogRules:              nil,
+		NetLogRules:             nil,
+		SyscallAllowRules:       nil,
+		SyscallNologRules:       nil,
+		ManagedPaths:            nil,
+		InterpreterPath:         "",
+		SyscallAllowRuleSources: nil,
+		SyscallNologRuleSources: nil,
+		ConfigPaths:             nil,
 	}
 
 	sb := sandbox.New(cfg, "", nil)

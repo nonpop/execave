@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_MonitoringAccess_ViewAccessLogInTextOutput tests that --monitor=- writes
+// TestE2E_MonitoringAccess_ViewAccessLogInTextOutput tests that monitor --output=- writes
 // access log entries with all four columns (operation, target, result, rule) to stderr.
 func TestE2E_MonitoringAccess_ViewAccessLogInTextOutput(t *testing.T) {
 	s := newScenario(t)
@@ -109,7 +109,7 @@ func TestE2E_MonitoringAccess_AccessLogAfterSIGINT(t *testing.T) {
 	//nolint:gosec // G204: test uses controlled input from test fixtures
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--config", s.configPath,
-		"--monitor="+logFile,
+		"monitor", "--output="+logFile,
 		"--",
 		"sleep", "60")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -429,14 +429,14 @@ func TestE2E_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 	s.thenStderrHasEntry("READ", blocked.rel("secret.txt"), "UNENFORCED")
 }
 
-// TestE2E_NoSandbox_WithoutMonitorExitsError verifies that --no-sandbox without
-// --monitor exits with a non-zero code and does not execute the command.
+// TestE2E_NoSandbox_WithoutMonitorExitsError verifies that --no-sandbox on root
+// exits with a non-zero code and does not execute the command.
 func TestE2E_NoSandbox_WithoutMonitorExitsError(t *testing.T) {
 	s := newScenario(t)
 	s.givenRules()
 	s.whenRunNoSandbox("true")
 	s.thenExitCodeNonZero()
-	s.thenStderrContains("--no-sandbox requires --monitor")
+	s.thenStderrContains("unknown flag: --no-sandbox")
 }
 
 // TestE2E_NoSandbox_WritesLogToFile verifies that --no-sandbox --monitor=<file>
