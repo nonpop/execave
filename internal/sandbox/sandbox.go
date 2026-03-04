@@ -216,6 +216,12 @@ func (s *Sandbox) Run(ctx context.Context, command []string) (int, error) {
 		return 1, err
 	}
 
+	if warn, verr := CheckBwrapVersion(bwrapPath); verr != nil {
+		return 1, verr
+	} else if warn != "" {
+		fmt.Fprintln(os.Stderr, "execave: warning:", warn)
+	}
+
 	bwrapArgs := s.BuildBwrapArgs(command)
 
 	var allowedSyscalls map[string]bool

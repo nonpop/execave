@@ -68,10 +68,6 @@
   - Means: The test helper DSL and package-level test helpers have accumulated duplication.
   - Assessment: Nice to have. Standard maintenance, reduces friction for writing new tests.
 
-- require fixed bwrap/strace versions?
-  - Means: Pin or enforce minimum versions, since behavior and output format may differ across versions.
-  - Assessment: Important. The strace parser relies on specific output formatting. Version changes could silently break parsing. At minimum, detect and warn. For bwrap, version differences could affect security guarantees.
-
 - add pre & post conditions
   - Means: Formalize preconditions and postconditions in code with panic checks. CLAUDE.md mandates this but it may not be consistently applied.
   - Assessment: Important. Consistent with the project's security-critical nature. Panic on violated invariants prevents silent misbehavior.

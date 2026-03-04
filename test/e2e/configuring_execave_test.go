@@ -270,3 +270,151 @@ func TestE2E_ConfiguringExecave_DuplicateSyscallNologRulesRejected(t *testing.T)
 	assertExitCode(t, result, 1)
 	assert.Contains(t, result.Stderr, "duplicate")
 }
+
+// requireRoot skips the test if not running as root, since creating root-owned
+// test fixtures requires root. Version check tests use root-owned fake bwrap/strace
+// wrappers to verify execave's version compatibility enforcement.
+func requireRoot(t *testing.T) {
+	t.Helper()
+	if os.Getuid() != 0 {
+		t.Skip("requires root to create root-owned test fixtures (re-run as root)")
+	}
+}
+
+// fakeVersionWrapper writes a shell script in dir/name that:
+//   - prints versionLine when called with --version
+//   - delegates to realBin for all other invocations
+//
+// The script is made root-owned (requires root), so ValidateBinary accepts it.
+func fakeVersionWrapper(t *testing.T, dir, name, versionLine, realBin string) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	content := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"--version\" ]; then\n" +
+		"  echo '" + versionLine + "'\n" +
+		"else\n" +
+		"  exec " + realBin + " \"$@\"\n" +
+		"fi\n"
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o755)) // #nosec G306 -- test script needs execute permission
+	require.NoError(t, os.Chown(p, 0, 0))
+	return p
+}
+
+// TestE2E_ConfiguringExecave_IncompatibleBwrapVersionBlocksExecution tests that execave
+// exits with an error and prints a message when bwrap is at an incompatible version.
+func TestE2E_ConfiguringExecave_IncompatibleBwrapVersionBlocksExecution(t *testing.T) {
+	requireRoot(t)
+
+	realBwrap, err := findRealBwrap(t)
+	require.NoError(t, err)
+
+	fakeDir := testTempDir(t)
+	fakeVersionWrapper(t, fakeDir, "bwrap", "bwrap 0.10.0", realBwrap)
+
+	s := &scenario{t: t, tmpDir: testTempDir(t)}
+	s.givenRules()
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	s.whenRun("true")
+
+	s.thenExitCode(1)
+	s.thenStderrContains("incompatible")
+}
+
+// TestE2E_ConfiguringExecave_IncompatibleStraceVersionBlocksMonitoring tests that execave
+// exits with an error and prints a message when strace is at an incompatible version.
+func TestE2E_ConfiguringExecave_IncompatibleStraceVersionBlocksMonitoring(t *testing.T) {
+	requireRoot(t)
+	failIfNoStrace(t)
+
+	realStrace, err := findRealStrace(t)
+	require.NoError(t, err)
+
+	fakeDir := testTempDir(t)
+	fakeVersionWrapper(t, fakeDir, "strace", "strace -- version 6.17", realStrace)
+
+	s := &scenario{t: t, tmpDir: testTempDir(t)}
+	s.givenRules()
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	s.whenRunTextLog("-", "true")
+
+	s.thenExitCode(1)
+	s.thenStderrContains("incompatible")
+}
+
+// TestE2E_ConfiguringExecave_NewerMinorBwrapPrintsWarningButContinues tests that execave
+// prints a warning but runs the command normally when bwrap is at a warn-tier version.
+func TestE2E_ConfiguringExecave_NewerMinorBwrapPrintsWarningButContinues(t *testing.T) {
+	requireRoot(t)
+
+	realBwrap, err := findRealBwrap(t)
+	require.NoError(t, err)
+
+	fakeDir := testTempDir(t)
+	fakeVersionWrapper(t, fakeDir, "bwrap", "bwrap 0.12.0", realBwrap)
+
+	s := &scenario{t: t, tmpDir: testTempDir(t)}
+	s.givenRules()
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	s.whenRun("echo", "hello")
+
+	s.thenExitCode(0)
+	s.thenStdoutContains("hello")
+	s.thenStderrContains("warning")
+}
+
+// TestE2E_ConfiguringExecave_NewerMinorStracePrintsWarningButContinues tests that execave
+// prints a warning but continues monitoring when strace is at a warn-tier version.
+func TestE2E_ConfiguringExecave_NewerMinorStracePrintsWarningButContinues(t *testing.T) {
+	requireRoot(t)
+	failIfNoStrace(t)
+
+	realStrace, err := findRealStrace(t)
+	require.NoError(t, err)
+
+	fakeDir := testTempDir(t)
+	fakeVersionWrapper(t, fakeDir, "strace", "strace -- version 6.19", realStrace)
+
+	s := &scenario{t: t, tmpDir: testTempDir(t)}
+	s.givenRules()
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	s.whenRunTextLog("-", "echo", "hello")
+
+	s.thenExitCode(0)
+	s.thenStderrContains("warning")
+}
+
+// findRealBwrap returns the path to the real (root-owned) bwrap binary.
+func findRealBwrap(t *testing.T) (string, error) {
+	t.Helper()
+	failIfNoBwrap(t)
+
+	info, err := os.Stat("/usr/bin/bwrap")
+	if err == nil && !info.IsDir() {
+		return "/usr/bin/bwrap", nil
+	}
+	info, err = os.Stat("/usr/local/bin/bwrap")
+	if err == nil && !info.IsDir() {
+		return "/usr/local/bin/bwrap", nil
+	}
+	return "", os.ErrNotExist
+}
+
+// findRealStrace returns the path to the real (root-owned) strace binary.
+func findRealStrace(t *testing.T) (string, error) {
+	t.Helper()
+	failIfNoStrace(t)
+
+	info, err := os.Stat("/usr/bin/strace")
+	if err == nil && !info.IsDir() {
+		return "/usr/bin/strace", nil
+	}
+	info, err = os.Stat("/usr/local/bin/strace")
+	if err == nil && !info.IsDir() {
+		return "/usr/local/bin/strace", nil
+	}
+	return "", os.ErrNotExist
+}

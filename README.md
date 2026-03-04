@@ -103,7 +103,9 @@ To allow a specific syscall, add `syscall:allow:<name>` to your config. To hide 
 
 ## Requirements
 
-- Linux, Go 1.25+, `bubblewrap`, `strace` (for `--monitor`)
+- Linux, Go 1.25+, `bubblewrap` 0.11.x, `strace` 6.18 (for `--monitor`)
+
+Execave pins to specific known-good versions of `bwrap` and `strace` and checks the installed versions at startup. Older versions or major-version bumps cause execave to exit with an error; newer minor versions within the same major series print a warning but continue.
 
 ## Documentation
 

@@ -84,6 +84,8 @@ Monitor output mode. `Writer` subscribes to an `accesslog.Logger`, applies denie
 
 Translates filesystem rules to bwrap mount arguments (`--bind`, `--ro-bind`, `--tmpfs`). When seccomp filtering is enabled (default), creates a seccomp filter pipe via `internal/seccomp` and passes it to bwrap via `--seccomp 3`. When network access or monitoring is enabled, injects proxy tunnel infrastructure into the sandbox namespace.
 
+Performs startup version checks via `CheckBwrapVersion` and `CheckStraceVersion` after binary path resolution. Both functions enforce three compatibility tiers: OK (pinned minor series, no output), WARN (higher minor within same major, warning to stderr), ERROR (older or major-version bump, exit with error). Pinned versions: bwrap 0.11.x, strace 6.18. Version checks run after binary ownership validation (`ValidateBinary`) and before any sandbox or monitor operation.
+
 See security-model.md for bwrap arg risks.
 
 #### Automatic vs. Explicit Mounts

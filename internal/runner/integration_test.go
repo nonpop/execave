@@ -21,6 +21,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// fakeVersionBinary creates a shell script that prints versionLine when invoked with --version.
+// The script is not root-owned, so it can only be used with Check*Version directly, not ResolveBwrap/ResolveStrace.
+func fakeVersionBinary(t *testing.T, name, versionLine string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, name)
+	content := fmt.Sprintf("#!/bin/sh\necho '%s'\n", versionLine)
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o755)) // #nosec G306 -- test script needs execute permission
+	return p
+}
+
 // TestIntegration_RunLifecycle_StartLaunchesMonitoredRun tests the "Start launches a monitored run" scenario.
 func TestIntegration_RunLifecycle_StartLaunchesMonitoredRun(t *testing.T) {
 	_, err := exec.LookPath("strace")
@@ -692,4 +703,42 @@ func TestIntegration_NoSandbox_HTTPProxyInjectedWhenNetPathConfigured(t *testing
 	status := rnr.Status()
 	assert.Equal(t, 0, status.ExitCode)
 	assert.Empty(t, status.Error)
+}
+
+// --- Requirement: strace/bwrap version check (via sandbox functions) ---
+// Note: testing through runner.Start() is not possible without root-owned fake binaries
+// (ResolveBwrap/ResolveStrace call ValidateBinary which requires root ownership).
+// These tests verify the version check functions the runner integrates.
+
+// TestIntegration_VersionCheck_IncompatibleStraceVersionReturnsError verifies that
+// CheckStraceVersion returns an error when strace is at an incompatible version.
+func TestIntegration_VersionCheck_IncompatibleStraceVersionReturnsError(t *testing.T) {
+	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.17")
+
+	_, err := sandbox.CheckStraceVersion(fakeStrace)
+
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "incompatible")
+}
+
+// TestIntegration_VersionCheck_WarnTierStraceVersionContinues verifies that
+// CheckStraceVersion returns a warning and no error for warn-tier strace.
+func TestIntegration_VersionCheck_WarnTierStraceVersionContinues(t *testing.T) {
+	fakeStrace := fakeVersionBinary(t, "strace", "strace -- version 6.19")
+
+	warn, err := sandbox.CheckStraceVersion(fakeStrace)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, warn)
+}
+
+// TestIntegration_VersionCheck_IncompatibleBwrapVersionInSandboxedRunReturnsError verifies
+// that CheckBwrapVersion returns an error for an incompatible bwrap version.
+func TestIntegration_VersionCheck_IncompatibleBwrapVersionInSandboxedRunReturnsError(t *testing.T) {
+	fakeBwrap := fakeVersionBinary(t, "bwrap", "bwrap 1.0.0")
+
+	_, err := sandbox.CheckBwrapVersion(fakeBwrap)
+
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "incompatible")
 }

@@ -190,6 +190,12 @@ func (r *Runner) Start(ctx context.Context, cfg *config.Config, command []string
 		return fmt.Errorf("start monitored run: %w", err)
 	}
 
+	if warn, verr := sandbox.CheckStraceVersion(stracePath); verr != nil {
+		return fmt.Errorf("start monitored run: %w", verr)
+	} else if warn != "" {
+		fmt.Fprintln(os.Stderr, "execave: warning:", warn)
+	}
+
 	var mon *monitor.Monitor
 	var bridgeStop func()
 
@@ -278,6 +284,12 @@ func (r *Runner) buildSandboxedMonitor(cfg *config.Config, stracePath string, lo
 	bwrapPath, err := sandbox.ResolveBwrap()
 	if err != nil {
 		return nil, fmt.Errorf("start monitored run: %w", err)
+	}
+
+	if warn, verr := sandbox.CheckBwrapVersion(bwrapPath); verr != nil {
+		return nil, fmt.Errorf("start monitored run: %w", verr)
+	} else if warn != "" {
+		fmt.Fprintln(os.Stderr, "execave: warning:", warn)
 	}
 
 	sb := sandbox.New(cfg, r.absConfigPath, r.netPath)
