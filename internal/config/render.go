@@ -10,8 +10,8 @@ type effectiveRule struct {
 	source    string
 }
 
-// RenderEffectiveTOML renders the effective config as TOML with source-path comments.
-// RenderEffectiveTOML panics if cfg is nil.
+// RenderEffectiveTOML renders the merged config as TOML with source-path comments.
+// cfg must not be nil (panics otherwise).
 func RenderEffectiveTOML(cfg *Config) string {
 	if cfg == nil {
 		panic("cfg must not be nil")

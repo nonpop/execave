@@ -1,9 +1,10 @@
-// Package proxy implements a forward HTTP proxy that listens on a Unix domain socket
-// and enforces a network allowlist based on net rules.
+// Package proxy implements a forward HTTP proxy on a Unix domain socket that
+// enforces network rules from the execave config.
 //
-// The proxy handles CONNECT requests and plain HTTP requests.
-// It evaluates each request against the configured allowlist and either forwards
-// the request or responds with 403 Forbidden.
+// The proxy handles CONNECT (HTTPS tunnelling) and plain HTTP requests.
+// When noEnforce is true, rules are evaluated for logging only.
+// Call [Proxy.Start] before passing the UDS path to the tunnel, and
+// [Proxy.Stop] during cleanup.
 package proxy
 
 import (
@@ -32,7 +33,7 @@ const (
 	readHeaderTimeout = 30 * time.Second
 )
 
-// Proxy is a forward HTTP proxy that listens on a UDS and enforces net rules.
+// Proxy is a forward HTTP proxy on a Unix domain socket.
 type Proxy struct {
 	logger    *accesslog.Logger
 	resolver  *netrules.Resolver
@@ -46,11 +47,8 @@ type Proxy struct {
 	serveErr  error
 }
 
-// New creates a new Proxy with the given access logger, net rules resolver, UDS path, and enforcement flag.
-// resolver must not be nil.
-// logger may be nil if access logging is not needed.
-// udsPath must not be empty.
-// When noEnforce is true, rules are evaluated for logging only; all connections are forwarded regardless of result.
+// New creates a [Proxy]. resolver must not be nil and udsPath must not be
+// empty (panics otherwise). logger may be nil.
 func New(logger *accesslog.Logger, resolver *netrules.Resolver, udsPath string, noEnforce bool) *Proxy {
 	if resolver == nil {
 		panic("resolver must not be nil")
@@ -72,7 +70,7 @@ func New(logger *accesslog.Logger, resolver *netrules.Resolver, udsPath string, 
 	return proxy
 }
 
-// Start creates the UDS and begins accepting connections.
+// Start creates the UDS listener and begins accepting connections.
 func (p *Proxy) Start() error {
 	var lc net.ListenConfig
 	listener, err := lc.Listen(context.Background(), "unix", p.udsPath)
@@ -95,8 +93,7 @@ func (p *Proxy) Start() error {
 	return nil
 }
 
-// Stop closes the listener, drains in-flight connections with a timeout,
-// and removes the UDS.
+// Stop shuts down the proxy, drains in-flight connections, and removes the UDS.
 func (p *Proxy) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
@@ -118,7 +115,7 @@ func (p *Proxy) Stop() error {
 	return err
 }
 
-// Addr returns the listener address. Only valid after Start.
+// Addr returns the listener address. Only valid after [Proxy.Start].
 func (p *Proxy) Addr() net.Addr {
 	return p.listener.Addr()
 }

@@ -1,8 +1,9 @@
-// Package tunnel implements a TCP-to-UDS bridge that runs inside the sandbox.
+// Package tunnel implements the TCP-to-UDS bridge that runs inside the sandbox
+// as the sandboxed process's sole network exit.
 //
-// The tunnel listens on 127.0.0.1:0 (ephemeral port), bridges each TCP connection
-// to the proxy's Unix domain socket, sets HTTP_PROXY/HTTPS_PROXY environment
-// variables, and runs the user command as a subprocess.
+// [WrapCommand] prepends the tunnel invocation to a command slice. [Run] is
+// dispatched from the "network-tunnel" CLI subcommand. Fail-closed: if the
+// tunnel cannot bind or connect, the command exits immediately.
 package tunnel
 
 import (
@@ -19,15 +20,15 @@ import (
 	"syscall"
 )
 
-// Subcommand is the subcommand name for the network tunnel.
+// Subcommand is the CLI subcommand name for the tunnel.
 const Subcommand = "network-tunnel"
 
-// ExecCount is the number of exec transitions the tunnel adds to the execution chain.
+// ExecCount is the number of exec transitions the tunnel adds to the
+// execution chain. Used by sandbox and monitor to compute setup skip counts.
 const ExecCount = 1
 
-// WrapCommand prepends the tunnel invocation to command, returning the full
-// argv starting with tunnelBinary.
-// command must not be empty.
+// WrapCommand prepends the tunnel invocation to command.
+// command must not be empty (panics otherwise).
 func WrapCommand(tunnelBinary, udsPath string, command []string) []string {
 	if len(command) == 0 {
 		panic("command must not be empty")
@@ -38,10 +39,8 @@ func WrapCommand(tunnelBinary, udsPath string, command []string) []string {
 	return result
 }
 
-// Run starts the tunnel and runs the user command.
-// udsPath is the path to the proxy's Unix domain socket.
-// targetArgv is the user command and its arguments.
-// Returns the user command's exit code.
+// Run starts the TCP-to-UDS bridge, injects proxy env vars, and execs
+// targetArgv. Returns the user command's exit code.
 func Run(udsPath string, targetArgv []string) (int, error) {
 	if len(targetArgv) == 0 {
 		return 1, errors.New("no command specified")
@@ -194,7 +193,7 @@ func envKey(s string) string {
 	return key
 }
 
-// FormatListenAddr formats the tunnel's listen address for display.
+// FormatListenAddr formats the tunnel listen address for display.
 func FormatListenAddr(port int) string {
 	return "127.0.0.1:" + strconv.Itoa(port)
 }

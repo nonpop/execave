@@ -4,25 +4,21 @@ import (
 	"sort"
 )
 
-// AccessResult represents the outcome of resolving a syscall against rules.
+// AccessResult represents the outcome of [Resolver.CheckAccess].
 type AccessResult struct {
-	// Known is true if this syscall appears in the resolver's rules (allow or blocked).
-	Known bool
-	// Allowed is true if the syscall is permitted by a matching rule. Meaningful only when Known is true.
-	Allowed bool
-	// Rule is the RawRule of the matching rule, or nil if blocked or unknown.
-	Rule *string
+	Known   bool    // True if the syscall is in the ruleable set.
+	Allowed bool    // True if permitted by an allow rule. Meaningful only when Known is true.
+	Rule    *string // Matching rule, or nil if blocked or unknown.
 }
 
-// Resolver evaluates syscalls against a set of syscall access rules.
+// Resolver evaluates syscall names against the rule set and blocked list.
 type Resolver struct {
 	rules   []Rule
 	blocked map[string]bool
 }
 
-// NewResolver creates a new Resolver from the given syscall rules.
-// ruleableNames is the set of syscall names that can be targeted by rules.
-// Blocked syscalls are all ruleable syscalls not covered by an allow rule.
+// NewResolver creates a [Resolver]. Syscalls in ruleableNames without an
+// allow rule are implicitly blocked.
 func NewResolver(rules []Rule, ruleableNames []string) *Resolver {
 	allowedNames := make(map[string]bool, len(rules))
 	for _, rule := range rules {
@@ -37,10 +33,8 @@ func NewResolver(rules []Rule, ruleableNames []string) *Resolver {
 	return &Resolver{rules: rules, blocked: blocked}
 }
 
-// CheckAccess evaluates a syscall name against the rules and returns the result.
-// An allow rule match returns {Known: true, Allowed: true, Rule: &rawRule}.
-// A blocked name returns {Known: true, Allowed: false, Rule: nil}.
-// No match returns {Known: false, Allowed: false, Rule: nil}.
+// CheckAccess evaluates a syscall name. Returns Known=true for names in the
+// ruleable set, with Allowed reflecting whether an allow rule exists.
 func (r *Resolver) CheckAccess(name string) AccessResult {
 	for _, rule := range r.rules {
 		if rule.Name == name && rule.action == actionAllow {
@@ -53,8 +47,8 @@ func (r *Resolver) CheckAccess(name string) AccessResult {
 	return AccessResult{Known: false, Allowed: false, Rule: nil}
 }
 
-// Names returns a sorted list of all monitored syscall names (allow + blocked).
-// Used to build the strace trace expression.
+// Names returns all monitored syscall names (allowed + blocked), sorted.
+// Used to build the strace -e trace= expression.
 func (r *Resolver) Names() []string {
 	seen := make(map[string]bool)
 	for _, rule := range r.rules {
@@ -71,8 +65,8 @@ func (r *Resolver) Names() []string {
 	return names
 }
 
-// AllowedNames returns a sorted list of syscall names with allow rules.
-// Used to build the seccomp filter allowed-syscall set.
+// AllowedNames returns syscall names with allow rules, sorted.
+// Used to build the seccomp filter allow set.
 func (r *Resolver) AllowedNames() []string {
 	names := make([]string, 0, len(r.rules))
 	for _, rule := range r.rules {

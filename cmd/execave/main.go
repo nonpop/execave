@@ -1,4 +1,5 @@
-// Package main is the CLI entrypoint for execave.
+// Package main is the execave binary entrypoint.
+// All logic lives in [commands] and the internal packages.
 package main
 
 import (

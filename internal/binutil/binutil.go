@@ -1,4 +1,6 @@
-// Package binutil provides external binary resolution, validation, and version checking.
+// Package binutil resolves, validates, and version-checks the external
+// binaries that execave depends on (bwrap and strace), and detects the
+// ELF interpreter for dynamic linker auto-mounting.
 package binutil
 
 import (
@@ -11,9 +13,8 @@ import (
 	"syscall"
 )
 
-// ResolveBwrap finds and validates the bwrap binary.
-// exec.LookPath resolves "bwrap" from PATH. The resolved path entry is
-// validated for root ownership before use.
+// ResolveBwrap resolves "bwrap" from PATH and validates root ownership.
+// Returns the absolute path or an error if not found or not root-owned.
 func ResolveBwrap() (string, error) {
 	path, err := exec.LookPath("bwrap")
 	if err != nil {
@@ -27,9 +28,8 @@ func ResolveBwrap() (string, error) {
 	return path, nil
 }
 
-// ResolveStrace finds and validates the strace binary.
-// exec.LookPath resolves "strace" from PATH. The resolved path entry is
-// validated for root ownership before use.
+// ResolveStrace resolves "strace" from PATH and validates root ownership.
+// Returns the absolute path or an error if not found or not root-owned.
 func ResolveStrace() (string, error) {
 	path, err := exec.LookPath("strace")
 	if err != nil {
@@ -43,10 +43,9 @@ func ResolveStrace() (string, error) {
 	return path, nil
 }
 
-// InterpreterPath reads the PT_INTERP program header from the ELF binary at
-// bwrapPath and returns the dynamic linker path. Returns empty string for
-// static binaries (no PT_INTERP), non-ELF files, read errors, or non-absolute
-// interpreter paths.
+// InterpreterPath returns the dynamic linker path from the ELF binary at
+// bwrapPath. Returns empty string if not determinable (static binary,
+// non-ELF, read error, or non-absolute interpreter path).
 func InterpreterPath(bwrapPath string) string {
 	elfFile, err := elf.Open(bwrapPath)
 	if err != nil {
@@ -72,13 +71,9 @@ func InterpreterPath(bwrapPath string) string {
 	return ""
 }
 
-// validateBinary checks that the binary at path is safe to execute.
-//
-// Lstat (no symlink follow): the path entry itself must be owned by root.
-// A non-privileged attacker cannot create root-owned symlinks, so this
-// prevents symlink-to-real-binary injection attacks. If the path is a
-// symlink to a non-root-owned file, that is the system administrator's
-// responsibility.
+// validateBinary checks that the binary at path is root-owned via Lstat
+// (no symlink follow). This prevents symlink-based binary substitution
+// by non-privileged users.
 func validateBinary(path string) error {
 	linfo, err := os.Lstat(path)
 	if err != nil {

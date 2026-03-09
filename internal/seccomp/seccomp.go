@@ -1,8 +1,10 @@
-// Package seccomp builds classic BPF deny-list filters for bwrap's --seccomp flag.
+// Package seccomp builds cBPF deny-list filters for bwrap's --seccomp flag.
 //
-// The filter blocks ~34 dangerous syscalls by default, returning EPERM for
-// blocked calls. Processes with the wrong CPU architecture are killed
-// (SECCOMP_RET_KILL_PROCESS) to prevent x32/compat ABI confusion.
+// The blocked set has two sub-categories: ruleable syscalls (selectively
+// re-enabled via config) and defense-in-depth syscalls (already prevented
+// by the user-namespace model). See [RuleableSyscallNames] and [FilterPipe].
+//
+// Only x86_64 and arm64 are supported; [FilterPipe] panics on other architectures.
 package seccomp
 
 import (
@@ -104,10 +106,9 @@ func auditArch() uint32 {
 	}
 }
 
-// RuleableSyscallNames returns the kernel names of blocked syscalls that can be
-// used in syscall:allow config rules. Defense-in-depth syscalls
-// are excluded because the kernel already prevents them inside bwrap's
-// user-namespace sandbox — allowing them would have no effect.
+// RuleableSyscallNames returns the names of blocked syscalls that can be
+// selectively re-enabled via "allow:name" config rules. Defense-in-depth
+// syscalls are excluded.
 func RuleableSyscallNames() []string {
 	names := make([]string, 0, len(blockedSyscalls))
 	for _, sc := range blockedSyscalls {
@@ -127,10 +128,9 @@ func extractNrs(syscalls []blockedSyscall) []uint32 {
 	return nrs
 }
 
-// FilterPipe writes a BPF filter to a pipe, excluding syscalls named in allowed.
-// Allowed syscalls are removed from the deny list before building the filter.
-// If allowed is nil or empty, the full deny list is used.
-// The caller is responsible for closing the returned file.
+// FilterPipe creates a pipe containing the compiled BPF deny-list filter.
+// Syscalls in allowed are removed from the deny list. Pass the returned
+// file's descriptor to bwrap via --seccomp. The caller must close the file.
 func FilterPipe(allowed map[string]bool) (*os.File, error) {
 	effective := make([]blockedSyscall, 0, len(blockedSyscalls))
 	for _, sc := range blockedSyscalls {

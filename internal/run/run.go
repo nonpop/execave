@@ -1,4 +1,8 @@
-// Package run orchestrates sandbox execution, proxy setup, and access monitoring.
+// Package run orchestrates the full sandbox execution pipeline.
+//
+// [Run] is the single entry point: config loading, signal setup, terminal
+// management, proxy, sandbox, optional monitor, execution, and cleanup.
+// [LoadRuntimeConfig] is also exposed for "execave config show".
 package run
 
 import (
@@ -26,30 +30,22 @@ import (
 	"github.com/nonpop/execave/internal/tunnel"
 )
 
-// SandboxConfig holds the parameters for a sandboxed execution.
+// SandboxConfig holds parameters for [Run].
 type SandboxConfig struct {
-	// ConfigPath is the path to the execave configuration file, raw from the command line.
-	ConfigPath string
-	// TargetArgv is the command and arguments to execute inside the sandbox.
-	TargetArgv []string
-	// TunnelBinary overrides the tunnel binary path. If empty, os.Executable() is used.
-	TunnelBinary string
-	// MonitorConfig holds the parameters for access monitoring. If null, monitoring is disabled.
-	MonitorConfig *MonitorConfig
+	ConfigPath    string         // Path to execave config file.
+	TargetArgv    []string       // Command and arguments to execute.
+	TunnelBinary  string         // Override tunnel binary; empty uses os.Executable().
+	MonitorConfig *MonitorConfig // Nil disables monitoring.
 }
 
-// MonitorConfig holds the parameters for access monitoring.
+// MonitorConfig holds parameters for access monitoring within [Run].
 type MonitorConfig struct {
-	// File is the log output path. If empty, output to stderr after process exits.
-	File string
-	// LogAllowed controls whether allowed access log entries are emitted.
-	LogAllowed bool
-	// Unsandboxed disables bwrap and seccomp when monitoring is active, running the command unsandboxed.
-	Unsandboxed bool
+	File        string // Log output path; empty buffers to stderr after exit.
+	LogAllowed  bool   // Include OK entries in output.
+	Unsandboxed bool   // Skip bwrap/seccomp; run unsandboxed with observation only.
 }
 
-// Run executes the target command inside the sandbox described by SandboxConfig.
-// Returns the exit code of the sandboxed process on success.
+// Run executes the target command inside the sandbox. Returns the process exit code.
 func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 	runtimeCfg, cleanup, err := LoadRuntimeConfig(sandboxCfg.ConfigPath)
 	if err != nil {

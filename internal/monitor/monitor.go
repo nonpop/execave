@@ -1,3 +1,10 @@
+// Package monitor wraps commands with strace and processes strace output to
+// log filesystem and syscall access decisions.
+//
+// [Prepare] builds the strace invocation. [Monitor.Run] reads strace output,
+// resolves paths against [fsrules.Resolver], and logs entries via [accesslog.Logger].
+// Run is intended for a dedicated goroutine; [Monitor] is not safe for
+// concurrent calls to Run.
 package monitor
 
 import (
@@ -11,7 +18,8 @@ import (
 	"github.com/nonpop/execave/internal/syscallrules"
 )
 
-// Monitor processes strace output and logs filesystem and syscall access entries.
+// Monitor processes strace output and logs access entries. Not safe for
+// concurrent calls to [Monitor.Run].
 type Monitor struct {
 	logger          *accesslog.Logger
 	fsResolver      *fsrules.Resolver
@@ -20,12 +28,9 @@ type Monitor struct {
 	unenforced      bool
 }
 
-// New creates a new Monitor.
-// logger is the access log output.
-// fsResolver checks filesystem access permissions.
-// syscallResolver controls syscall tracing and logging; nil disables syscall tracing.
-// setupExecves is the number of execves to skip in strace output
-// unenforced, when true, overrides all logged entry results to ResultUnenforced.
+// New creates a [Monitor]. syscallResolver may be nil to disable syscall tracing.
+// setupExecves must not be negative (panics otherwise).
+// When unenforced is true, all logged results are overridden to [accesslog.ResultUnenforced].
 func New(
 	logger *accesslog.Logger,
 	fsResolver *fsrules.Resolver,
@@ -45,7 +50,7 @@ func New(
 	}
 }
 
-// Run parses strace output from r and writes access log entries.
+// Run reads strace output from r and logs access entries until EOF.
 func (p *Monitor) Run(r io.Reader) error {
 	scanner := bufio.NewScanner(r)
 	cwdByPid := make(map[string]string)

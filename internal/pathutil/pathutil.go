@@ -1,4 +1,5 @@
-// Package pathutil provides path expansion and normalization utilities.
+// Package pathutil provides path expansion and display-shortening utilities
+// used at config-load time and in access log formatting.
 package pathutil
 
 import (
@@ -8,13 +9,11 @@ import (
 	"strings"
 )
 
-// ShortenPath returns a display form of absPath using strict priority:
-//  1. Relative to configDir, if absPath is under configDir.
-//  2. Tilde form (~/ or ~), if absPath is under homeDir.
-//  3. The absolute path otherwise.
+// ShortenPath returns a compact display form of absPath, preferring
+// config-relative, then tilde-relative, then absolute.
 //
-// absPath must be an absolute, clean path. An empty homeDir disables tilde
-// shortening. An empty configDir skips step 1.
+// absPath must be absolute (panics otherwise). Empty homeDir or configDir
+// disables the corresponding shortening.
 func ShortenPath(absPath, homeDir, configDir string) string {
 	if !filepath.IsAbs(absPath) {
 		panic("absPath must be absolute: " + absPath)
@@ -33,9 +32,10 @@ func ShortenPath(absPath, homeDir, configDir string) string {
 	return absPath
 }
 
-// ExpandPath expands tilde, resolves relative paths against baseDir, and cleans the result.
-// A leading "~/" or bare "~" expands to os.UserHomeDir(). "~username" returns an error.
-// If os.UserHomeDir() fails, an error is returned.
+// ExpandPath normalizes a user-provided path to a clean absolute path.
+// Expands "~/" and "~" via [os.UserHomeDir]; rejects "~username".
+// Relative paths resolve against baseDir. Returns an error if tilde
+// expansion fails.
 func ExpandPath(path, baseDir string) (string, error) {
 	switch {
 	case strings.HasPrefix(path, "~/"):

@@ -1,4 +1,3 @@
-// Package commands defines the cobra command tree for execave.
 package commands
 
 import (
@@ -21,7 +20,7 @@ const defaultConfigPath = "./execave.toml"
 // configPath is the --config flag value shared by all subcommands.
 var configPath string
 
-// Execute runs the root command.
+// Execute runs the root Cobra command.
 func Execute() error {
 	return rootCmd.Execute()
 }

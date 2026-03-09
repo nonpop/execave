@@ -1,5 +1,9 @@
-// Package config handles parsing and validation of execave configuration files.
-// It loads TOML configuration and routes resource-specific rules to their parsers.
+// Package config loads, merges, and validates execave TOML configuration files.
+//
+// [Load] traverses the "extends" chain, delegates rule parsing to [fsrules],
+// [netrules], and [syscallrules], merges and deduplicates, injects synthetic
+// rules, and validates the result. [RenderEffectiveTOML] renders the merged
+// config back to TOML for inspection.
 package config
 
 import (
@@ -14,13 +18,13 @@ import (
 	"github.com/nonpop/execave/internal/syscallrules"
 )
 
-// Config represents a parsed configuration file.
+// Config represents the merged, validated configuration from one or more TOML files.
 type Config struct {
-	FSRules      []fsrules.Rule      // Access rules for filesystem paths.
-	NetRules     []netrules.Rule     // Access rules for network targets.
-	SyscallRules []syscallrules.Rule // Access rules for syscalls.
-	ManagedPaths []string            // Paths the sandbox manages (e.g., /proc, /dev, /tmp)
-	ConfigPaths  []string            // Absolute ordered list of config files loaded (root + extends).
+	FSRules      []fsrules.Rule      // Merged filesystem access rules.
+	NetRules     []netrules.Rule     // Merged network access rules.
+	SyscallRules []syscallrules.Rule // Merged syscall access rules.
+	ManagedPaths []string // Sandbox-managed paths (e.g., /proc, /dev, /tmp).
+	ConfigPaths  []string // Ordered list of config files loaded (root + extends).
 }
 
 type rawConfig struct {
@@ -84,12 +88,9 @@ func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []str
 	}, nil
 }
 
-// Load reads and parses a configuration file.
-// managedPaths are path prefixes that fs rules cannot target (e.g., /proc, /dev).
-// interpreterPath is the auto-detected ELF interpreter (dynamic linker) path;
-// empty if the interpreter is unknown or bwrap is statically linked.
-// tunnelBinary and tunnelUDS are the host-side paths for the tunnel binary and proxy UDS;
-// empty strings are skipped.
+// Load reads, merges, and validates a configuration file and its extends chain.
+// Injects synthetic read-only rules for config files, interpreterPath,
+// tunnelBinary, and tunnelUDS (empty strings are skipped).
 func Load(path string, managedPaths []string, interpreterPath, tunnelBinary, tunnelUDS string) (*Config, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

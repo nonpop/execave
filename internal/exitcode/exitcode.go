@@ -1,4 +1,4 @@
-// Package exitcode extracts exit codes from command run errors.
+// Package exitcode extracts process exit codes from [exec.Cmd.Wait] errors.
 package exitcode
 
 import (
@@ -7,11 +7,12 @@ import (
 	"syscall"
 )
 
-// Extract returns the exit code from a command run error.
-// Returns (0, nil) for a nil error.
-// Returns (128+signal, nil) for signal-terminated processes.
-// Returns (exit code, nil) for processes that exited with a non-zero code.
-// Returns (1, err) for errors that are not *exec.ExitError (e.g. failed to start).
+// Extract returns the exit code from an [exec.Cmd.Wait] error.
+//
+//   - nil error → (0, nil)
+//   - [*exec.ExitError] with signal → (128+signal, nil), per POSIX shell convention
+//   - [*exec.ExitError] with exit code → (code, nil)
+//   - other error → (1, err)
 func Extract(err error) (int, error) {
 	if err == nil {
 		return 0, nil

@@ -1,4 +1,3 @@
-// Package monitor provides strace setup and output processing for filesystem and syscall access logging.
 package monitor
 
 import (
@@ -9,30 +8,22 @@ import (
 	"github.com/nonpop/execave/internal/syscallrules"
 )
 
-// MonitoredCommand holds the strace command setup ready for exec.Cmd construction.
-// Call Started after cmd.Start succeeds, or Abort to clean up on error.
+// MonitoredCommand holds a prepared strace invocation.
+// Call [MonitoredCommand.Started] after cmd.Start, or [MonitoredCommand.Abort] on error.
 type MonitoredCommand struct {
-	// StracePath is the absolute path to strace.
-	StracePath string
-	// Args are the complete strace args (not including the binary name).
-	Args []string
-	// ExtraFiles are the additional file descriptors to pass to the child process.
-	ExtraFiles []*os.File
-	// StraceReader is the read end of the strace output pipe.
-	StraceReader *os.File
+	StracePath   string     // Absolute path to strace.
+	Args         []string   // Complete strace args (excluding binary name).
+	ExtraFiles   []*os.File // File descriptors to pass to the child.
+	StraceReader *os.File   // Read end of the strace output pipe.
 
 	straceW   *os.File
 	extraFile *os.File
 }
 
-// Prepare creates a pipe for strace output, builds strace arguments, and returns
-// a PreparedStrace ready for exec.Cmd construction.
-// stracePath must not be empty.
-// command must not be empty.
-// extraFile is an optional file descriptor forwarded to the child process; nil means none.
-// syscallResolver controls which additional syscalls are traced; nil disables syscall tracing.
-// baseFD is the file descriptor number for the first entry in ExtraFiles. The caller must place
-// ExtraFiles so that they start at this FD.
+// Prepare creates a strace output pipe and builds the strace command.
+// stracePath and command must not be empty (panics otherwise).
+// extraFile is forwarded to the child; nil means none.
+// syscallResolver adds syscall names to the trace expression; nil means file ops only.
 func Prepare(stracePath string, command []string, extraFile *os.File, syscallResolver *syscallrules.Resolver, baseFD int) (*MonitoredCommand, error) {
 	if stracePath == "" {
 		panic("stracePath must not be empty")
@@ -65,14 +56,8 @@ func Prepare(stracePath string, command []string, extraFile *os.File, syscallRes
 	}, nil
 }
 
-// Started closes parent-side pipe ends after cmd.Start has handed duplicates to the child.
-// straceW must be closed or the reader goroutine deadlocks waiting for EOF.
-// extraFile must be closed or each call leaks a file descriptor.
-// Started must be called after a successful cmd.Start.
-//
-// This is a separate method rather than part of construction because MonitoredCommand
-// does not own process creation: the caller constructs exec.Cmd, calls cmd.Start,
-// and then calls Started to close the parent-side ends that the child now holds.
+// Started closes parent-side pipe ends after cmd.Start has handed duplicates
+// to the child. Must be called exactly once after a successful cmd.Start.
 func (p *MonitoredCommand) Started() {
 	if err := p.straceW.Close(); err != nil {
 		panic("close strace pipe write end: " + err.Error())
@@ -84,7 +69,7 @@ func (p *MonitoredCommand) Started() {
 	}
 }
 
-// Abort closes all pipe ends on an error path, before the child has started.
+// Abort closes all pipe ends. Call instead of Started when cmd.Start fails.
 func (p *MonitoredCommand) Abort() {
 	_ = p.StraceReader.Close()
 	_ = p.straceW.Close()

@@ -8,12 +8,12 @@ import (
 	"strings"
 )
 
-// PinnedBwrapVersion is the known-good bwrap version (0.11.0).
+// PinnedBwrapVersion is the known-good bwrap version.
 //
 //nolint:gochecknoglobals // package-level constant-like value
 var PinnedBwrapVersion = [3]int{0, 11, 0}
 
-// PinnedStraceVersion is the known-good strace version (6.19).
+// PinnedStraceVersion is the known-good strace version.
 //
 //nolint:gochecknoglobals // package-level constant-like value
 var PinnedStraceVersion = [2]int{6, 19}
@@ -33,10 +33,9 @@ var straceVersionRe = regexp.MustCompile(`(\d+)\.(\d+)`) //nolint:gochecknogloba
 // bwrapVersionRe matches "X.Y.Z" and captures the three version components.
 var bwrapVersionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`) //nolint:gochecknoglobals
 
-// CheckBwrapVersion runs bwrap --version at path and returns a compatibility assessment.
-//
-// Returns ("", nil) for OK tier, (warning, nil) for WARN tier, ("", err) for ERROR tier.
-// path must be the absolute path to the bwrap binary, already validated by ValidateBinary.
+// CheckBwrapVersion checks the bwrap version at path against [PinnedBwrapVersion].
+// Returns ("", nil) if compatible, (warning, nil) if untested minor, or ("", error)
+// if incompatible. path must already be validated by [ResolveBwrap].
 func CheckBwrapVersion(path string) (string, error) {
 	out, err := exec.Command(path, "--version").Output() // #nosec G204 -- path validated by ValidateBinary
 	if err != nil {
@@ -61,10 +60,9 @@ func CheckBwrapVersion(path string) (string, error) {
 	panic("unexpected compat level")
 }
 
-// CheckStraceVersion runs strace --version at path and returns a compatibility assessment.
-//
-// Returns ("", nil) for OK tier, (warning, nil) for WARN tier, ("", err) for ERROR tier.
-// path must be the absolute path to the strace binary, already validated by ValidateBinary.
+// CheckStraceVersion checks the strace version at path against [PinnedStraceVersion].
+// Returns ("", nil) if compatible, (warning, nil) if untested minor, or ("", error)
+// if incompatible. path must already be validated by [ResolveStrace].
 func CheckStraceVersion(path string) (string, error) {
 	out, err := exec.Command(path, "--version").Output() // #nosec G204 -- path validated by ValidateBinary
 	if err != nil {

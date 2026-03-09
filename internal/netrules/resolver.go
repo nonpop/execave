@@ -5,32 +5,24 @@ import (
 	"strings"
 )
 
-// AccessResult represents the outcome of resolving a network request against rules.
+// AccessResult represents the outcome of [Resolver.CheckAccess].
 type AccessResult struct {
-	// Allowed is true if the request is permitted by a matching rule.
-	Allowed bool
-	// Rule is the raw rule string that matched, or nil if no rule matched.
-	Rule *string
+	Allowed bool    // True if permitted by a matching rule.
+	Rule    *string // Matching rule, or nil.
 }
 
-// Resolver evaluates network requests against a set of net access rules.
+// Resolver evaluates network requests against a rule set.
 type Resolver struct {
 	rules []Rule
 }
 
-// NewResolver creates a new Resolver from the given net rules.
+// NewResolver creates a [Resolver] with the given rules.
 func NewResolver(rules []Rule) *Resolver {
 	return &Resolver{rules: rules}
 }
 
-// CheckAccess evaluates a request against the rules and returns the result.
-// host is the domain name or IP address from the request (without brackets for IPv6).
-// port is the numeric port from the request.
-//
-// Resolution uses single-dimension target specificity:
-//   - Domains: exact match beats wildcard
-//   - IPs: longer CIDR prefix beats shorter
-//   - Default: deny
+// CheckAccess evaluates a (protocol, host, port) tuple against rules.
+// host is a domain name or IP (without brackets for IPv6). Default-deny.
 func (r *Resolver) CheckAccess(protocol protocol, host string, port uint16) AccessResult {
 	lowerHost := strings.ToLower(host)
 

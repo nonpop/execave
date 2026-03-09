@@ -17,37 +17,37 @@ const (
 	OperationWrite Operation = "write"
 )
 
-// Resolver handles rule matching and access decisions.
+// Resolver evaluates filesystem paths against rules using longest-prefix matching.
 type Resolver struct {
 	rules        []Rule
 	managedPaths []string
 }
 
-// SymlinkChain captures each hop in a symlink resolution chain.
+// SymlinkChain records the hops in a symlink resolution chain.
 type SymlinkChain struct {
-	Hops               []SymlinkHop
-	ResolvedPath       string // Final target path (clean, absolute); empty if unresolvable or depth limit exceeded
-	Unresolvable       bool   // True if chain entered an unresolvable path (e.g., managed tmpfs)
-	DepthLimitExceeded bool   // True if chain exceeded MAXSYMLINKS
+	Hops               []SymlinkHop // Symlink hops in resolution order.
+	ResolvedPath       string       // Final resolved path; empty if unresolvable or depth exceeded.
+	Unresolvable       bool   // Chain entered a managed path (host resolution unreliable).
+	DepthLimitExceeded bool   // Chain exceeded MAXSYMLINKS (40).
 }
 
-// SymlinkHop represents one symlink in the resolution chain.
+// SymlinkHop records one symlink encountered during resolution.
 type SymlinkHop struct {
-	Path    string  // The symlink path (clean, absolute)
-	Allowed bool    // Was this hop readable?
-	Rule    *string // Raw rule string that matched, or nil
+	Path    string  // Absolute, clean symlink path.
+	Allowed bool    // Whether the hop was readable.
+	Rule    *string // Matching rule, or nil.
 }
 
-// AccessResult represents the result of an access check.
+// AccessResult represents the outcome of [Resolver.CheckAccess].
 type AccessResult struct {
-	Allowed      bool
-	Rule         *string       // Raw rule string that matched, or nil if no match
-	Symlink      *SymlinkChain // Non-nil if path contained symlinks that were resolved
-	Uncertain    bool          // True if result could not be determined (e.g., symlink through managed path)
-	PathNotFound bool          // True if the path (or a component) does not exist on the host filesystem
+	Allowed      bool          // True if permitted by a matching rule.
+	Rule         *string       // Matching rule, or nil.
+	Symlink      *SymlinkChain // Non-nil if symlinks were encountered.
+	Uncertain    bool          // True if resolution entered a managed path.
+	PathNotFound bool          // True if a path component does not exist on the host.
 }
 
-// NewResolver creates a new Resolver.
+// NewResolver creates a [Resolver] with the given rules and managed paths.
 func NewResolver(rules []Rule, managedPaths []string) *Resolver {
 	return &Resolver{
 		rules:        rules,
@@ -55,9 +55,9 @@ func NewResolver(rules []Rule, managedPaths []string) *Resolver {
 	}
 }
 
-// CheckAccess determines if a path can be accessed with the given operation.
-// For symlinks, this resolves them component-by-component, recording each hop.
-// Symlinks at rule boundaries are not resolved (bwrap handles them at mount time).
+// CheckAccess evaluates whether path is accessible for operation.
+// Resolves symlinks component-by-component; rule-boundary symlinks are
+// left to bwrap.
 func (r *Resolver) CheckAccess(path string, operation Operation) AccessResult {
 	cleanPath := filepath.Clean(path)
 
@@ -125,8 +125,9 @@ func (r *Resolver) CheckAccess(path string, operation Operation) AccessResult {
 	}
 }
 
-// PermissionFor returns the permission that would apply to the given path.
-// The path must be absolute and clean.
+// PermissionFor returns the permission for path without symlink resolution.
+// path must be absolute and clean (panics otherwise).
+// Used by the sandbox package to generate bwrap mount arguments.
 func (r *Resolver) PermissionFor(path string) Permission {
 	if !filepath.IsAbs(path) {
 		panic("path must be absolute: " + path)

@@ -1,8 +1,8 @@
-// Package fsrules implements filesystem rule parsing, validation, and resolution.
+// Package fsrules implements filesystem access rule parsing, validation, and
+// resolution for the execave sandbox.
 //
-// This package handles FS-specific rule syntax (permission:path), path
-// normalization, cross-rule validation (duplicates, managed paths, config
-// protection), and rule resolution (longest prefix matching, permission checks).
+// Rules have the form "permission:path" (ro, rw, or none). [Resolver] uses
+// longest-prefix matching with component-by-component symlink resolution.
 package fsrules
 
 import (
@@ -13,16 +13,16 @@ import (
 	"github.com/nonpop/execave/internal/pathutil"
 )
 
-// Rule represents a parsed filesystem rule.
+// Rule represents a parsed filesystem access rule.
 type Rule struct {
-	Permission Permission
-	Path       string
-	RawRule    string // Original rule for error messages and logging
-	SourcePath string // Config file path that produced this rule
+	Permission Permission // Access level for this rule.
+	Path       string    // Absolute, clean path.
+	RawRule    string // Original rule string for display.
+	SourcePath string // Config file that produced this rule.
 }
 
-// Permission represents the access level for a filesystem rule.
-// Higher values are more permissive: None < ReadOnly < ReadWrite.
+// Permission represents a filesystem access level.
+// Ordered by permissiveness: None < ReadOnly < ReadWrite.
 // PermissionUnknown is the zero value and must not appear in validated rules.
 type Permission int
 
@@ -37,7 +37,7 @@ const (
 	PermissionReadWrite
 )
 
-// Canonical returns the canonical version of the rule, suitable for deduplication, comparison, and rendering.
+// Canonical returns the normalized "permission:path" form for deduplication and display.
 func (r Rule) Canonical() string {
 	var perm string
 	switch r.Permission {
@@ -53,8 +53,8 @@ func (r Rule) Canonical() string {
 	return fmt.Sprintf("%s:%s", perm, r.Path)
 }
 
-// ParseRule parses a rule body in the format "permission:path".
-// Relative paths are resolved relative to configDir.
+// ParseRule parses "permission:path" into a [Rule].
+// Paths are expanded via [pathutil.ExpandPath] relative to configDir.
 func ParseRule(ruleBody, configDir, configPath string) (Rule, error) {
 	parts := strings.SplitN(ruleBody, ":", 2)
 	if len(parts) != 2 {
@@ -89,8 +89,8 @@ func ParseRule(ruleBody, configDir, configPath string) (Rule, error) {
 	}, nil
 }
 
-// ValidateRules performs cross-rule validation: checks for duplicate paths,
-// ensures config files are not writable, and ensures no rules target managed paths.
+// ValidateRules checks for duplicate paths, writable config files, and
+// rules targeting managed paths. Returns the first violation found.
 func ValidateRules(rules []Rule, configPaths []string, managedPaths []string) error {
 	if err := validateNoDuplicatePaths(rules); err != nil {
 		return err

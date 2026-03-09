@@ -1,4 +1,10 @@
-// Package sandbox executes commands in a bubblewrap container with restricted filesystem access.
+// Package sandbox translates a [config.Config] into a bubblewrap (bwrap)
+// command with a seccomp-bpf filter.
+//
+// [Prepare] is the sole entry point. It builds bwrap arguments from filesystem
+// rules, creates the seccomp filter, and returns a [SandboxedCommand] ready
+// for [exec.Cmd] construction. [ManagedDirs] returns the paths the sandbox
+// handles automatically.
 package sandbox
 
 import (
@@ -25,7 +31,7 @@ const tiocSTISysctlPath = "/proc/sys/dev/tty/legacy_tiocsti"
 var managedDirs = []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}
 
 // ManagedDirs returns the directories the sandbox manages automatically.
-// These are: /dev, /proc, /tmp, /newroot, /oldroot.
+// User rules must not target these paths.
 func ManagedDirs() []string {
 	return managedDirs
 }
@@ -35,23 +41,17 @@ type sandbox struct {
 	cfg *config.Config
 }
 
-// SandboxedCommand describes a fully prepared sandbox command ready to execute.
+// SandboxedCommand holds a fully prepared bwrap invocation.
 type SandboxedCommand struct {
-	// BwrapPath is the absolute path to bwrap.
-	BwrapPath string
-	// Args are the complete bwrap args (not including the binary name).
-	Args []string
-	// ExtraFiles are files to pass to the process (seccomp pipe).
-	ExtraFiles []*os.File
-	// SetupExecves is the number of exec transitions before the user command (bwrap exec + tunnel exec transitions + user command exec).
-	SetupExecves int
+	BwrapPath    string     // Absolute path to bwrap.
+	Args         []string   // Complete bwrap args (excluding binary name).
+	ExtraFiles   []*os.File // Files to pass to the child (seccomp pipe).
+	SetupExecves int        // Exec transitions before the user command starts.
 }
 
-// Prepare builds the sandboxed bwrap command and seccomp filter.
-// bwrapPath must not be empty.
-// seccompFD is the file descriptor number the seccomp pipe will have in the child process.
-// The caller must place ExtraFiles so that the seccomp pipe lands at this FD.
-// The returned cleanup function releases resources (seccomp pipe) and must be called after the command finishes.
+// Prepare builds the bwrap command and seccomp filter.
+// bwrapPath must not be empty (panics otherwise). seccompFD is the fd number
+// for the seccomp pipe in the child. The returned cleanup releases resources.
 func Prepare(bwrapPath string, cfg *config.Config, command []string, seccompFD int) (*SandboxedCommand, func(), error) {
 	if bwrapPath == "" {
 		panic("bwrapPath must not be empty")

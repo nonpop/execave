@@ -1,8 +1,9 @@
-// Package syscallrules implements syscall rule parsing, validation, and resolution.
+// Package syscallrules implements syscall access rule parsing, validation, and
+// resolution for the execave sandbox.
 //
-// This package handles syscall-specific rule syntax (action:name), cross-rule
-// validation (duplicate identity, non-ruleable names), and rule resolution
-// (linear scan, default-deny).
+// Rules have the form "allow:name". All names in the ruleable set
+// (from [seccomp.RuleableSyscallNames]) that lack an allow rule are
+// implicitly blocked.
 package syscallrules
 
 import (
@@ -25,18 +26,17 @@ const (
 // Rule represents a parsed syscall access rule.
 type Rule struct {
 	action     action
-	Name       string // Syscall kernel name.
-	RawRule    string // Original rule string (e.g. "allow:ptrace").
-	SourcePath string // Config file path that produced this rule.
+	Name       string // Kernel syscall name.
+	RawRule    string // Original rule string for display.
+	SourcePath string // Config file that produced this rule.
 }
 
-// Canonical returns the canonical version of the rule, suitable for deduplication, comparison, and rendering.
+// Canonical returns the normalized "allow:name" form for deduplication and display.
 func (r Rule) Canonical() string {
 	return fmt.Sprintf("allow:%s", r.Name)
 }
 
-// ParseRule parses a syscall rule body in the format "allow:name".
-// configPath is set as the SourcePath on the returned rule.
+// ParseRule parses "allow:name" into a [Rule].
 func ParseRule(rawRule, configPath string) (Rule, error) {
 	actionStr, name, ok := strings.Cut(rawRule, ":")
 	if !ok || name == "" {
@@ -65,8 +65,8 @@ func parseAction(s string) (action, error) {
 	}
 }
 
-// ValidateRules checks that all rule names are valid ruleable syscall names and
-// that there are no duplicate identities within the rule set.
+// ValidateRules checks that all names are in the ruleable set and that there
+// are no duplicates.
 func ValidateRules(rules []Rule) error {
 	ruleableNames := seccomp.RuleableSyscallNames()
 	ruleable := make(map[string]bool, len(ruleableNames))

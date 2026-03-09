@@ -1,9 +1,9 @@
-// Package netrules implements network rule parsing, validation, and resolution.
+// Package netrules implements network access rule parsing, validation, and
+// resolution for the execave proxy.
 //
-// This package handles net-specific rule syntax (action:target:port), target
-// classification (domain, IPv4, IPv6, CIDR), cross-rule validation (duplicate
-// identity, mixed port patterns), and rule resolution (single-dimension target
-// specificity, protocol compatibility, default-deny).
+// Rules have the form "action:target:port". [Resolver] uses single-dimension
+// target specificity (exact domain > wildcard; longer CIDR > shorter) with
+// default-deny.
 package netrules
 
 import (
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// Protocol represents the action/protocol for a net rule.
+// protocol represents the action/protocol for a net rule.
 type protocol int
 
 const (
@@ -59,13 +59,13 @@ type Rule struct {
 	protocol        protocol
 	target          target
 	port            port
-	RawRule         string // Original rule for error messages and logging
-	canonicalTarget string // Canonical target pattern for validation identity.
-	canonicalPort   string // Raw port string ("443" or "*") for validation identity.
-	SourcePath      string // Config file path that produced this rule.
+	RawRule         string // Original rule string for display.
+	canonicalTarget string // Normalized target for identity comparison.
+	canonicalPort   string // Normalized port ("443" or "*") for identity comparison.
+	SourcePath      string // Config file that produced this rule.
 }
 
-// Canonical returns the canonical version of the rule, suitable for deduplication, comparison, and rendering.
+// Canonical returns the normalized "action:target:port" form for deduplication and display.
 func (r Rule) Canonical() string {
 	var proto string
 	switch r.protocol {
@@ -79,7 +79,7 @@ func (r Rule) Canonical() string {
 	return fmt.Sprintf("%s:%s:%s", proto, r.canonicalTarget, r.canonicalPort)
 }
 
-// ParseAccessRule parses an access rule body in the format "action:target:port".
+// ParseAccessRule parses "action:target:port" into a [Rule].
 func ParseAccessRule(rawRule, configPath string) (Rule, error) {
 	action, rest, ok := strings.Cut(rawRule, ":")
 	if !ok {
@@ -116,8 +116,8 @@ func ParseAccessRule(rawRule, configPath string) (Rule, error) {
 	}, nil
 }
 
-// ValidateRules performs cross-rule validation: checks for duplicate (target, port)
-// identity and mixed port patterns (wildcard + specific on the same target).
+// ValidateRules checks for duplicate (target, port) identities and mixed
+// port patterns (wildcard + specific on the same target).
 func ValidateRules(rules []Rule) error {
 	if err := validateNoDuplicateAccessIdentity(rules); err != nil {
 		return err

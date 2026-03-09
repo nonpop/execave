@@ -10,20 +10,15 @@ import (
 	"github.com/nonpop/execave/internal/sandbox"
 )
 
-// RuntimeConfig holds the resolved runtime configuration returned by LoadRuntimeConfig.
+// RuntimeConfig holds the resolved runtime configuration from [LoadRuntimeConfig].
 type RuntimeConfig struct {
-	// Config is the merged, validated configuration.
-	Config *config.Config
-	// TunnelBinary is the path to the execave binary used as the tunnel.
-	TunnelBinary string
-	// UDSPath is the path to the proxy Unix domain socket.
-	UDSPath string
+	Config       *config.Config // Merged, validated configuration.
+	TunnelBinary string         // Path to the execave binary used as the tunnel.
+	UDSPath      string         // Path to the proxy Unix domain socket.
 }
 
-// LoadRuntimeConfig loads and resolves the runtime configuration from cfgPath.
-// It resolves the tunnel binary via os.Executable(), creates the proxy directory,
-// auto-detects the dynamic linker from bwrap, and returns a RuntimeConfig.
-// The returned cleanup function removes the proxy directory; the caller must defer it.
+// LoadRuntimeConfig loads config, resolves binaries, and creates the proxy
+// directory. The returned cleanup removes the proxy directory; defer it.
 func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
 	tunnelBinary, err := os.Executable()
 	if err != nil {
@@ -59,9 +54,9 @@ func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
 	}, cleanup, nil
 }
 
-// CreateProxyDir creates a temporary directory under XDG_RUNTIME_DIR for the proxy UDS.
-// XDG_RUNTIME_DIR must be set; returns an error if it is not.
-// The caller is responsible for removing the directory when done.
+// CreateProxyDir creates a temporary directory under XDG_RUNTIME_DIR for the
+// proxy UDS. Returns an error if XDG_RUNTIME_DIR is not set. The caller must
+// remove the directory when done.
 func CreateProxyDir() (string, error) {
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
