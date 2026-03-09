@@ -1,9 +1,10 @@
-package fsrules
+package fsrules_test
 
 import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,7 +32,7 @@ func FuzzParseRule(f *testing.F) {
 			configDir = "/fuzz" + configDir
 		}
 
-		rule, err := ParseRule(ruleStr, configDir, "")
+		rule, err := fsrules.ParseRule(ruleStr, configDir, "")
 		if err != nil {
 			return // Invalid input is fine
 		}
@@ -39,7 +40,7 @@ func FuzzParseRule(f *testing.F) {
 		// Invariants for successfully parsed rules:
 
 		// Permission must be valid
-		assert.NotEqual(t, PermissionUnknown, rule.Permission)
+		assert.NotEqual(t, fsrules.PermissionUnknown, rule.Permission)
 
 		// Path must not be empty
 		assert.NotEmpty(t, rule.Path)

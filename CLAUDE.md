@@ -44,12 +44,11 @@ golangci-lint run --fix                   # Lint
 
 - Follow conventions in `docs/testing.md`
 - Use testify: `require` for setup, `assert` for assertions
-- **No assertion messages** — never pass a message argument to assert/require calls (`assert.Equal(t, want, got)` not `assert.Equal(t, want, got, "message")`)
-- Strict TDD: failing test first, then implement
-- Integration/E2E tests: black-box (`package_test`), public API only
-- Unit tests: white-box (same package), direct access to internals
-- Integration tests: every spec scenario must have a corresponding test in `<package>/integration_test.go`; update the test when the scenario changes, remove it when the scenario is removed
-- E2E tests: every playbook use case must have a corresponding test in `test/e2e/<playbook_name>_test.go`; update the test when the use case changes, remove it when the use case is removed
+- **No assertion messages** — never pass a message argument to assert/require calls
+- Strict TDD: when adding or changing behavior, update e2e tests first, then implement
+- E2e tests are the source of truth for correctness. Component and integration tests extend coverage where e2e is impractical.
+- Prefer table-driven e2e tests when covering similar cases; each entry is a sub-case of the same use case
+- Component tests: black-box (`package_test`), test package public API; do not expand public API for testing
 
 ## Git
 

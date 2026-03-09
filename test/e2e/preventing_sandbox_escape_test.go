@@ -3,6 +3,7 @@ package e2e_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -10,9 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRules tests that
-// a symlink inside an accessible directory pointing outside the allowed rules is denied.
-func TestE2E_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRules(t *testing.T) {
+func Test_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRules(t *testing.T) {
+	// A symlink inside an accessible directory pointing to a path outside the rules is denied:
+	// bwrap only mounts paths covered by rules, so the symlink target is absent from the sandbox.
+
 	s := newScenario(t)
 	public := s.givenDir("public")
 	secret := s.givenDir("secret")
@@ -28,9 +30,9 @@ func TestE2E_PreventingSandboxEscape_SymlinkEscapeLinkInsideMountPointsOutsideRu
 	s.thenStderrContains("escape-link: No such file or directory")
 }
 
-// TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop tests that a
-// symlink chain stops at a denied intermediate hop and never reaches the final target.
-func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t *testing.T) {
+func Test_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t *testing.T) {
+	// A symlink chain stops at a denied intermediate hop: the final target is never accessed
+	// or logged, even if it would be accessible if reached directly.
 	s := newScenario(t)
 	mount := s.givenDir("mount")
 	nomatch := s.givenDir("nomatch")
@@ -51,29 +53,79 @@ func TestE2E_PreventingSandboxEscape_SymlinkChainBrokenAtDeniedIntermediateHop(t
 	s.thenStderrNotContains(secretFile)
 }
 
-// TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented tests that the config file
-// is forced read-only inside the sandbox even when the parent directory is rw.
-func TestE2E_PreventingSandboxEscape_ConfigFileModificationPrevented(t *testing.T) {
-	s := newScenario(t)
-	work := s.givenDir("work")
-	otherFile := work.file("other.txt", "other data")
-	configPath := work.join("execave.toml")
+func Test_PreventingSandboxEscape_ConfigFileProtection(t *testing.T) {
+	t.Run("config in writable dir forced read-only", func(t *testing.T) {
+		// The config file is forced read-only inside the sandbox even when its parent
+		// directory has a writable rule. Writes to the config are denied; reads and
+		// writes to sibling files succeed normally.
 
-	s.givenRulesInDir(work.String(), "fs:rw:"+work.String())
+		s := newScenario(t)
+		work := s.givenDir("work")
+		otherFile := work.file("other.txt", "other data")
+		configPath := work.join("execave.toml")
 
-	s.whenRun("sh", "-c", "echo '{}' > "+configPath)
+		s.givenRulesInDir(work.String(), "fs:rw:"+work.String())
 
-	s.thenExitCodeNonZero()
-	s.thenStderrContains("execave.toml: Read-only file system")
+		s.whenRun("sh", "-c", "echo '{}' > "+configPath)
+		s.thenExitCodeNonZero()
+		s.thenStderrContains("execave.toml: Read-only file system")
 
-	s.whenRun("sh", "-c", "echo modified >> "+otherFile)
+		s.whenRun("cat", configPath)
+		s.thenExitCode(0)
 
-	s.thenExitCode(0)
+		s.whenRun("sh", "-c", "echo modified >> "+otherFile)
+		s.thenExitCode(0)
+	})
+
+	t.Run("base config in extends chain also forced read-only", func(t *testing.T) {
+		// Both the root config and any base configs from an extends chain are forced
+		// read-only inside the sandbox, even when their parent directory has a writable rule.
+
+		s := newScenario(t)
+		work := s.givenDir("work")
+		basePath := work.join("base.toml")
+		childPath := work.join("execave.toml")
+
+		err := os.WriteFile(basePath, tomlConfig(systemPaths()), 0o600)
+		require.NoError(t, err)
+
+		childContent := "extends = [\"base.toml\"]\n" + string(tomlConfig([]string{"fs:rw:" + work.String()}))
+		err = os.WriteFile(childPath, []byte(childContent), 0o600)
+		require.NoError(t, err)
+
+		s.configPath = childPath
+		s.configDir = work.String()
+
+		s.whenRun("sh", "-c", "echo '{}' > "+basePath)
+		s.thenExitCodeNonZero()
+		s.thenStderrContains("base.toml: Read-only file system")
+
+		s.whenRun("sh", "-c", "echo '{}' > "+childPath)
+		s.thenExitCodeNonZero()
+		s.thenStderrContains("execave.toml: Read-only file system")
+	})
+
+	t.Run("config outside rules stays invisible", func(t *testing.T) {
+		// When the config file's directory has no fs rule, the config file is not
+		// mounted in the sandbox and is invisible to the sandboxed process.
+
+		s := newScenario(t)
+		configDir := s.givenDir("config")
+		work := s.givenDir("work")
+		configPath := configDir.join("execave.toml")
+
+		s.givenRulesInDir(configDir.String(), "fs:rw:"+work.String())
+
+		s.whenRun("cat", configPath)
+		s.thenExitCodeNonZero()
+		s.thenStderrContains("No such file")
+	})
 }
 
-// TestE2E_PreventingSandboxEscape_DataExfiltrationViaNetworkDenied tests that a sandboxed
-// command with access to sensitive files cannot send data to unauthorized network endpoints.
-func TestE2E_PreventingSandboxEscape_DataExfiltrationViaNetworkDenied(t *testing.T) {
+func Test_PreventingSandboxEscape_DataExfiltrationViaNetworkDenied(t *testing.T) {
+	// A sandboxed command with fs access to sensitive files and a single allowed HTTPS
+	// endpoint cannot exfiltrate data to unauthorized destinations: the proxy denies
+	// CONNECT requests that do not match the allowlist.
 	s := newScenario(t)
 	s.givenCurl()
 
@@ -99,28 +151,92 @@ func TestE2E_PreventingSandboxEscape_DataExfiltrationViaNetworkDenied(t *testing
 	s.thenExitCodeNonZero()
 }
 
-// TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit tests that a symlink loop
-// is detected and access is denied after exceeding the 40-link depth limit.
-func TestE2E_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
+func Test_PreventingSandboxEscape_SymlinkToAncestorOfManagedPathDenied(t *testing.T) {
+	// A symlink pointing to an ancestor of a managed path (e.g., / which contains /tmp)
+	// should be flagged when the resolved path traverses into the managed subtree.
 	s := newScenario(t)
-	mount := s.givenDir("mount")
-	loopA := mount.join("loop-a")
-	loopB := mount.join("loop-b")
-	s.givenSymlink(loopB, loopA)
-	s.givenSymlink(loopA, loopB)
+	data := s.givenDir("data")
+	s.givenRules("fs:rw:" + data.String())
 
-	s.givenRules("fs:ro:" + mount.String())
+	linkPath := data.join("root-link")
+	s.whenRunTextLog("", "sh", "-c",
+		"echo test > /tmp/target.txt && ln -s / "+linkPath+" && cat "+linkPath+"/tmp/target.txt")
 
-	s.whenRunTextLog("", "cat", loopA)
-
-	s.thenExitCodeNonZero()
-	s.thenStderrContains("loop-a: Too many levels of symbolic links")
-	s.thenStderrHasEntry("DENY", "symlink-depth-limit-exceeded")
+	s.thenExitCode(0)
+	s.thenStderrHasEntry("READ", data.rel("root-link"), "UNKNOWN", "symlink-target-unresolvable")
 }
 
-// TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary tests that execave
-// rejects a non-root-owned bwrap binary found earlier in PATH.
-func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary(t *testing.T) {
+func Test_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
+	// A symlink loop is detected and denied: the monitor resolves symlinks hop by hop
+	// and denies access after hitting the 40-link depth limit (matching Linux's MAXSYMLINKS),
+	// logging the reason as symlink-depth-limit-exceeded.
+
+	cases := []struct {
+		name  string
+		setup func(s *scenario, mount testDir) string
+	}{
+		{
+			"two-node loop",
+			func(s *scenario, mount testDir) string {
+				loopA := mount.join("loop-a")
+				loopB := mount.join("loop-b")
+				s.givenSymlink(loopB, loopA)
+				s.givenSymlink(loopA, loopB)
+				return loopA
+			},
+		},
+		{
+			"self-referential",
+			func(s *scenario, mount testDir) string {
+				loopA := mount.join("loop-a")
+				s.givenSymlink(loopA, loopA)
+				return loopA
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScenario(t)
+			mount := s.givenDir("mount")
+			link := tc.setup(s, mount)
+
+			s.givenRules("fs:ro:" + mount.String())
+
+			s.whenRunTextLog("", "cat", link)
+
+			s.thenExitCodeNonZero()
+			s.thenStderrContains("loop-a: Too many levels of symbolic links")
+			s.thenStderrHasEntry("DENY", "symlink-depth-limit-exceeded")
+		})
+	}
+}
+
+func Test_PreventingSandboxEscape_PATHInjectionViaSymlinkToBwrapRejected(t *testing.T) {
+	// A non-root-owned symlink to the real bwrap placed first in PATH is rejected:
+	// execave checks ownership of the path as found by LookPath (the symlink itself),
+	// not the resolved target, so attacker-controlled PATH entries cannot redirect bwrap.
+	realBwrapPath, err := exec.LookPath("bwrap")
+	require.NoError(t, err)
+
+	fakeDir := t.TempDir()
+	symlinkBwrap := filepath.Join(fakeDir, "bwrap")
+	require.NoError(t, os.Symlink(realBwrapPath, symlinkBwrap))
+	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+	configPath := writeConfig(t, systemPaths())
+	result := runExecave(t, "", "--config", configPath, "--", "true")
+
+	assert.NotEqual(t, 0, result.ExitCode)
+	assert.Contains(t, result.Stderr, "not owned by root")
+}
+
+func Test_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary(t *testing.T) {
+	// A non-root-owned bwrap executable placed first in PATH is rejected: execave validates
+	// binary ownership before use, so an attacker-controlled executable cannot replace the
+	// real sandbox.
+	failIfNoBwrap(t)
+
 	fakeDir := t.TempDir()
 	fakeBwrap := filepath.Join(fakeDir, "bwrap")
 	require.NoError(t, os.WriteFile(fakeBwrap, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
@@ -135,34 +251,86 @@ func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeBwrapBinary(t *testing.
 	assert.Contains(t, result.Stderr, "not owned by root")
 }
 
-// TestE2E_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp tests that
-// a command attempting to create a new user namespace inside the sandbox is blocked
-// by the seccomp filter, preventing namespace escape.
-func TestE2E_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp(t *testing.T) {
-	s := newScenario(t)
-	s.givenRules()
+func Test_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp(t *testing.T) {
+	// The seccomp filter blocks the unshare syscall with EPERM, preventing namespace
+	// escape regardless of which namespace type the command requests.
+	cases := []struct {
+		name string
+		flag string
+	}{
+		{"user namespace", "--user"},
+		{"network namespace", "--net"},
+		{"mount namespace", "--mount"},
+	}
 
-	// unshare --user attempts to create a nested user namespace via the unshare syscall.
-	// The seccomp filter blocks unshare with EPERM.
-	s.whenRun("unshare", "--user", "true")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScenario(t)
+			s.givenRules()
 
-	s.thenExitCodeNonZero()
-	s.thenStderrContains("Operation not permitted")
+			s.whenRun("unshare", tc.flag, "true")
+
+			s.thenExitCodeNonZero()
+			s.thenStderrContains("Operation not permitted")
+		})
+	}
 }
 
-// rejects a non-root-owned strace binary found earlier in PATH when monitoring is active.
-func TestE2E_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing.T) {
-	fakeDir := t.TempDir()
-	fakeStrace := filepath.Join(fakeDir, "strace")
-	require.NoError(t, os.WriteFile(fakeStrace, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
+func Test_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing.T) {
+	// execave rejects a non-root-owned strace binary found earlier in PATH when monitoring
+	// is active, because strace runs outside the sandbox with full host access. Without
+	// monitoring, a fake strace in PATH is harmless — strace is never invoked.
 
-	// Put fake strace first in PATH so exec.LookPath finds it before the real one.
-	// Keep real bwrap and strace available after the fake directory.
-	t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, fakeDir string)
+	}{
+		{
+			"fake executable",
+			func(t *testing.T, fakeDir string) {
+				t.Helper()
+				fakeStrace := filepath.Join(fakeDir, "strace")
+				require.NoError(t, os.WriteFile(fakeStrace, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
+			},
+		},
+		{
+			"symlink to real strace",
+			func(t *testing.T, fakeDir string) {
+				t.Helper()
+				// Look up real strace before PATH is modified.
+				realStrace, err := exec.LookPath("strace")
+				require.NoError(t, err)
+				require.NoError(t, os.Symlink(realStrace, filepath.Join(fakeDir, "strace")))
+			},
+		},
+	}
 
-	configPath := writeConfig(t, []string{"fs:ro:/usr"})
-	result := runExecave(t, "", "--config", configPath, "monitor", "--", "true")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeDir := t.TempDir()
+			tc.setup(t, fakeDir)
+			t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
-	assert.NotEqual(t, 0, result.ExitCode)
-	assert.Contains(t, result.Stderr, "not owned by root")
+			configPath := writeConfig(t, []string{"fs:ro:/usr"})
+			result := runExecave(t, "", "--config", configPath, "monitor", "--", "true")
+
+			assert.NotEqual(t, 0, result.ExitCode)
+			assert.Contains(t, result.Stderr, "not owned by root")
+		})
+	}
+
+	// Without monitoring, strace is never invoked; a fake strace in PATH is irrelevant.
+	t.Run("no monitoring", func(t *testing.T) {
+		failIfNoBwrap(t)
+
+		fakeDir := t.TempDir()
+		fakeStrace := filepath.Join(fakeDir, "strace")
+		require.NoError(t, os.WriteFile(fakeStrace, []byte("#!/bin/sh\nexec /bin/sh \"$@\""), 0o755)) // #nosec G306 -- test binary needs execute permission
+		t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
+
+		configPath := writeConfig(t, systemPaths())
+		result := runExecave(t, "", "--config", configPath, "--", "true")
+
+		assert.Equal(t, 0, result.ExitCode)
+	})
 }

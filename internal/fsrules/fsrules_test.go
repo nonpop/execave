@@ -1,76 +1,67 @@
-package fsrules
+package fsrules_test
 
 import (
+	"os"
+	"strings"
 	"testing"
 
+	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseRule_Valid(t *testing.T) {
-	tests := []struct {
-		name         string
-		rule         string
-		expectedPerm Permission
-		expectedPath string
-	}{
-		{"read-write", "rw:/home/user", PermissionReadWrite, "/home/user"},
-		{"read-only", "ro:/usr/bin", PermissionReadOnly, "/usr/bin"},
-		{"none", "none:/secrets", PermissionNone, "/secrets"},
-	}
+func TestPathNormalization_PathWithRelativeComponents(t *testing.T) {
+	rule, err := fsrules.ParseRule("ro:/home/user/../user/project/./src", "/", "")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rule, err := ParseRule(tt.rule, "/tmp", "")
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.expectedPerm, rule.Permission)
-			assert.Equal(t, tt.expectedPath, rule.Path)
-		})
-	}
-}
-
-func TestParseRule_InvalidFormat(t *testing.T) {
-	tests := []struct {
-		name string
-		rule string
-	}{
-		{"missing-path", "ro"},
-		{"no-colons", "invalid"},
-		{"empty", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseRule(tt.rule, "/tmp", "")
-			assert.ErrorContains(t, err, "malformed rule")
-		})
-	}
-}
-
-func TestParseRule_InvalidPermission(t *testing.T) {
-	_, err := ParseRule("readonly:/path", "/tmp", "")
-	assert.ErrorContains(t, err, "invalid permission type")
-}
-
-// --- Identity ---
-
-func TestIdentity_ReadWriteRule(t *testing.T) {
-	rule, err := ParseRule("rw:/home/user", "/tmp", "")
 	require.NoError(t, err)
-	assert.Equal(t, "rw:/home/user", rule.Canonical())
+	assert.Equal(t, "/home/user/project/src", rule.Path)
 }
 
-func TestIdentity_ReadOnlyRule(t *testing.T) {
-	rule, err := ParseRule("ro:/usr/bin", "/tmp", "")
-	require.NoError(t, err)
-	assert.Equal(t, "ro:/usr/bin", rule.Canonical())
+func TestDuplicatePathsRejected_SameFileDuplicateShowsSourceOnce(t *testing.T) {
+	rules := []fsrules.Rule{
+		{Permission: fsrules.PermissionReadOnly, Path: "/home/user", RawRule: "ro:/home/user", SourcePath: "/etc/execave.json"},
+		{Permission: fsrules.PermissionReadWrite, Path: "/home/user", RawRule: "rw:/home/user", SourcePath: "/etc/execave.json"},
+	}
+
+	err := fsrules.ValidateRules(rules, []string{"/etc/execave.json"}, nil)
+
+	require.ErrorContains(t, err, "duplicate path")
+	require.ErrorContains(t, err, "/home/user")
+	require.ErrorContains(t, err, "/etc/execave.json")
+	assert.Equal(t, 1, strings.Count(err.Error(), "/etc/execave.json"))
 }
 
-func TestIdentity_NoneRule(t *testing.T) {
-	rule, err := ParseRule("none:/secrets", "/tmp", "")
+func TestTildeExpansionInPaths_BareTildeExpandedToHomeDirectory(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
 	require.NoError(t, err)
-	assert.Equal(t, "none:/secrets", rule.Canonical())
+
+	rule, err := fsrules.ParseRule("ro:~", "/", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, homeDir, rule.Path)
+}
+
+func TestTildeExpansionInPaths_TildePathCleanedAfterExpansion(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	rule, err := fsrules.ParseRule("rw:~/project/../other", "/", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, homeDir+"/other", rule.Path)
+}
+
+func TestTildeExpandedPathsParticipateInValidation_TildePathTargetingConfigFileRejected(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	configPath := homeDir + "/myproject/execave.toml"
+	rule, err := fsrules.ParseRule("rw:~/myproject/execave.toml", "/", "")
+	require.NoError(t, err)
+
+	err = fsrules.ValidateRules([]fsrules.Rule{rule}, []string{configPath}, nil)
+
+	require.ErrorContains(t, err, "must not be writable")
 }
 
 func TestCanonicalRoundTrip(t *testing.T) {
@@ -81,11 +72,11 @@ func TestCanonicalRoundTrip(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
-			rule1, err := ParseRule(tc, "/tmp", "")
+			rule1, err := fsrules.ParseRule(tc, "/tmp", "")
 			require.NoError(t, err)
 			canonical1 := rule1.Canonical()
 
-			rule2, err := ParseRule(canonical1, "/tmp", "")
+			rule2, err := fsrules.ParseRule(canonical1, "/tmp", "")
 			require.NoError(t, err)
 			canonical2 := rule2.Canonical()
 

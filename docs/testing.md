@@ -3,7 +3,7 @@
 ## Core Principles
 
 1. **Strict TDD** — Write a failing test first, then implement.
-2. **Test packaging** — Integration and E2E tests use `package_test` suffix (black-box, public API only). Unit tests live in the same package as the tested unit (white-box, direct access to internals).
+2. **Test packaging** — E2E tests and component tests use `package_test` suffix (black-box, public API only).
 3. **testify** — Use `require` for setup, `assert` for assertions.
 4. **No assertion messages** — Omit the message parameter from assertions. If an assertion needs explanation, use a comment above it instead.
 
@@ -15,42 +15,39 @@ Use `assert.ErrorContains` over `assert.Error` to verify the *right* error occur
 
 Use Go's native fuzz testing for input parsing and security-sensitive code. Seed corpus with both valid and invalid examples.
 
-## Integration Tests
+## Strategy
 
-Integration tests verify spec scenarios against a package's public API. They live alongside unit tests in the package directory.
+**E2E tests** (`test/e2e/`) — source of truth. Each test documents a use case and verifies it against the real sandbox (compiled binary, real bwrap). Cover representatives of the happy path, edge cases, and error cases for each use case. For the critical config → sandbox path, test more exhaustively with various non-trivial configs and edge cases (e.g., configs with only a `net` section, overlapping rules, composition of multiple rule types).
 
-- **File**: `internal/<package>/integration_test.go` (uses `package <pkg>_test`)
-- **1-1 mapping required**: Every spec scenario in `openspec/specs/<package>/spec.md` (or `openspec/changes/<change>/specs/<package>/spec.md`) must have exactly one corresponding integration test in `internal/<package>/integration_test.go`. The integration test file must contain only tests for spec scenarios — no additional tests. When a spec scenario is modified, the corresponding integration test must be updated to match. When a spec scenario is removed, the corresponding integration test must be removed.
+**Component tests** (`internal/<pkg>/*_test.go`) — extend coverage where e2e would be too slow. Test a package's public API for cases like parsing edge cases, validation rules, or resolution combinatorics.
 
-Test name format — convert kebab-case names to PascalCase:
+**Integration tests** — optional additional verification for critical internal boundaries (e.g., config → bwrap args) where catching a mismatch before e2e is valuable.
 
-```
-TestIntegration_<RequirementName>_<ScenarioName>
-```
+### TDD workflow
 
-For example:
-- Requirement: "Most specific rule wins", Scenario: "Specific ro overrides general rw" → `TestIntegration_MostSpecificRuleWins_SpecificRoOverridesGeneralRw`.
+E2e tests describe the program's use cases. Strict TDD applies:
+- **New behavior**: write e2e test first, see it fail, then implement
+- **Changed behavior**: update e2e test first, see it fail against the old implementation, then change the code
+- **Bug fix**: a bug is a missing or incorrect use case — write or fix the e2e test first, then fix the code
+- This ensures every use case has a test and that tests actually verify the intended behavior
 
-Unit tests (e.g., `TestParseRule_Valid` in `fsrules_test.go`) coexist in their own `*_test.go` files and use `package <pkg>` (white-box). Additional tests beyond spec scenarios belong in unit test files, not integration_test.go.
+### E2E test guidelines
+
+- Each test documents a use case — if a user wouldn't care about a change, it doesn't need a test
+- Tests compile the binary and run it with real bwrap/strace
+- Tests that verify CLI routing, flag handling, or error pipelines belong here
+- Use given/when/then comments to make tests self-documenting
+- Prefer table-driven tests when covering similar cases (e.g., multiple rule variants, multiple error conditions); each table entry is a sub-case of the same use case
+
+### Component test guidelines
+
+- Black-box: use `package_test` suffix, test only the public API — survives refactors
+- Do not expand a package's public API for testing purposes, not even using the `export_test.go` pattern
+- Cover cases that would be impractical to test end-to-end
 
 ## End-to-End Tests
 
 E2E tests live in `test/e2e/` and test the full binary.
-
-### Openspec use case tests
-
-- **1-1 mapping required**: Every use case in `openspec/playbooks/<playbook>/playbook.md` (or `openspec/changes/<change>/playbooks/<playbook>/playbook.md`) must have exactly one corresponding E2E test in `test/e2e/<playbook_name>_test.go`. The E2E test file must contain only tests for playbook use cases from that playbook — no additional tests. When a use case is modified, the corresponding E2E test must be updated to match. When a use case is removed, the corresponding E2E test must be removed.
-
-- **File**: `test/e2e/<playbook_name>_test.go` (underscores, not hyphens)
-
-Test name format — convert kebab-case names to PascalCase:
-
-```
-TestE2E_<PlaybookName>_<UseCaseName>
-```
-
-For example:
-- Playbook: "sandboxing-filesystem", Use Case: "Run command with read-only system access" → `TestE2E_SandboxingFilesystem_RunCommandWithReadOnlySystemAccess` in `test/e2e/sandboxing_filesystem_test.go`.
 
 ### Scenario DSL
 

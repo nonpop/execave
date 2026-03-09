@@ -16,9 +16,9 @@ import (
 // Rule represents a parsed filesystem access rule.
 type Rule struct {
 	Permission Permission // Access level for this rule.
-	Path       string    // Absolute, clean path.
-	RawRule    string // Original rule string for display.
-	SourcePath string // Config file that produced this rule.
+	Path       string     // Absolute, clean path.
+	RawRule    string     // Original rule string for display.
+	SourcePath string     // Config file that produced this rule.
 }
 
 // Permission represents a filesystem access level.

@@ -8,18 +8,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Domain matching ---
-
-func TestResolve_ExactDomainMatches(t *testing.T) {
-	r := newResolver(t, "http:api.example.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "api.example.com", 443)
-	assert.True(t, result.Allowed)
-}
-
-func TestResolve_ExactDomainCaseInsensitive(t *testing.T) {
-	r := newResolver(t, "http:API.Example.COM:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "api.example.com", 443)
-	assert.True(t, result.Allowed)
+// TestResolve_CaseInsensitive verifies that domain matching is case-insensitive
+// on both the rule side (stored as lowercase) and the request side.
+func TestResolve_CaseInsensitive(t *testing.T) {
+	cases := []struct {
+		name    string
+		rule    string
+		request string
+	}{
+		{"rule uppercase", "http:API.Example.COM:443", "api.example.com"},
+		{"request uppercase", "http:api.example.com:443", "API.EXAMPLE.COM"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newResolver(t, tc.rule)
+			result := r.CheckAccess(netrules.ProtocolHTTP, tc.request, 443)
+			assert.True(t, result.Allowed)
+		})
+	}
 }
 
 func TestResolve_WildcardMatchesOneSubdomainLevel(t *testing.T) {
@@ -46,37 +52,11 @@ func TestResolve_WildcardRespectsDomainBoundary(t *testing.T) {
 	assert.False(t, result.Allowed)
 }
 
-func TestResolve_RequestDomainCaseInsensitive(t *testing.T) {
-	r := newResolver(t, "http:api.example.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "API.EXAMPLE.COM", 443)
-	assert.True(t, result.Allowed)
-}
-
-// --- IP/CIDR matching ---
-
-func TestResolve_ExactIPv4Matches(t *testing.T) {
-	r := newResolver(t, "http:192.168.1.50:3000")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "192.168.1.50", 3000)
-	assert.True(t, result.Allowed)
-}
-
 func TestResolve_IPv4MappedIPv6MatchesIPv4Rule(t *testing.T) {
 	r := newResolver(t, "http:192.168.1.50:3000")
 	// ::ffff:192.168.1.50 is the IPv4-mapped IPv6 form; must match the IPv4 rule
 	result := r.CheckAccess(netrules.ProtocolHTTP, "::ffff:192.168.1.50", 3000)
 	assert.True(t, result.Allowed)
-}
-
-func TestResolve_CIDRMatchesIPInRange(t *testing.T) {
-	r := newResolver(t, "http:10.0.0.0/24:*")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "10.0.0.5", 8080)
-	assert.True(t, result.Allowed)
-}
-
-func TestResolve_CIDRDoesNotMatchIPOutsideRange(t *testing.T) {
-	r := newResolver(t, "http:10.0.0.0/24:*")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "10.1.0.5", 8080)
-	assert.False(t, result.Allowed)
 }
 
 func TestResolve_ExactIPv6Matches(t *testing.T) {
@@ -103,8 +83,6 @@ func TestResolve_IPRuleDoesNotMatchDomain(t *testing.T) {
 	assert.False(t, result.Allowed)
 }
 
-// --- Resolution: specificity ---
-
 func TestResolve_ExactDomainBeatsWildcard(t *testing.T) {
 	r := newResolver(t,
 		"http:*.example.com:443",
@@ -125,85 +103,12 @@ func TestResolve_WildcardAllowsWhenNoExactDeny(t *testing.T) {
 	assert.True(t, result.Allowed)
 }
 
-func TestResolve_LongerCIDRPrefixBeatsShorter(t *testing.T) {
-	r := newResolver(t,
-		"http:10.0.0.0/24:*",
-		"none:10.0.0.99/32:*",
-	)
-	result := r.CheckAccess(netrules.ProtocolHTTP, "10.0.0.99", 8080)
-	assert.False(t, result.Allowed)
-}
-
-func TestResolve_ShorterCIDRAllowsWhenLongerDoesNotMatch(t *testing.T) {
-	r := newResolver(t,
-		"http:10.0.0.0/24:*",
-		"none:10.0.0.99/32:*",
-	)
-	result := r.CheckAccess(netrules.ProtocolHTTP, "10.0.0.5", 8080)
-	assert.True(t, result.Allowed)
-}
-
-func TestResolve_NoMatchDefaultsDeny(t *testing.T) {
-	r := newResolver(t, "http:api.example.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "evil.com", 443)
-	assert.False(t, result.Allowed)
-	assert.Nil(t, result.Rule)
-}
-
-// --- Protocol compatibility ---
-
-func TestResolve_HTTPRuleMatchesRequest(t *testing.T) {
-	r := newResolver(t, "http:example.com:80")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "example.com", 80)
-	assert.True(t, result.Allowed)
-}
-
-func TestResolve_NoneRuleDeniesByProtocol(t *testing.T) {
-	r := newResolver(t, "none:evil.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "evil.com", 443)
-	assert.False(t, result.Allowed)
-}
-
-// --- Port matching ---
-
-func TestResolve_ExactPortMatches(t *testing.T) {
-	r := newResolver(t, "http:example.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "example.com", 443)
-	assert.True(t, result.Allowed)
-}
-
-func TestResolve_ExactPortDoesNotMatchDifferentPort(t *testing.T) {
-	r := newResolver(t, "http:example.com:443")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "example.com", 8443)
-	assert.False(t, result.Allowed)
-}
-
-func TestResolve_WildcardPortMatchesAnyPort(t *testing.T) {
-	r := newResolver(t, "http:example.com:*")
-	result := r.CheckAccess(netrules.ProtocolHTTP, "example.com", 8080)
-	assert.True(t, result.Allowed)
-}
-
-// --- Result.Rule contains matching rule ---
-
 func TestResolve_ResultContainsMatchingRule(t *testing.T) {
 	r := newResolver(t, "http:api.example.com:443")
 	result := r.CheckAccess(netrules.ProtocolHTTP, "api.example.com", 443)
 	assert.True(t, result.Allowed)
 	require.NotNil(t, result.Rule)
 	assert.Contains(t, *result.Rule, "api.example.com")
-}
-
-// --- Worked examples from draft ---
-
-func TestResolve_WorkedExampleHTTPOnly(t *testing.T) {
-	r := newResolver(t, "http:api.anthropic.com:443")
-
-	result := r.CheckAccess(netrules.ProtocolHTTP, "api.anthropic.com", 443)
-	assert.True(t, result.Allowed)
-
-	result = r.CheckAccess(netrules.ProtocolHTTP, "evil.com", 443)
-	assert.False(t, result.Allowed)
 }
 
 func TestResolve_WorkedExampleWildcardWithDeny(t *testing.T) {
@@ -223,43 +128,57 @@ func TestResolve_WorkedExampleWildcardWithDeny(t *testing.T) {
 	assert.False(t, result.Allowed)
 }
 
-func TestResolve_WorkedExampleWildcardPortAllowsAll(t *testing.T) {
-	r := newResolver(t, "http:example.com:*")
+func Test_CheckAccess(t *testing.T) {
+	tests := []struct {
+		name        string
+		rules       []string
+		host        string
+		port        uint16
+		wantAllowed bool
+	}{
+		// Domain matching
+		{"exact domain matches", []string{"http:api.example.com:443"}, "api.example.com", 443, true},
+		{"exact domain case-insensitive", []string{"http:API.Example.COM:443"}, "api.example.com", 443, true},
+		{"wildcard matches one subdomain level", []string{"http:*.example.com:443"}, "api.example.com", 443, true},
+		{"wildcard does not match apex domain", []string{"http:*.example.com:443"}, "example.com", 443, false},
+		{"wildcard does not match deep subdomain", []string{"http:*.example.com:443"}, "deep.sub.example.com", 443, false},
+		{"wildcard respects domain boundary", []string{"http:*.example.com:443"}, "notexample.com", 443, false},
 
-	result := r.CheckAccess(netrules.ProtocolHTTP, "example.com", 443)
-	assert.True(t, result.Allowed)
+		// IP and CIDR matching
+		{"exact IPv6 matches", []string{"http:[::1]:443"}, "::1", 443, true},
+		{"IPv6 CIDR matches IP within range", []string{"http:[2001:db8::]/32:443"}, "2001:db8::1", 443, true},
+		{"IPv6 CIDR does not match IP outside range", []string{"http:[2001:db8::]/32:443"}, "2001:db9::1", 443, false},
+		{"IP rule does not match domain request", []string{"http:127.0.0.1:80"}, "localhost", 80, false},
 
-	result = r.CheckAccess(netrules.ProtocolHTTP, "example.com", 8080)
-	assert.True(t, result.Allowed)
+		// Target specificity
+		{"wildcard allows when no exact deny", []string{"http:*.example.com:443", "none:evil.example.com:443"}, "api.example.com", 443, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newResolver(t, tc.rules...)
+			result := r.CheckAccess(netrules.ProtocolHTTP, tc.host, tc.port)
+			if tc.wantAllowed {
+				assert.True(t, result.Allowed)
+			} else {
+				assert.False(t, result.Allowed)
+				assert.Nil(t, result.Rule)
+			}
+		})
+	}
 }
 
-func TestResolve_WorkedExampleCIDRWithDeny(t *testing.T) {
-	resolver := newResolver(t,
-		"http:10.0.0.0/24:*",
-		"none:10.0.0.99/32:*",
+func Test_SingleDimensionTargetSpecificity_ExactDomainBeatsWildcard(t *testing.T) {
+	r := newResolver(t,
+		"http:*.example.com:443",
+		"none:evil.example.com:443",
 	)
 
-	result := resolver.CheckAccess(netrules.ProtocolHTTP, "10.0.0.99", 8080)
-	assert.False(t, result.Allowed)
+	result := r.CheckAccess(netrules.ProtocolHTTP, "evil.example.com", 443)
 
-	result = resolver.CheckAccess(netrules.ProtocolHTTP, "10.0.0.5", 8080)
-	assert.True(t, result.Allowed)
-
-	result = resolver.CheckAccess(netrules.ProtocolHTTP, "10.1.0.5", 8080)
 	assert.False(t, result.Allowed)
+	require.NotNil(t, result.Rule)
+	assert.Equal(t, "none:evil.example.com:443", *result.Rule)
 }
-
-func TestResolve_WorkedExampleExactIPPort(t *testing.T) {
-	r := newResolver(t, "http:192.168.1.50:3000")
-
-	result := r.CheckAccess(netrules.ProtocolHTTP, "192.168.1.50", 3000)
-	assert.True(t, result.Allowed)
-
-	result = r.CheckAccess(netrules.ProtocolHTTP, "192.168.1.50", 4000)
-	assert.False(t, result.Allowed)
-}
-
-// --- helpers ---
 
 func newResolver(t *testing.T, ruleBodies ...string) *netrules.Resolver {
 	t.Helper()

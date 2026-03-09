@@ -23,8 +23,8 @@ type Config struct {
 	FSRules      []fsrules.Rule      // Merged filesystem access rules.
 	NetRules     []netrules.Rule     // Merged network access rules.
 	SyscallRules []syscallrules.Rule // Merged syscall access rules.
-	ManagedPaths []string // Sandbox-managed paths (e.g., /proc, /dev, /tmp).
-	ConfigPaths  []string // Ordered list of config files loaded (root + extends).
+	ManagedPaths []string            // Sandbox-managed paths (e.g., /proc, /dev, /tmp).
+	ConfigPaths  []string            // Ordered list of config files loaded (root + extends).
 }
 
 type rawConfig struct {
@@ -159,8 +159,12 @@ func readConfigGraph(root string) ([]*cfgNode, error) {
 		}
 
 		var raw rawConfig
-		if err := toml.Unmarshal(data, &raw); err != nil {
+		md, err := toml.Decode(string(data), &raw)
+		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		if undecoded := md.Undecoded(); len(undecoded) > 0 {
+			return fmt.Errorf("parse %s: unknown config key %q", path, undecoded[0])
 		}
 
 		baseDir := filepath.Dir(path)

@@ -9,45 +9,171 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestE2E_InspectingEffectiveConfig_ShowDefaultConfig tests that config show reads
-// ./execave.toml from the current working directory by default.
-func TestE2E_InspectingEffectiveConfig_ShowDefaultConfig(t *testing.T) {
-	workDir := testTempDir(t)
-	configPath := filepath.Join(workDir, "execave.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte(`fs = ["ro:/usr"]`), 0o600))
+func Test_InspectingEffectiveConfig_ShowDefaultConfig(t *testing.T) {
+	// config show reads ./execave.toml from CWD by default and prints the effective config to stdout.
+	s := newScenario(t)
 
-	result := runExecave(t, workDir, "config", "show")
+	tests := []struct {
+		name       string
+		config     string
+		wantExit   int
+		wantStdout []string
+		wantStderr string
+	}{
+		{
+			name:       "single rule type",
+			config:     `fs = ["ro:/usr"]`,
+			wantExit:   0,
+			wantStdout: []string{`"ro:/usr",`},
+		},
+		{
+			name:       "all rule types",
+			config:     "fs = [\"ro:/usr\"]\nnet = [\"http:api.example.com:443\"]\nsyscall = [\"allow:ptrace\"]",
+			wantExit:   0,
+			wantStdout: []string{`"ro:/usr",`, `"http:api.example.com:443",`, `"allow:ptrace",`},
+		},
+		{
+			name:       "missing config",
+			wantExit:   1,
+			wantStderr: "file not found",
+		},
+	}
 
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "fs = [")
-	assert.Contains(t, result.Stdout, "\"ro:/usr\",")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := s.givenDir(tc.name)
+			if tc.config != "" {
+				require.NoError(t, os.WriteFile(workDir.join("execave.toml"), []byte(tc.config), 0o600))
+			}
+
+			result := runExecave(t, workDir.String(), "config", "show")
+
+			assertExitCode(t, result, tc.wantExit)
+			for _, sub := range tc.wantStdout {
+				assert.Contains(t, result.Stdout, sub)
+			}
+			if tc.wantStderr != "" {
+				assert.Contains(t, result.Stderr, tc.wantStderr)
+			}
+		})
+	}
 }
 
-// TestE2E_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance tests that
-// config show includes source-path comments for layered effective rules.
-func TestE2E_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T) {
-	dir := testTempDir(t)
-	basePath := filepath.Join(dir, "base.toml")
-	rootPath := filepath.Join(dir, "execave.toml")
+func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T) {
+	// config show annotates each rule with a TOML comment naming the source file.
+	// Duplicate rules are deduplicated (first occurrence wins). Synthetic rules
+	// injected by the runtime appear under a # <synthetic> comment.
+	tests := []struct {
+		name          string
+		setup         func(t *testing.T, dir string) string
+		wantStdout    func(dir string) []string
+		wantNotStdout func(dir string) []string
+	}{
+		{
+			name: "two source files: rules attributed to their respective origins",
+			setup: func(t *testing.T, dir string) string {
+				t.Helper()
+				basePath := filepath.Join(dir, "base.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				require.NoError(t, os.WriteFile(basePath, []byte("fs = [\"ro:/usr\"]\nnet = [\"http:api.example.com:443\"]\nsyscall = [\"allow:ptrace\"]"), 0o600))
+				require.NoError(t, os.WriteFile(rootPath, []byte("extends = [\"base.toml\"]\nfs = [\"rw:./workspace\"]\nnet = [\"none:blocked.example.com:443\"]\nsyscall = [\"allow:reboot\"]"), 0o600))
+				return rootPath
+			},
+			wantStdout: func(dir string) []string {
+				basePath := filepath.Join(dir, "base.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				workspace := filepath.Join(dir, "workspace")
+				return []string{
+					"  # " + basePath + "\n  \"ro:/usr\",",
+					"  # " + rootPath + "\n  \"rw:" + workspace + "\",",
+					"  # " + basePath + "\n  \"http:api.example.com:443\",",
+					"  # " + rootPath + "\n  \"none:blocked.example.com:443\",",
+					"  # " + basePath + "\n  \"allow:ptrace\",",
+					"  # " + rootPath + "\n  \"allow:reboot\",",
+				}
+			},
+		},
+		{
+			name: "three source files: each base attributed separately",
+			setup: func(t *testing.T, dir string) string {
+				t.Helper()
+				base1Path := filepath.Join(dir, "base1.toml")
+				base2Path := filepath.Join(dir, "base2.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				require.NoError(t, os.WriteFile(base1Path, []byte("fs = [\"ro:/usr\"]"), 0o600))
+				require.NoError(t, os.WriteFile(base2Path, []byte("net = [\"http:api.example.com:443\"]"), 0o600))
+				require.NoError(t, os.WriteFile(rootPath, []byte("extends = [\"base1.toml\", \"base2.toml\"]\nsyscall = [\"allow:ptrace\"]"), 0o600))
+				return rootPath
+			},
+			wantStdout: func(dir string) []string {
+				base1Path := filepath.Join(dir, "base1.toml")
+				base2Path := filepath.Join(dir, "base2.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				return []string{
+					"  # " + base1Path + "\n  \"ro:/usr\",",
+					"  # " + base2Path + "\n  \"http:api.example.com:443\",",
+					"  # " + rootPath + "\n  \"allow:ptrace\",",
+				}
+			},
+		},
+		{
+			name: "duplicate rule: first occurrence (base) wins for provenance",
+			setup: func(t *testing.T, dir string) string {
+				t.Helper()
+				basePath := filepath.Join(dir, "base.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				require.NoError(t, os.WriteFile(basePath, []byte("fs = [\"ro:/usr\"]"), 0o600))
+				require.NoError(t, os.WriteFile(rootPath, []byte("extends = [\"base.toml\"]\nfs = [\"ro:/usr\", \"rw:./workspace\"]"), 0o600))
+				return rootPath
+			},
+			wantStdout: func(dir string) []string {
+				basePath := filepath.Join(dir, "base.toml")
+				rootPath := filepath.Join(dir, "execave.toml")
+				workspace := filepath.Join(dir, "workspace")
+				return []string{
+					"  # " + basePath + "\n  \"ro:/usr\",",
+					"  # " + rootPath + "\n  \"rw:" + workspace + "\",",
+				}
+			},
+			wantNotStdout: func(dir string) []string {
+				rootPath := filepath.Join(dir, "execave.toml")
+				// The duplicate ro:/usr from root must not appear under root's source comment.
+				return []string{"  # " + rootPath + "\n  \"ro:/usr\","}
+			},
+		},
+		{
+			name: "synthetic rule: forced-RO config file appears under synthetic comment",
+			setup: func(t *testing.T, dir string) string {
+				t.Helper()
+				rootPath := filepath.Join(dir, "execave.toml")
+				// rw:./ makes the config file's own directory writable, triggering a
+				// forced synthetic read-only rule for the config file itself.
+				require.NoError(t, os.WriteFile(rootPath, []byte("fs = [\"rw:./\"]"), 0o600))
+				return rootPath
+			},
+			wantStdout: func(dir string) []string {
+				configPath := filepath.Join(dir, "execave.toml")
+				return []string{"  # <synthetic>\n  \"ro:" + configPath + "\","}
+			},
+		},
+	}
 
-	baseConfig := `fs = ["ro:/usr"]
-net = ["http:api.example.com:443"]
-syscall = ["allow:ptrace"]`
-	rootConfig := `extends = ["base.toml"]
-fs = ["rw:./workspace"]
-net = ["none:blocked.example.com:443"]
-syscall = ["allow:reboot"]`
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testTempDir(t)
+			configPath := tc.setup(t, dir)
 
-	require.NoError(t, os.WriteFile(basePath, []byte(baseConfig), 0o600))
-	require.NoError(t, os.WriteFile(rootPath, []byte(rootConfig), 0o600))
+			result := runExecave(t, "", "--config", configPath, "config", "show")
 
-	result := runExecave(t, "", "--config", rootPath, "config", "show")
-
-	assertExitCode(t, result, 0)
-	assert.Contains(t, result.Stdout, "fs = [")
-	assert.Contains(t, result.Stdout, "net = [")
-	assert.Contains(t, result.Stdout, "syscall = [")
-	assert.Contains(t, result.Stdout, "  # "+basePath+"\n  \"ro:/usr\",\n\n  # "+rootPath+"\n  \"rw:"+filepath.Join(dir, "workspace")+"\",")
-	assert.Contains(t, result.Stdout, "\"allow:ptrace\",")
-	assert.Contains(t, result.Stdout, "\"allow:reboot\",")
+			assertExitCode(t, result, 0)
+			for _, sub := range tc.wantStdout(dir) {
+				assert.Contains(t, result.Stdout, sub)
+			}
+			if tc.wantNotStdout != nil {
+				for _, sub := range tc.wantNotStdout(dir) {
+					assert.NotContains(t, result.Stdout, sub)
+				}
+			}
+		})
+	}
 }

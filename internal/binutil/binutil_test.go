@@ -1,25 +1,28 @@
-package binutil
+package binutil_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/nonpop/execave/internal/binutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestInterpreterPath_DynamicBinary(t *testing.T) {
-	// Use /usr/bin/ls as a well-known dynamically linked binary.
-	path, err := exec.LookPath("ls")
-	require.NoError(t, err)
-
-	interp := InterpreterPath(path)
-
-	assert.NotEmpty(t, interp)
-	assert.True(t, filepath.IsAbs(interp))
-	assert.Contains(t, interp, "ld-linux")
+// fakeVersionBinary creates a shell script that prints output exactly when invoked with --version.
+// Callers control newlines; pass "\n"-terminated strings for normal output, "" for empty output.
+// The script is not root-owned, so it can only be used with Check*Version directly,
+// not ResolveBwrap/ResolveStrace which validate root ownership.
+func fakeVersionBinary(t *testing.T, name, output string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	p := filepath.Join(tmpDir, name)
+	content := fmt.Sprintf("#!/bin/sh\nprintf '%%s' '%s'\n", output)
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o755)) // #nosec G306 -- test script needs execute permission
+	return p
 }
 
 func TestInterpreterPath_StaticBinary(t *testing.T) {
@@ -35,13 +38,83 @@ func TestInterpreterPath_StaticBinary(t *testing.T) {
 	t.Log(string(out))
 	require.NoError(t, err)
 
-	interp := InterpreterPath(binPath)
+	interp := binutil.InterpreterPath(binPath)
 
 	assert.Empty(t, interp)
 }
 
 func TestInterpreterPath_NonexistentPath(t *testing.T) {
-	interp := InterpreterPath("/nonexistent/binary")
+	interp := binutil.InterpreterPath("/nonexistent/binary")
 
 	assert.Empty(t, interp)
+}
+
+func TestCheckBwrapVersion(t *testing.T) {
+	cases := []struct {
+		name        string
+		versionLine string
+		wantWarn    bool
+		wantErr     string
+	}{
+		{name: "older_minor_incompatible", versionLine: "bwrap 0.10.0\n", wantErr: "incompatible"},
+		{name: "pinned_compatible", versionLine: "bwrap 0.11.0\n"},
+		{name: "same_minor_higher_patch_compatible", versionLine: "bwrap 0.11.5\n"},
+		{name: "newer_minor_warns", versionLine: "bwrap 0.12.0\n", wantWarn: true},
+		{name: "major_bump_incompatible", versionLine: "bwrap 1.0.0\n", wantErr: "incompatible"},
+		{name: "trailing_text", versionLine: "bwrap 0.11.5\nsome other line\n"},
+		{name: "empty_output", versionLine: "", wantErr: "unexpected output"},
+		{name: "no_version_token", versionLine: "bwrap\n", wantErr: "unexpected output"},
+		{name: "non_numeric", versionLine: "bwrap notaversion\n", wantErr: "unexpected output"},
+		{name: "missing_patch", versionLine: "bwrap 0.11\n", wantErr: "unexpected output"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeBwrap := fakeVersionBinary(t, "bwrap", tc.versionLine)
+			warn, err := binutil.CheckBwrapVersion(fakeBwrap)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+				if tc.wantWarn {
+					assert.NotEmpty(t, warn)
+				} else {
+					assert.Empty(t, warn)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckStraceVersion(t *testing.T) {
+	cases := []struct {
+		name        string
+		versionLine string
+		wantWarn    bool
+		wantErr     string
+	}{
+		{name: "older_minor_incompatible", versionLine: "strace -- version 6.18\n", wantErr: "incompatible"},
+		{name: "pinned_compatible", versionLine: "strace -- version 6.19\n"},
+		{name: "newer_minor_warns", versionLine: "strace -- version 6.20\n", wantWarn: true},
+		{name: "major_bump_incompatible", versionLine: "strace -- version 7.0\n", wantErr: "incompatible"},
+		{name: "second_line", versionLine: "strace\nversion 6.19 something\n"},
+		{name: "extracts_first_match", versionLine: "strace 6.19 (other 7.0)\n"},
+		{name: "empty_output", versionLine: "", wantErr: "no version found"},
+		{name: "no_version_match", versionLine: "strace\nno version here\n", wantErr: "no version found"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeStrace := fakeVersionBinary(t, "strace", tc.versionLine)
+			warn, err := binutil.CheckStraceVersion(fakeStrace)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+				if tc.wantWarn {
+					assert.NotEmpty(t, warn)
+				} else {
+					assert.Empty(t, warn)
+				}
+			}
+		})
+	}
 }

@@ -503,6 +503,28 @@ func (s *scenario) thenFileContains(path, sub string) {
 	assert.Contains(s.t, string(data), sub)
 }
 
+// thenFileHasEntry asserts that a single line in the file at path contains all given substrings.
+func (s *scenario) thenFileHasEntry(path string, substrings ...string) {
+	s.t.Helper()
+	data, err := os.ReadFile(path) // #nosec G304 -- test code reading controlled test files
+	require.NoError(s.t, err)
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := scanner.Text()
+		found := true
+		for _, sub := range substrings {
+			if !strings.Contains(line, sub) {
+				found = false
+				break
+			}
+		}
+		if found {
+			return
+		}
+	}
+	s.t.Errorf("file %s has no single line containing all of %q\ncontent:\n%s", path, substrings, data)
+}
+
 // givenHTTPServer starts a plain HTTP test server returning body.
 func (s *scenario) givenHTTPServer(body string) testServer {
 	s.t.Helper()
@@ -524,6 +546,23 @@ func testHTTPServer(t *testing.T, body string) (string, string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, body)
 	}))
+	t.Cleanup(srv.Close)
+	h, p, err := net.SplitHostPort(srv.Listener.Addr().String())
+	require.NoError(t, err)
+	return h, p
+}
+
+// testHTTPServerOnHost starts a plain HTTP server on the specified host that returns body.
+// Returns the listener host and port.
+func testHTTPServerOnHost(t *testing.T, host, body string) (string, string) {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, body)
+	}))
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	require.NoError(t, err)
+	srv.Listener = listener
+	srv.Start()
 	t.Cleanup(srv.Close)
 	h, p, err := net.SplitHostPort(srv.Listener.Addr().String())
 	require.NoError(t, err)

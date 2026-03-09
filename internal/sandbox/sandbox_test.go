@@ -1,4 +1,4 @@
-package sandbox
+package sandbox_test
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 	"github.com/nonpop/execave/internal/binutil"
 	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/sandbox"
 	"github.com/nonpop/execave/internal/tunnel"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,16 @@ func argsContainSequence(args []string, seq ...string) bool {
 	return false
 }
 
+func resolveBwrap(t *testing.T) string {
+	t.Helper()
+	bwrapPath, err := binutil.ResolveBwrap()
+	require.NoError(t, err)
+	return bwrapPath
+}
+
 func TestBuildBwrapArgs(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
@@ -65,9 +75,11 @@ func TestBuildBwrapArgs(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
 	tunnelWrapped := tunnel.WrapCommand("/usr/local/bin/execave", "/tmp/proxy.sock", []string{"echo", "hello"})
-	args := sb.buildBwrapArgs(tunnelWrapped, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, tunnelWrapped, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	// Verify essential arguments
 	assert.Contains(t, args, "--unshare-all")
@@ -86,6 +98,8 @@ func TestBuildBwrapArgs(t *testing.T) {
 }
 
 func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	dir := t.TempDir()
 	noneDir := filepath.Join(dir, "blocked")
 	require.NoError(t, os.Mkdir(noneDir, 0o750))
@@ -102,14 +116,18 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
 	assert.True(t, argsContainSequence(args, "--chmod", "0000", noneDir))
 }
 
 func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	dir := t.TempDir()
 	noneDir := filepath.Join(dir, "parent")
 	childDir := filepath.Join(noneDir, "child")
@@ -128,14 +146,18 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	assert.True(t, argsContainSequence(args, "--tmpfs", noneDir))
 	assert.True(t, argsContainSequence(args, "--chmod", "0111", noneDir))
 }
 
 func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	dir := t.TempDir()
 	noneFile := filepath.Join(dir, "secret.txt")
 	require.NoError(t, os.WriteFile(noneFile, []byte("secret"), 0o600))
@@ -152,8 +174,10 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	// File should use /dev/null bind, not tmpfs
 	assert.True(t, argsContainSequence(args, "--bind", "/dev/null", noneFile))
@@ -163,6 +187,8 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 }
 
 func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	cfg := &config.Config{
 		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
@@ -172,14 +198,18 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	assert.Contains(t, args, "--unshare-all")
 	assert.NotContains(t, args, "--share-net")
 }
 
 func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	tmpDir := t.TempDir()
 	udsFile := filepath.Join(tmpDir, "proxy.sock")
 	require.NoError(t, os.WriteFile(udsFile, nil, 0o600))
@@ -199,9 +229,11 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 		ConfigPaths: nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
 	tunnelWrapped := tunnel.WrapCommand(execaveFile, udsFile, []string{"echo", "hello"})
-	args := sb.buildBwrapArgs(tunnelWrapped, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, tunnelWrapped, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	// Should bind-mount UDS and execave binary at their host paths (same source/dest)
 	assert.True(t, argsContainSequence(args, "--ro-bind", udsFile, udsFile))
@@ -212,15 +244,12 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 }
 
 func TestPrepare_SetupExecves3(t *testing.T) {
-	bwrapPath, err := binutil.ResolveBwrap()
-	if err != nil {
-		t.Skip("bwrap not available")
-	}
+	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 	}
-	sc, cleanup, err := Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
 	require.NoError(t, err)
 	defer cleanup()
 
@@ -228,15 +257,12 @@ func TestPrepare_SetupExecves3(t *testing.T) {
 }
 
 func TestPrepare_InsertsSeccompAtFD(t *testing.T) {
-	bwrapPath, err := binutil.ResolveBwrap()
-	if err != nil {
-		t.Skip("bwrap not available")
-	}
+	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 	}
-	sc, cleanup, err := Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
 	require.NoError(t, err)
 	defer cleanup()
 
@@ -245,16 +271,13 @@ func TestPrepare_InsertsSeccompAtFD(t *testing.T) {
 }
 
 func TestPrepare_DoesNotModifyOriginalArgs(t *testing.T) {
-	bwrapPath, err := binutil.ResolveBwrap()
-	if err != nil {
-		t.Skip("bwrap not available")
-	}
+	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 	}
 	command := []string{"true"}
-	sc, cleanup, err := Prepare(bwrapPath, cfg, command, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, command, 3)
 	require.NoError(t, err)
 	defer cleanup()
 
@@ -263,12 +286,14 @@ func TestPrepare_DoesNotModifyOriginalArgs(t *testing.T) {
 }
 
 func TestManagedDirs(t *testing.T) {
-	paths := ManagedDirs()
+	paths := sandbox.ManagedDirs()
 
 	assert.Equal(t, []string{"/dev", "/proc", "/tmp", "/newroot", "/oldroot"}, paths)
 }
 
 func TestBuildBwrapArgs_IncludesInterpreterFromFSRules(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
@@ -280,13 +305,17 @@ func TestBuildBwrapArgs_IncludesInterpreterFromFSRules(t *testing.T) {
 		ConfigPaths:  nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	assert.True(t, argsContainSequence(args, "--ro-bind", "/lib64/ld-linux-x86-64.so.2", "/lib64/ld-linux-x86-64.so.2"))
 }
 
 func TestBuildBwrapArgs_NoInterpreterWhenNotInFSRules(t *testing.T) {
+	bwrapPath := resolveBwrap(t)
+
 	cfg := &config.Config{
 		FSRules: []fsrules.Rule{
 			fsRule(fsrules.PermissionReadOnly, "/usr/bin"),
@@ -297,8 +326,10 @@ func TestBuildBwrapArgs_NoInterpreterWhenNotInFSRules(t *testing.T) {
 		ConfigPaths:  nil,
 	}
 
-	sb := &sandbox{cfg: cfg}
-	args := sb.buildBwrapArgs([]string{"true"}, 3)
+	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
+	require.NoError(t, err)
+	defer cleanup()
+	args := sc.Args
 
 	// No interpreter-related --ro-bind should appear (other than /usr/bin)
 	for i, a := range args {

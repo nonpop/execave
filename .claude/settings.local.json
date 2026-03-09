@@ -34,7 +34,8 @@
       "Bash(curl:*)",
       "Bash(strace:*)",
       "Bash(gcc:*)",
-      "Bash(go:*)"
+      "Bash(go:*)",
+      "Bash(gofumpt:*)"
     ]
   }
 }

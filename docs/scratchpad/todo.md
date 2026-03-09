@@ -11,6 +11,7 @@
 
 - sequences like `^[[?1049;2$y` sometimes appear
 - monitor to execave-access.log by default, and allow stderr/out with
+- would stdout be better than stderr for log?
 - maybe need to allow http:*:*
 
 - validate config command, show effective config command, config layering

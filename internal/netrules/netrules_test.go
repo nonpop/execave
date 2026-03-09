@@ -1,369 +1,124 @@
-package netrules
+package netrules_test
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/nonpop/execave/internal/netrules"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- Parse: valid rules ---
-
-func TestParse_HTTPSActionRejected(t *testing.T) {
-	_, err := ParseAccessRule("https:api.example.com:443", "")
-	assert.ErrorContains(t, err, "invalid action")
-}
-
-func TestParse_ValidHTTPDomain(t *testing.T) {
-	rule, err := ParseAccessRule("http:api.example.com:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, ProtocolHTTP, rule.protocol)
-	assert.Equal(t, targetDomain, rule.target.kind)
-	assert.Equal(t, "api.example.com", rule.target.domain)
-	assert.False(t, rule.target.wildcard)
-	assert.Equal(t, uint16(443), rule.port.number)
-	assert.False(t, rule.port.isWildcard)
-}
-
-func TestParse_ValidHTTPIP(t *testing.T) {
-	rule, err := ParseAccessRule("http:192.168.1.50:3000", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, ProtocolHTTP, rule.protocol)
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 32, rule.target.prefixLen)
-	assert.Equal(t, uint16(3000), rule.port.number)
-}
-
-func TestParse_ValidCIDR(t *testing.T) {
-	rule, err := ParseAccessRule("http:10.0.0.0/24:8080", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, ProtocolHTTP, rule.protocol)
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 24, rule.target.prefixLen)
-	assert.Equal(t, uint16(8080), rule.port.number)
-}
-
-func TestParse_ValidIPv6(t *testing.T) {
-	rule, err := ParseAccessRule("http:[::1]:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, ProtocolHTTP, rule.protocol)
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 128, rule.target.prefixLen)
-	assert.Equal(t, uint16(443), rule.port.number)
-}
-
-func TestParse_ValidIPv6CIDR(t *testing.T) {
-	rule, err := ParseAccessRule("http:[2001:db8::]/32:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, ProtocolHTTP, rule.protocol)
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 32, rule.target.prefixLen)
-	assert.Equal(t, uint16(443), rule.port.number)
-}
-
-func TestParse_ValidWildcardPort(t *testing.T) {
-	rule, err := ParseAccessRule("http:example.com:*", "")
-	require.NoError(t, err)
-
-	assert.True(t, rule.port.isWildcard)
-}
-
-func TestParse_ValidNoneProtocol(t *testing.T) {
-	rule, err := ParseAccessRule("none:evil.com:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, protocolNone, rule.protocol)
-}
-
-func TestParse_ValidWildcardDomain(t *testing.T) {
-	rule, err := ParseAccessRule("http:*.example.com:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetDomain, rule.target.kind)
-	assert.True(t, rule.target.wildcard)
-	assert.Equal(t, "*.example.com", rule.target.domain)
-}
-
-func TestParse_ValidSingleLabelDomain(t *testing.T) {
-	rule, err := ParseAccessRule("http:localhost:3000", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetDomain, rule.target.kind)
-	assert.Equal(t, "localhost", rule.target.domain)
-}
-
 func TestParse_DomainNormalizedToLowercase(t *testing.T) {
-	rule, err := ParseAccessRule("http:API.Example.COM:443", "")
+	rule, err := netrules.ParseAccessRule("http:API.Example.COM:443", "")
 	require.NoError(t, err)
 
-	assert.Equal(t, "api.example.com", rule.target.domain)
-}
-
-// --- Parse: invalid rules ---
-
-func TestParse_InvalidAction(t *testing.T) {
-	_, err := ParseAccessRule("allow:example.com:443", "")
-	assert.ErrorContains(t, err, "invalid action")
-}
-
-func TestParse_MissingPortField(t *testing.T) {
-	_, err := ParseAccessRule("http:example.com", "")
-	assert.ErrorContains(t, err, "malformed rule")
-}
-
-func TestParse_PortZero(t *testing.T) {
-	_, err := ParseAccessRule("http:example.com:0", "")
-	assert.ErrorContains(t, err, "invalid port")
-}
-
-func TestParse_PortAboveRange(t *testing.T) {
-	_, err := ParseAccessRule("http:example.com:99999", "")
-	assert.ErrorContains(t, err, "invalid port")
-}
-
-func TestParse_PortNegative(t *testing.T) {
-	_, err := ParseAccessRule("http:example.com:-1", "")
-	assert.ErrorContains(t, err, "invalid port")
-}
-
-func TestParse_PortNonNumeric(t *testing.T) {
-	_, err := ParseAccessRule("http:example.com:abc", "")
-	assert.ErrorContains(t, err, "invalid port")
-}
-
-// --- Parse: target parsing order ---
-
-func TestParse_BracketedIPv6ParsedAsIPv6(t *testing.T) {
-	rule, err := ParseAccessRule("http:[::1]:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetIP, rule.target.kind)
-}
-
-func TestParse_CIDRParsedBeforeIP(t *testing.T) {
-	rule, err := ParseAccessRule("http:10.0.0.0/24:8080", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 24, rule.target.prefixLen)
-}
-
-func TestParse_BareIPParsedAsExactIP(t *testing.T) {
-	rule, err := ParseAccessRule("http:192.168.1.50:3000", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 32, rule.target.prefixLen)
-}
-
-func TestParse_NonIPStringParsedAsDomain(t *testing.T) {
-	rule, err := ParseAccessRule("http:api.example.com:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetDomain, rule.target.kind)
+	assert.Equal(t, "http:api.example.com:443", rule.Canonical())
 }
 
 func TestParse_InvalidIPFallsThroughToDomainAndFails(t *testing.T) {
 	// 123.456.789.0 fails IP parsing, then fails domain validation
 	// (all-numeric last label)
-	_, err := ParseAccessRule("http:123.456.789.0:443", "")
+	_, err := netrules.ParseAccessRule("http:123.456.789.0:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
-}
-
-// --- Domain pattern validation ---
-
-func TestParse_DomainValidExact(t *testing.T) {
-	_, err := ParseAccessRule("http:api.example.com:443", "")
-	assert.NoError(t, err)
-}
-
-func TestParse_DomainValidWildcard(t *testing.T) {
-	_, err := ParseAccessRule("http:*.example.com:443", "")
-	assert.NoError(t, err)
-}
-
-func TestParse_DomainValidSingleLabel(t *testing.T) {
-	_, err := ParseAccessRule("http:localhost:3000", "")
-	assert.NoError(t, err)
 }
 
 func TestParse_DomainAllNumericTLDRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:192.168.1.999:443", "")
-	assert.ErrorContains(t, err, "invalid domain pattern")
-}
-
-func TestParse_DomainBareWildcardRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:*:443", "")
-	assert.ErrorContains(t, err, "invalid domain pattern")
-}
-
-func TestParse_DomainDeepWildcardRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:*.*.example.com:443", "")
+	_, err := netrules.ParseAccessRule("http:192.168.1.999:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestParse_DomainNonLeftmostWildcardRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:sub.*.example.com:443", "")
+	_, err := netrules.ParseAccessRule("http:sub.*.example.com:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestParse_DomainLabelStartingWithHyphenRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:-example.com:443", "")
+	_, err := netrules.ParseAccessRule("http:-example.com:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestParse_DomainLabelEndingWithHyphenRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:example-.com:443", "")
+	_, err := netrules.ParseAccessRule("http:example-.com:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestParse_DomainLabelTooLong(t *testing.T) {
 	long := strings.Repeat("a", 64)
-	_, err := ParseAccessRule("http:"+long+".com:443", "")
+	_, err := netrules.ParseAccessRule("http:"+long+".com:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
 func TestParse_DomainEmptyLabel(t *testing.T) {
-	_, err := ParseAccessRule("http:example..com:443", "")
+	_, err := netrules.ParseAccessRule("http:example..com:443", "")
 	assert.ErrorContains(t, err, "invalid domain pattern")
 }
 
-// --- Port validation ---
-
-func TestParse_PortMin(t *testing.T) {
-	rule, err := ParseAccessRule("http:example.com:1", "")
-	require.NoError(t, err)
-	assert.Equal(t, uint16(1), rule.port.number)
-}
-
-func TestParse_PortMax(t *testing.T) {
-	rule, err := ParseAccessRule("http:example.com:65535", "")
-	require.NoError(t, err)
-	assert.Equal(t, uint16(65535), rule.port.number)
-}
-
-func TestParse_PortWildcard(t *testing.T) {
-	rule, err := ParseAccessRule("http:example.com:*", "")
-	require.NoError(t, err)
-	assert.True(t, rule.port.isWildcard)
-}
-
-// --- Config validation ---
-
-func TestValidate_NoDuplicateIdentity(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:example.com:443"),
-		parseRule(t, "none:example.com:443"),
-	}
-	err := ValidateRules(rules)
-	assert.ErrorContains(t, err, "duplicate net rule")
-}
-
-func TestValidate_DuplicateCIDRIdentity(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:10.0.0.0/24:443"),
-		parseRule(t, "none:10.0.0.0/24:443"),
-	}
-	err := ValidateRules(rules)
-	assert.ErrorContains(t, err, "duplicate net rule")
-}
-
-func TestValidate_SameTargetDifferentPortsAllowed(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:example.com:443"),
-		parseRule(t, "http:example.com:80"),
-	}
-	err := ValidateRules(rules)
-	assert.NoError(t, err)
-}
-
-func TestValidate_MixedPortPatternsRejected(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:example.com:*"),
-		parseRule(t, "none:example.com:443"),
-	}
-	err := ValidateRules(rules)
-	assert.ErrorContains(t, err, "mixed port patterns")
-}
-
-func TestValidate_MixedPortPatternsCIDRRejected(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:10.0.0.0/24:*"),
-		parseRule(t, "none:10.0.0.0/24:443"),
-	}
-	err := ValidateRules(rules)
-	assert.ErrorContains(t, err, "mixed port patterns")
-}
-
-func TestValidate_DifferentTargetsDifferentPortStylesAllowed(t *testing.T) {
-	rules := []Rule{
-		parseRule(t, "http:example.com:*"),
-		parseRule(t, "http:other.com:443"),
-	}
-	err := ValidateRules(rules)
-	assert.NoError(t, err)
-}
-
-func TestValidate_Empty(t *testing.T) {
-	err := ValidateRules(nil)
-	assert.NoError(t, err)
-}
-
-// --- IPv6 bracket parsing edge cases ---
-
-func TestParse_IPv6BracketedCIDR(t *testing.T) {
-	rule, err := ParseAccessRule("http:[2001:db8::]/32:443", "")
-	require.NoError(t, err)
-
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 32, rule.target.prefixLen)
-}
-
 func TestParse_IPv6MissingClosingBracket(t *testing.T) {
-	_, err := ParseAccessRule("http:[::1:443", "")
-	assert.Error(t, err)
+	_, err := netrules.ParseAccessRule("http:[::1:443", "")
+	assert.ErrorContains(t, err, "missing closing bracket")
 }
 
 func TestParse_IPv6InvalidAddress(t *testing.T) {
-	_, err := ParseAccessRule("http:[not-an-ip]:443", "")
-	assert.Error(t, err)
+	_, err := netrules.ParseAccessRule("http:[not-an-ip]:443", "")
+	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedIPv4Rejected(t *testing.T) {
-	_, err := ParseAccessRule("http:[127.0.0.1]:443", "")
+	_, err := netrules.ParseAccessRule("http:[127.0.0.1]:443", "")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedIPv4CIDRRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:[10.0.0.0]/24:8080", "")
+	_, err := netrules.ParseAccessRule("http:[10.0.0.0]/24:8080", "")
 	assert.ErrorContains(t, err, "invalid IPv6 CIDR")
 }
 
 func TestParse_EmptyBracketsRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:[]:443", "")
+	_, err := netrules.ParseAccessRule("http:[]:443", "")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedDomainRejected(t *testing.T) {
-	_, err := ParseAccessRule("http:[example.com]:443", "")
+	_, err := netrules.ParseAccessRule("http:[example.com]:443", "")
 	assert.ErrorContains(t, err, "invalid IPv6 address")
 }
 
 func TestParse_BracketedIPv4MappedIPv6Accepted(t *testing.T) {
-	rule, err := ParseAccessRule("http:[::ffff:127.0.0.1]:443", "")
+	// IPv4-mapped IPv6 normalizes to IPv4 /32; Canonical reflects the normalized form.
+	rule, err := netrules.ParseAccessRule("http:[::ffff:127.0.0.1]:443", "")
 	require.NoError(t, err)
 
-	assert.Equal(t, targetIP, rule.target.kind)
-	assert.Equal(t, 32, rule.target.prefixLen) // normalized to IPv4
+	assert.Equal(t, "http:127.0.0.1/32:443", rule.Canonical())
 }
 
-// --- Canonical round-trip ---
+func TestParse_PortMin(t *testing.T) {
+	rule, err := netrules.ParseAccessRule("http:example.com:1", "")
+	require.NoError(t, err)
+	assert.Equal(t, "http:example.com:1", rule.Canonical())
+}
+
+func TestParse_PortMax(t *testing.T) {
+	rule, err := netrules.ParseAccessRule("http:example.com:65535", "")
+	require.NoError(t, err)
+	assert.Equal(t, "http:example.com:65535", rule.Canonical())
+}
+
+func parseNetRule(t *testing.T, rawRule string) netrules.Rule {
+	t.Helper()
+	body := strings.TrimPrefix(rawRule, "net:")
+	rule, err := netrules.ParseAccessRule(body, "")
+	require.NoError(t, err)
+	return rule
+}
+
+func parseNetRuleFrom(t *testing.T, rawRule, configPath string) netrules.Rule {
+	t.Helper()
+	body := strings.TrimPrefix(rawRule, "net:")
+	rule, err := netrules.ParseAccessRule(body, configPath)
+	require.NoError(t, err)
+	return rule
+}
 
 func TestCanonicalRoundTrip(t *testing.T) {
 	cases := []string{
@@ -379,11 +134,11 @@ func TestCanonicalRoundTrip(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
-			rule1, err := ParseAccessRule(tc, "")
+			rule1, err := netrules.ParseAccessRule(tc, "")
 			require.NoError(t, err)
 			canonical1 := rule1.Canonical()
 
-			rule2, err := ParseAccessRule(canonical1, "")
+			rule2, err := netrules.ParseAccessRule(canonical1, "")
 			require.NoError(t, err)
 			canonical2 := rule2.Canonical()
 
@@ -392,11 +147,95 @@ func TestCanonicalRoundTrip(t *testing.T) {
 	}
 }
 
-// --- helpers ---
+func Test_ParseAccessRule(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		// Net rule syntax
+		{"valid IPv6 rule", "http:[::1]:443", ""},
+		{"valid IPv6 CIDR rule", "http:[2001:db8::]/32:443", ""},
+		{"port zero rejected", "http:example.com:0", "invalid port"},
+		{"port above range rejected", "http:example.com:99999", "invalid port"},
+		{"non-numeric port rejected", "http:example.com:abc", "invalid port"},
 
-func parseRule(t *testing.T, ruleBody string) Rule {
-	t.Helper()
-	rule, err := ParseAccessRule(ruleBody, "")
-	require.NoError(t, err)
-	return rule
+		// Target parsing order
+		{"invalid IP falls through to domain validation", "http:123.456.789.0:443", "last label must contain at least one alphabetic character"},
+		{"bracketed IPv4 rejected as invalid IPv6", "http:[127.0.0.1]:443", "invalid IPv6 address"},
+		{"bracketed IPv4 CIDR rejected as invalid IPv6", "http:[10.0.0.0]/24:8080", "invalid IPv6"},
+		{"unclosed bracket rejected", "http:[::1:443", "missing closing bracket"},
+		{"empty brackets rejected", "http:[]:443", "invalid IPv6 address"},
+		{"bracketed domain rejected", "http:[example.com]:443", "invalid IPv6 address"},
+		{"bracketed IPv4-mapped IPv6 accepted", "http:[::ffff:127.0.0.1]:443", ""},
+		{"unbracketed IPv6 rejected", "none:::1:80", "IPv6 addresses must be bracketed"},
+
+		// Domain pattern validation
+		{"valid wildcard domain", "http:*.example.com:443", ""},
+		{"valid single label domain", "http:localhost:3000", ""},
+		{"all-numeric TLD rejected", "http:192.168.1.999:443", "last label must contain at least one alphabetic character"},
+		{"bare wildcard rejected", "http:*:443", "invalid domain pattern"},
+		{"deep wildcard rejected", "http:*.*.example.com:443", "invalid character"},
+		{"non-leftmost wildcard rejected", "http:sub.*.example.com:443", "wildcard must be single"},
+		{"partial wildcard rejected", "http:sub*.example.com:443", "wildcard must be single"},
+		{"label starting with hyphen rejected", "http:-example.com:443", "must not start or end with hyphen"},
+		{"trailing dot rejected", "http:example.com.:443", "empty"},
+		{"invalid characters rejected", "http:exam_ple.com:443", "invalid character"},
+		{"label too long rejected", "http:" + strings.Repeat("a", 64) + ".com:443", "exceeds"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := netrules.ParseAccessRule(tc.input, "")
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func Test_ValidateRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		rules   []string
+		wantErr string
+	}{
+		// No duplicate identity — normalization edge cases
+		{"single-host CIDR duplicates bare IP", []string{"net:http:127.0.0.1/32:443", "net:none:127.0.0.1:443"}, "duplicate net rule identity"},
+		{"IPv4-mapped IPv6 duplicates IPv4", []string{"net:http:[::ffff:127.0.0.1]:443", "net:none:127.0.0.1:443"}, "duplicate net rule identity"},
+		{"domain case duplicates", []string{"net:http:Example.COM:443", "net:none:example.com:443"}, "duplicate net rule identity"},
+		{"non-canonical CIDR base duplicates canonical", []string{"net:http:10.0.0.5/24:8080", "net:none:10.0.0.0/24:8080"}, "duplicate net rule identity"},
+		{"same target different ports allowed", []string{"net:http:example.com:443", "net:http:example.com:80"}, ""},
+
+		// No mixed port patterns
+		{"different targets can have different port styles", []string{"net:http:example.com:*", "net:http:other.com:443"}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var rules []netrules.Rule
+			for _, r := range tc.rules {
+				rules = append(rules, parseNetRule(t, r))
+			}
+			err := netrules.ValidateRules(rules)
+			if tc.wantErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func Test_NoDuplicateIdentity_SameFileDuplicateShowsSourceOnce(t *testing.T) {
+	rules := []netrules.Rule{
+		parseNetRuleFrom(t, "net:http:example.com:443", "/etc/execave.json"),
+		parseNetRuleFrom(t, "net:none:example.com:443", "/etc/execave.json"),
+	}
+
+	err := netrules.ValidateRules(rules)
+
+	require.ErrorContains(t, err, "duplicate net rule identity")
+	require.ErrorContains(t, err, "/etc/execave.json")
+	assert.Equal(t, 1, strings.Count(err.Error(), "/etc/execave.json"))
 }

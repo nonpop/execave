@@ -27,8 +27,8 @@ type Resolver struct {
 type SymlinkChain struct {
 	Hops               []SymlinkHop // Symlink hops in resolution order.
 	ResolvedPath       string       // Final resolved path; empty if unresolvable or depth exceeded.
-	Unresolvable       bool   // Chain entered a managed path (host resolution unreliable).
-	DepthLimitExceeded bool   // Chain exceeded MAXSYMLINKS (40).
+	Unresolvable       bool         // Chain entered a managed path (host resolution unreliable).
+	DepthLimitExceeded bool         // Chain exceeded MAXSYMLINKS (40).
 }
 
 // SymlinkHop records one symlink encountered during resolution.

@@ -2,7 +2,6 @@ package pathutil
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -78,13 +77,6 @@ func TestExpandPath_TildePathCleaned(t *testing.T) {
 	assert.Equal(t, homeDir+"/other", result)
 }
 
-func TestExpandPath_TildeUsernameRejected(t *testing.T) {
-	_, err := ExpandPath("~otheruser/data", "/home/user")
-	require.Error(t, err)
-	assert.True(t,
-		strings.Contains(err.Error(), "~username") || strings.Contains(err.Error(), "not supported"))
-}
-
 func TestExpandPath_EmptyPath(t *testing.T) {
 	configDir := "/home/user/myproject"
 	result, err := ExpandPath("", configDir)
@@ -112,16 +104,6 @@ func TestExpandPath_ParentTraversalBeyondRoot(t *testing.T) {
 	result, err := ExpandPath("../../../..", configDir)
 	require.NoError(t, err)
 	assert.Equal(t, "/", result)
-}
-
-func TestShortenPath_PathUnderConfigDirShortenedToRelative(t *testing.T) {
-	result := ShortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
-	assert.Equal(t, "src/main.go", result)
-}
-
-func TestShortenPath_PathUnderHomeDirButOutsideConfigDirShortenedToTilde(t *testing.T) {
-	result := ShortenPath("/home/user/.ssh/id_rsa", "/home/user", "/home/user/project")
-	assert.Equal(t, "~/.ssh/id_rsa", result)
 }
 
 func TestShortenPath_PathUnderBothConfigDirTakesPriority(t *testing.T) {
