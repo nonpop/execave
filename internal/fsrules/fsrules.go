@@ -7,7 +7,6 @@ package fsrules
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/nonpop/execave/internal/pathutil"
@@ -141,7 +140,7 @@ func validateConfigNotWritable(rules []Rule, configPaths []string) error {
 func validateNoManagedPaths(rules []Rule, managedPaths []string) error {
 	for _, rule := range rules {
 		for _, managed := range managedPaths {
-			if rule.Path == managed || strings.HasPrefix(rule.Path, managed+string(filepath.Separator)) {
+			if pathutil.IsUnder(rule.Path, managed) {
 				return fmt.Errorf("rule %q from %s targets managed path %q", rule.RawRule, rule.SourcePath, managed)
 			}
 		}

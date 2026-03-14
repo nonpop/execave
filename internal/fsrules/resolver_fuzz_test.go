@@ -2,10 +2,10 @@ package fsrules_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/nonpop/execave/internal/fsrules"
+	"github.com/nonpop/execave/internal/pathutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -71,7 +71,7 @@ func matchedRule(rules []fsrules.Rule, result fsrules.AccessResult) *fsrules.Rul
 
 // pathMatchesRule reports whether cleanPath is covered by rulePath.
 func pathMatchesRule(cleanPath, rulePath string) bool {
-	return cleanPath == rulePath || strings.HasPrefix(cleanPath, rulePath+"/")
+	return pathutil.IsUnder(cleanPath, rulePath)
 }
 
 // assertLongestPrefixWins checks that no rule in cfg has a longer matching prefix than result.Rule.

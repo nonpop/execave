@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/nonpop/execave/internal/pathutil"
@@ -169,7 +168,7 @@ func (l *Logger) isManagedPath(path string) bool {
 	cleanPath := filepath.Clean(path)
 
 	for _, dir := range l.cfg.ManagedPaths {
-		if cleanPath == dir || strings.HasPrefix(cleanPath, dir+string(filepath.Separator)) {
+		if pathutil.IsUnder(cleanPath, dir) {
 			return true
 		}
 	}

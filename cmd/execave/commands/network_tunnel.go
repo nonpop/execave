@@ -26,7 +26,6 @@ func runTunnel(cmd *cobra.Command, args []string) error {
 	udsPath := args[0]
 
 	// Find the argv after optional "--"
-	// TODO: use validateTargetArgv
 	var targetArgv []string
 	argsLenAtDash := cmd.ArgsLenAtDash()
 	if argsLenAtDash == -1 {

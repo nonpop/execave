@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// IsUnder reports whether path is equal to dir or is a child of dir.
+// Both must be clean paths (caller responsibility).
+func IsUnder(path, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
+}
+
 // ShortenPath returns a compact display form of absPath, preferring
 // config-relative, then tilde-relative, then absolute.
 //

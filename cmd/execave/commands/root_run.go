@@ -89,7 +89,6 @@ var runCmd = &cobra.Command{
 	},
 }
 
-// TODO: use extractCommand?
 func validateTargetArgv(cmd *cobra.Command, args []string) error {
 	argsLenAtDash := cmd.ArgsLenAtDash()
 	if argsLenAtDash == -1 {

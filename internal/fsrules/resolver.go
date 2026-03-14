@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nonpop/execave/internal/pathutil"
 )
 
 // Operation represents a filesystem access operation.
@@ -337,8 +339,7 @@ func (r *Resolver) resolvePathComponents(path string) (string, *SymlinkChain, bo
 // host-side symlink resolution is unreliable (e.g., sandbox tmpfs).
 func (r *Resolver) isUnresolvablePath(path string) bool {
 	for _, managed := range r.managedPaths {
-		// TODO: this logic is in many places
-		if path == managed || strings.HasPrefix(path, managed+string(filepath.Separator)) {
+		if pathutil.IsUnder(path, managed) {
 			return true
 		}
 	}

@@ -106,6 +106,22 @@ func TestExpandPath_ParentTraversalBeyondRoot(t *testing.T) {
 	assert.Equal(t, "/", result)
 }
 
+func TestIsUnder_ExactMatch(t *testing.T) {
+	assert.True(t, IsUnder("/tmp", "/tmp"))
+}
+
+func TestIsUnder_ChildPath(t *testing.T) {
+	assert.True(t, IsUnder("/tmp/foo", "/tmp"))
+}
+
+func TestIsUnder_SharedPrefixNotChild(t *testing.T) {
+	assert.False(t, IsUnder("/tmp2", "/tmp"))
+}
+
+func TestIsUnder_UnrelatedPath(t *testing.T) {
+	assert.False(t, IsUnder("/etc/foo", "/tmp"))
+}
+
 func TestShortenPath_PathUnderBothConfigDirTakesPriority(t *testing.T) {
 	result := ShortenPath("/home/user/project/src/main.go", "/home/user", "/home/user/project")
 	assert.Equal(t, "src/main.go", result)
