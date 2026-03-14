@@ -94,7 +94,7 @@ func Test_SandboxingFilesystem_ProtectSensitiveFilesWithNoAccessRules(t *testing
 	s.thenExitCode(0)
 }
 
-func Test_SandboxingFilesystem_OverrideParentRuleWithMoreSpecificChildRule(t *testing.T) {
+func Test_SandboxingFilesystem_OverrideParentRuleWithMoreSpecificChildRule(t *testing.T) { //nolint:funlen // e2e scenario test
 	// The most specific rule (longest path match) wins when rules overlap, regardless of direction.
 	s := newScenario(t)
 
@@ -236,11 +236,11 @@ func Test_SandboxingFilesystem_SymlinkToInaccessibleTargetDenied(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s.whenRun(tc.args...)
+	for _, tt := range cases {
+		t.Run(tt.name, func(_ *testing.T) {
+			s.whenRun(tt.args...)
 			s.thenExitCodeNonZero()
-			s.thenStderrContains(tc.link + ": No such file or directory")
+			s.thenStderrContains(tt.link + ": No such file or directory")
 		})
 	}
 }
@@ -272,9 +272,9 @@ func Test_SandboxingFilesystem_DefaultDenyForUnmatchedPaths(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s.whenRun(tc.args...)
+	for _, tt := range cases {
+		t.Run(tt.name, func(_ *testing.T) {
+			s.whenRun(tt.args...)
 			s.thenExitCodeNonZero()
 			s.thenStderrContains("No such file or directory")
 		})

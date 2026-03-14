@@ -55,7 +55,7 @@ func Test_RestrictingNetwork_AllowSpecificHTTPSEndpoints(t *testing.T) {
 	}{
 		{"allowed", []string{"curl", "-sk", fmt.Sprintf("https://%s/", srv.hostPort())}, "HTTPS_ALLOWED"},
 		{"different_host_denied", []string{"curl", "-si", "--max-time", "5", "https://192.0.2.1:443/"}, "403"},
-		{"wrong_port_denied", []string{"curl", "-si", "--max-time", "5", fmt.Sprintf("https://%s:9999/", srv.host)}, "403"},
+		{"wrong_port_denied", []string{"curl", "-si", "--max-time", "5", "https://" + net.JoinHostPort(srv.host, "9999") + "/"}, "403"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
@@ -81,7 +81,7 @@ func Test_RestrictingNetwork_AllowSpecificHTTPEndpoints(t *testing.T) {
 	}{
 		{"allowed", []string{"curl", "-s", fmt.Sprintf("http://%s/", srv.hostPort())}, "HTTP_ALLOWED"},
 		{"different_host_denied", []string{"curl", "-si", "http://192.0.2.1/"}, "403"},
-		{"wrong_port_denied", []string{"curl", "-si", fmt.Sprintf("http://%s:9999/", srv.host)}, "403"},
+		{"wrong_port_denied", []string{"curl", "-si", "http://" + net.JoinHostPort(srv.host, "9999") + "/"}, "403"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
@@ -99,7 +99,7 @@ func Test_RestrictingNetwork_BlockSpecificDomainWithinWildcardAllow_Wildcard(t *
 	s := newScenario(t)
 	s.givenCurl()
 	s.givenRules(rules...)
-	s.whenRun("curl", "-s", "--max-time", "5", fmt.Sprintf("http://%s:%s/", allowedServer.host, allowedServer.port))
+	s.whenRun("curl", "-s", "--max-time", "5", "http://"+net.JoinHostPort(allowedServer.host, allowedServer.port)+"/")
 	s.thenExitCode(0)
 	s.thenStdoutContains("ALLOWED_ENDPOINT")
 }
@@ -111,7 +111,7 @@ func Test_RestrictingNetwork_BlockSpecificDomainWithinWildcardAllow_Deny(t *test
 	s := newScenario(t)
 	s.givenCurl()
 	s.givenRules(rules...)
-	s.whenRun("curl", "-sf", "--max-time", "5", fmt.Sprintf("http://%s:%s/", blockedServer.host, blockedServer.port))
+	s.whenRun("curl", "-sf", "--max-time", "5", "http://"+net.JoinHostPort(blockedServer.host, blockedServer.port)+"/")
 	s.thenExitCodeNonZero()
 }
 

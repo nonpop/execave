@@ -253,14 +253,14 @@ func (p *Monitor) logEntry(op accesslog.OperationType, target string, result acc
 // contains raw strace lines consumed after the last execve during the scan;
 // the caller must replay them. In the normal case (all expected execves found)
 // buffered is nil.
-func findUserExecve(scanner *bufio.Scanner, sr *syscallrules.Resolver, expectedExecves int) (straceParseResult, string, []string, bool) {
+func findUserExecve(scanner *bufio.Scanner, resolver *syscallrules.Resolver, expectedExecves int) (straceParseResult, string, []string, bool) {
 	seenExecves := 0
 	var lastResult straceParseResult
 	var lastLine string
 	var afterLastExecve []string
 	for scanner.Scan() {
 		line := scanner.Text()
-		result, ok := parseLine(sr, line)
+		result, ok := parseLine(resolver, line)
 		if !ok {
 			if seenExecves > 0 {
 				afterLastExecve = append(afterLastExecve, line)
@@ -285,7 +285,7 @@ func findUserExecve(scanner *bufio.Scanner, sr *syscallrules.Resolver, expectedE
 	if seenExecves >= 2 { //nolint:mnd // 2 = past the first setup execve
 		return lastResult, lastLine, afterLastExecve, true
 	}
-	return straceParseResult{}, "", nil, false
+	return straceParseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, "", nil, false
 }
 
 // resolveCWD tracks per-process working directories and resolves relative paths.

@@ -35,7 +35,7 @@ type rawConfig struct {
 }
 
 // buildConfig parses already-separated rule slices directly.
-func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) {
+func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) { //nolint:cyclop // linear pipeline; complexity from error handling
 	if !filepath.IsAbs(configPath) {
 		panic(fmt.Sprintf("configPath must be absolute: %q", configPath))
 	}
@@ -133,7 +133,7 @@ type cfgNode struct {
 	raw  rawConfig
 }
 
-func readConfigGraph(root string) ([]*cfgNode, error) {
+func readConfigGraph(root string) ([]*cfgNode, error) { //nolint:cyclop // recursive graph walk; complexity from error handling
 	visited := make(map[string]*cfgNode)
 	inStack := make(map[string]struct{})
 	var ordered []*cfgNode

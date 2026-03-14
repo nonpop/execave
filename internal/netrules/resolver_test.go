@@ -19,10 +19,10 @@ func TestResolve_CaseInsensitive(t *testing.T) {
 		{"rule uppercase", "http:API.Example.COM:443", "api.example.com"},
 		{"request uppercase", "http:api.example.com:443", "API.EXAMPLE.COM"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := newResolver(t, tc.rule)
-			result := r.CheckAccess(netrules.ProtocolHTTP, tc.request, 443)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newResolver(t, tt.rule)
+			result := r.CheckAccess(netrules.ProtocolHTTP, tt.request, 443)
 			assert.True(t, result.Allowed)
 		})
 	}
@@ -153,11 +153,11 @@ func Test_CheckAccess(t *testing.T) {
 		// Target specificity
 		{"wildcard allows when no exact deny", []string{"http:*.example.com:443", "none:evil.example.com:443"}, "api.example.com", 443, true},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			r := newResolver(t, tc.rules...)
-			result := r.CheckAccess(netrules.ProtocolHTTP, tc.host, tc.port)
-			if tc.wantAllowed {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newResolver(t, tt.rules...)
+			result := r.CheckAccess(netrules.ProtocolHTTP, tt.host, tt.port)
+			if tt.wantAllowed {
 				assert.True(t, result.Allowed)
 			} else {
 				assert.False(t, result.Allowed)

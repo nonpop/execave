@@ -104,7 +104,7 @@ func targetSpecificity(rule *Rule, lowerHost string, addr net.IP) int {
 // domainSpecificity returns the specificity of a domain rule match.
 // Returns -1 if the domain does not match.
 // Exact match: label count (always beats wildcard with same suffix).
-// Wildcard match: non-wildcard label count
+// Wildcard match: non-wildcard label count.
 func domainSpecificity(ruleTarget target, host string) int {
 	if ruleTarget.wildcard {
 		// *.example.com matches exactly one subdomain level

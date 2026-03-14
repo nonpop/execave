@@ -21,6 +21,7 @@ linters:
     - wsl_v5
     - nlreturn
     - lll
+    - dupword
 
   settings:
     varnamelen:
@@ -32,6 +33,7 @@ linters:
         - wg *sync.WaitGroup
         - w http.ResponseWriter
         - r *http.Request
+        - t testing.TB
         - sb strings.Builder
         - s *scenario
         - ok bool

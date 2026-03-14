@@ -1,6 +1,7 @@
 package binutil_test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -56,26 +57,26 @@ func TestCheckBwrapVersion(t *testing.T) {
 		wantWarn    bool
 		wantErr     string
 	}{
-		{name: "older_minor_incompatible", versionLine: "bwrap 0.10.0\n", wantErr: "incompatible"},
-		{name: "pinned_compatible", versionLine: "bwrap 0.11.0\n"},
-		{name: "same_minor_higher_patch_compatible", versionLine: "bwrap 0.11.5\n"},
-		{name: "newer_minor_warns", versionLine: "bwrap 0.12.0\n", wantWarn: true},
-		{name: "major_bump_incompatible", versionLine: "bwrap 1.0.0\n", wantErr: "incompatible"},
-		{name: "trailing_text", versionLine: "bwrap 0.11.5\nsome other line\n"},
-		{name: "empty_output", versionLine: "", wantErr: "unexpected output"},
-		{name: "no_version_token", versionLine: "bwrap\n", wantErr: "unexpected output"},
-		{name: "non_numeric", versionLine: "bwrap notaversion\n", wantErr: "unexpected output"},
-		{name: "missing_patch", versionLine: "bwrap 0.11\n", wantErr: "unexpected output"},
+		{name: "older_minor_incompatible", versionLine: "bwrap 0.10.0\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "pinned_compatible", versionLine: "bwrap 0.11.0\n", wantWarn: false, wantErr: ""},
+		{name: "same_minor_higher_patch_compatible", versionLine: "bwrap 0.11.5\n", wantWarn: false, wantErr: ""},
+		{name: "newer_minor_warns", versionLine: "bwrap 0.12.0\n", wantWarn: true, wantErr: ""},
+		{name: "major_bump_incompatible", versionLine: "bwrap 1.0.0\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "trailing_text", versionLine: "bwrap 0.11.5\nsome other line\n", wantWarn: false, wantErr: ""},
+		{name: "empty_output", versionLine: "", wantWarn: false, wantErr: "unexpected output"},
+		{name: "no_version_token", versionLine: "bwrap\n", wantWarn: false, wantErr: "unexpected output"},
+		{name: "non_numeric", versionLine: "bwrap notaversion\n", wantWarn: false, wantErr: "unexpected output"},
+		{name: "missing_patch", versionLine: "bwrap 0.11\n", wantWarn: false, wantErr: "unexpected output"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeBwrap := fakeVersionBinary(t, "bwrap", tc.versionLine)
-			warn, err := binutil.CheckBwrapVersion(fakeBwrap)
-			if tc.wantErr != "" {
-				assert.ErrorContains(t, err, tc.wantErr)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeBwrap := fakeVersionBinary(t, "bwrap", tt.versionLine)
+			warn, err := binutil.CheckBwrapVersion(context.Background(), fakeBwrap)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
 			} else {
 				assert.NoError(t, err)
-				if tc.wantWarn {
+				if tt.wantWarn {
 					assert.NotEmpty(t, warn)
 				} else {
 					assert.Empty(t, warn)
@@ -92,24 +93,24 @@ func TestCheckStraceVersion(t *testing.T) {
 		wantWarn    bool
 		wantErr     string
 	}{
-		{name: "older_minor_incompatible", versionLine: "strace -- version 6.18\n", wantErr: "incompatible"},
-		{name: "pinned_compatible", versionLine: "strace -- version 6.19\n"},
-		{name: "newer_minor_warns", versionLine: "strace -- version 6.20\n", wantWarn: true},
-		{name: "major_bump_incompatible", versionLine: "strace -- version 7.0\n", wantErr: "incompatible"},
-		{name: "second_line", versionLine: "strace\nversion 6.19 something\n"},
-		{name: "extracts_first_match", versionLine: "strace 6.19 (other 7.0)\n"},
-		{name: "empty_output", versionLine: "", wantErr: "no version found"},
-		{name: "no_version_match", versionLine: "strace\nno version here\n", wantErr: "no version found"},
+		{name: "older_minor_incompatible", versionLine: "strace -- version 6.18\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "pinned_compatible", versionLine: "strace -- version 6.19\n", wantWarn: false, wantErr: ""},
+		{name: "newer_minor_warns", versionLine: "strace -- version 6.20\n", wantWarn: true, wantErr: ""},
+		{name: "major_bump_incompatible", versionLine: "strace -- version 7.0\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "second_line", versionLine: "strace\nversion 6.19 something\n", wantWarn: false, wantErr: ""},
+		{name: "extracts_first_match", versionLine: "strace 6.19 (other 7.0)\n", wantWarn: false, wantErr: ""},
+		{name: "empty_output", versionLine: "", wantWarn: false, wantErr: "no version found"},
+		{name: "no_version_match", versionLine: "strace\nno version here\n", wantWarn: false, wantErr: "no version found"},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fakeStrace := fakeVersionBinary(t, "strace", tc.versionLine)
-			warn, err := binutil.CheckStraceVersion(fakeStrace)
-			if tc.wantErr != "" {
-				assert.ErrorContains(t, err, tc.wantErr)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeStrace := fakeVersionBinary(t, "strace", tt.versionLine)
+			warn, err := binutil.CheckStraceVersion(context.Background(), fakeStrace)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
 			} else {
 				assert.NoError(t, err)
-				if tc.wantWarn {
+				if tt.wantWarn {
 					assert.NotEmpty(t, warn)
 				} else {
 					assert.Empty(t, warn)

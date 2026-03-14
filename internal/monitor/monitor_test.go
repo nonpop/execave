@@ -28,7 +28,7 @@ import (
 // runMonitorDirect runs a command via strace with the given processor configuration.
 // This is a test helper for tests that need to directly configure monitor parameters.
 func runMonitorDirect(
-	t testing.TB,
+	tb testing.TB,
 	stracePath string,
 	logger *accesslog.Logger,
 	fsResolver *fsrules.Resolver,
@@ -38,12 +38,12 @@ func runMonitorDirect(
 	syscallResolver *syscallrules.Resolver,
 	unenforced bool,
 ) (int, error) {
-	t.Helper()
+	tb.Helper()
 
 	processor := monitor.New(logger, fsResolver, syscallResolver, setupExecves, unenforced)
 	prepared, err := monitor.Prepare(stracePath, cmd, extraFile, syscallResolver, 3)
 	if err != nil {
-		return 1, err
+		return 1, fmt.Errorf("prepare monitor: %w", err)
 	}
 
 	execCmd := exec.CommandContext(context.Background(), prepared.StracePath, prepared.Args...) // #nosec G204
@@ -129,7 +129,7 @@ func countLogLines(s string) int {
 func createTestProcessor(t *testing.T, cfg *config.Config, setupExecves int) (*monitor.Monitor, *bytes.Buffer) {
 	t.Helper()
 	var buf bytes.Buffer
-	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&buf, logCfg)
 	fsResolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 	return monitor.New(logger, fsResolver, nil, setupExecves, false), &buf
@@ -156,13 +156,13 @@ func createCwdTestProcessor(t *testing.T) (string, *monitor.Monitor, *bytes.Buff
 // produces a single SYSCALL DENY entry with the expected target name.
 func assertBlockedSyscallEntry(t *testing.T, syscallName, straceLine string) {
 	t.Helper()
-	sr := syscallrules.NewResolver(nil, seccomp.RuleableSyscallNames())
+	syscallResolver := syscallrules.NewResolver(nil, seccomp.RuleableSyscallNames())
 	cfg := new(config.Config)
 	var buf bytes.Buffer
-	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&buf, logCfg)
 	fsResolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
-	mon := monitor.New(logger, fsResolver, sr, 0, false)
+	mon := monitor.New(logger, fsResolver, syscallResolver, 0, false)
 
 	err := mon.Run(strings.NewReader(straceLine + "\n"))
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func Test_BwrapSetupPhaseDetection_IncompleteExecveChainStillProducesEntries(t *
 		ConfigPaths: nil,
 	}
 	var logBuf bytes.Buffer
-	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, ShowAllowed: true}
+	logCfg := &accesslog.Config{ManagedPaths: cfg.ManagedPaths, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&logBuf, logCfg)
 	resolver := fsrules.NewResolver(cfg.FSRules, cfg.ManagedPaths)
 
@@ -216,14 +216,14 @@ func Test_BwrapSetupPhaseDetection_IncompleteExecveChainStillProducesEntries(t *
 	bwrapPath, err := binutil.ResolveBwrap()
 	require.NoError(t, err)
 	wrapped := tunnel.WrapCommand(tunnelStub, udsFile, []string{"cat", testFile})
-	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
+	sandboxCmd, cleanup, err := sandbox.Prepare(bwrapPath, cfg, wrapped, 3)
 	require.NoError(t, err)
 	defer cleanup()
-	fullCommand := append([]string{sc.BwrapPath}, sc.Args...)
+	fullCommand := append([]string{sandboxCmd.BwrapPath}, sandboxCmd.Args...)
 
 	// setupExecves=4 expects 4 execves, but only 3 occur (bwrap + tunnel stub + user command).
 	// The monitor must still produce entries despite the incomplete chain.
-	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, fullCommand, 4, sc.ExtraFiles[0], nil, false)
+	exitCode, err := runMonitorDirect(t, stracePath, logger, resolver, fullCommand, 4, sandboxCmd.ExtraFiles[0], nil, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, exitCode)
 

@@ -95,9 +95,11 @@ func New(out io.Writer, cfg *Config) *Logger {
 	// no path shortening, empty ManagedPaths means no infrastructure filtering,
 	// and ShowAllowed is a plain bool.
 	return &Logger{
-		seen: make(map[accessKey]bool),
-		out:  out,
-		cfg:  cfg,
+		mu:       sync.Mutex{},
+		seen:     make(map[accessKey]bool),
+		out:      out,
+		cfg:      cfg,
+		writeErr: nil,
 	}
 }
 
@@ -155,7 +157,7 @@ func (l *Logger) isVisible(entry Entry) bool {
 
 // formatEntry returns a formatted log line.
 // Format: %-10s %-7s  %s  (%s)
-// Example: UNENFORCED READ     ~/.ssh/id_rsa  (no-matching-rule)
+// Example: UNENFORCED READ     ~/.ssh/id_rsa  (no-matching-rule).
 func (l *Logger) formatEntry(entry Entry) string {
 	target := entry.Target
 	if (entry.Operation == OperationRead || entry.Operation == OperationWrite) && filepath.IsAbs(target) {

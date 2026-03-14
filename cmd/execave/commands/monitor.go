@@ -34,8 +34,9 @@ var monitorCmd = &cobra.Command{
 		}
 
 		sandboxCfg := run.SandboxConfig{
-			ConfigPath: configPath,
-			TargetArgv: targetArgv,
+			ConfigPath:   configPath,
+			TargetArgv:   targetArgv,
+			TunnelBinary: "",
 			MonitorConfig: &run.MonitorConfig{
 				File:        monitorOutputPath,
 				LogAllowed:  monitorShowAllowed,

@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -17,9 +18,7 @@ var networkTunnelCmd = &cobra.Command{
 	Use:   "network-tunnel UDS_PATH [flags] [--] TARGET_COMMAND [ARG...]",
 	Short: "TCP-to-UDS bridge for network proxy (internal)",
 	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runTunnel(cmd, args)
-	},
+	RunE:  runTunnel,
 }
 
 func runTunnel(cmd *cobra.Command, args []string) error {
@@ -35,7 +34,7 @@ func runTunnel(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(targetArgv) == 0 {
-		return fmt.Errorf("no command specified")
+		return errors.New("no command specified")
 	}
 
 	exitCode, err := tunnel.Run(udsPath, targetArgv)

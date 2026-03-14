@@ -90,7 +90,7 @@ func assertLongestPrefixWins(t *testing.T, cfg *testConfig, result fsrules.Acces
 	}
 }
 
-func FuzzCheckAccess(f *testing.F) {
+func FuzzCheckAccess(f *testing.F) { //nolint:gocognit,cyclop,funlen // fuzz test checking multiple invariants
 	// Seed corpus with typical paths
 	f.Add("/home/user/project/file.txt", "read")
 	f.Add("/home/user/project/file.txt", "write")

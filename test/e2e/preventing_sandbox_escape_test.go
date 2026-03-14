@@ -195,11 +195,11 @@ func Test_PreventingSandboxEscape_SymlinkLoopHitsDepthLimit(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			mount := s.givenDir("mount")
-			link := tc.setup(s, mount)
+			link := tt.setup(s, mount)
 
 			s.givenRules("fs:ro:" + mount.String())
 
@@ -263,12 +263,12 @@ func Test_PreventingSandboxEscape_NamespaceEscapeViaUnshareBlockedBySeccomp(t *t
 		{"mount namespace", "--mount"},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenRules()
 
-			s.whenRun("unshare", tc.flag, "true")
+			s.whenRun("unshare", tt.flag, "true")
 
 			s.thenExitCodeNonZero()
 			s.thenStderrContains("Operation not permitted")
@@ -305,10 +305,10 @@ func Test_PreventingSandboxEscape_PATHInjectionViaFakeStraceBinary(t *testing.T)
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
 			fakeDir := t.TempDir()
-			tc.setup(t, fakeDir)
+			tt.setup(t, fakeDir)
 			t.Setenv("PATH", fakeDir+":"+os.Getenv("PATH"))
 
 			configPath := writeConfig(t, []string{"fs:ro:/usr"})

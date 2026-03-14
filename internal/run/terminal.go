@@ -17,7 +17,7 @@ import (
 // next process that starts. We use tcflush (TCIOFLUSH) to discard both input
 // and output queues.
 func drainStdin() {
-	stdinFd := int(os.Stdin.Fd())
+	stdinFd := int(os.Stdin.Fd()) //nolint:gosec // G115 -- file descriptors are small non-negative ints
 	if !term.IsTerminal(stdinFd) {
 		return
 	}
@@ -30,7 +30,7 @@ func drainStdin() {
 	//nolint:dogsled // syscall.Syscall returns (r1, r2, errno); none needed for tcflush
 	_, _, _ = syscall.Syscall(
 		syscall.SYS_IOCTL,
-		uintptr(stdinFd),
+		uintptr(stdinFd), //nolint:gosec // G115 -- stdinFd was obtained from Fd(), safe to pass to syscall
 		TCFLSH,
 		TCIOFLUSH,
 	)
@@ -45,7 +45,7 @@ func drainStdin() {
 // Requires SIGTTOU to be caught/ignored by the caller, since tcsetpgrp from a
 // background process group generates SIGTTOU.
 func reclaimForeground() {
-	stdinFd := int(os.Stdin.Fd())
+	stdinFd := int(os.Stdin.Fd()) //nolint:gosec // G115 -- file descriptors are small non-negative ints
 	if !term.IsTerminal(stdinFd) {
 		return
 	}
@@ -56,7 +56,7 @@ func reclaimForeground() {
 	//nolint:dogsled // syscall.Syscall returns (r1, r2, errno); none needed here
 	_, _, _ = syscall.Syscall(
 		syscall.SYS_IOCTL,
-		uintptr(stdinFd),
+		uintptr(stdinFd), //nolint:gosec // G115 -- stdinFd was obtained from Fd(), safe to pass to syscall
 		TIOCSPGRP,
 		uintptr(unsafe.Pointer(&pgrp)), //#nosec G103 -- passing pid_t to kernel ioctl
 	)
@@ -67,7 +67,7 @@ func reclaimForeground() {
 // from regular commands (ls, git, etc.) that never enter alt screen, while still
 // cleaning up after TUI apps that were killed before they could restore the terminal.
 func conditionalClearScreen() {
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
+	if !term.IsTerminal(int(os.Stdout.Fd())) { //nolint:gosec // G115 -- file descriptors are small non-negative ints
 		return
 	}
 	// Always restore these — harmless no-ops for regular apps, necessary for killed TUIs.
@@ -88,7 +88,7 @@ func conditionalClearScreen() {
 // Returns true if alt screen is active. Returns false on error, timeout,
 // or when stdin is not a terminal. Conservative: favors preserving output.
 func queryAltScreen() bool {
-	stdinFd := int(os.Stdin.Fd())
+	stdinFd := int(os.Stdin.Fd()) //nolint:gosec // G115 -- file descriptors are small non-negative ints
 	if !term.IsTerminal(stdinFd) {
 		return false
 	}
@@ -157,7 +157,7 @@ func parseAltScreenResponse(resp string) bool {
 // that restores it. Call the returned function via defer to ensure the terminal
 // is restored even if the sandboxed process leaves it in a bad state.
 func saveTerminalState() func() {
-	stdinFd := int(os.Stdin.Fd())
+	stdinFd := int(os.Stdin.Fd()) //nolint:gosec // G115 -- file descriptors are small non-negative ints
 	if !term.IsTerminal(stdinFd) {
 		return func() {}
 	}

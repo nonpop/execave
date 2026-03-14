@@ -192,7 +192,7 @@ func (r *Resolver) checkPermission(perm Permission, operation Operation) bool {
 // Returns the final resolved path, symlink chain info, and any error.
 // Symlinks at rule boundaries are not resolved.
 //
-//nolint:gocognit,cyclop,funlen // Reads better as one function
+//nolint:cyclop,funlen // Reads better as one function
 func (r *Resolver) resolvePathComponents(path string) (string, *SymlinkChain, bool, error) {
 	const maxSymlinks = 40 // Linux kernel's MAXSYMLINKS
 

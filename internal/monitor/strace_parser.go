@@ -18,7 +18,7 @@ type straceParseResult struct {
 }
 
 var (
-	// syscallRegex matches: [pid] syscall("path" — captures syscall name and path
+	// syscallRegex matches: [pid] syscall("path" — captures syscall name and path.
 	syscallRegex = regexp.MustCompile(`^\d*\s*(\w+)\("([^"]+)"`)
 	// atSyscallRegex matches: [pid] syscall(fd<fdpath>, "path" — for *at() variants with fd as first arg
 	// With strace -y, fd shows as: AT_FDCWD</cwd/path> or 3</proc/self>
@@ -26,16 +26,16 @@ var (
 	// Empty path occurs with AT_EMPTY_PATH flag (e.g., fstatat(fd, "", AT_EMPTY_PATH)).
 	atSyscallRegex = regexp.MustCompile(`^\d*\s*(\w+)\((AT_FDCWD|\d+)(?:<([^>]*)>)?,\s*"([^"]*)"`)
 	// fchdirRegex matches: [pid] fchdir(fd<path>) — captures the fd-annotated path
-	// Captures: 1=path
+	// Captures: 1=path.
 	fchdirRegex = regexp.MustCompile(`^\d*\s*fchdir\(\d+<([^>]+)>\)`)
 	// exitEventRegex matches process exit/kill events: "[pid] +++ exited with N +++"
-	// Captures: 1=pid
+	// Captures: 1=pid.
 	exitEventRegex = regexp.MustCompile(`^(\d+)\s*\+\+\+`)
 	// fallbackRegex matches: [pid] syscall( — captures just the syscall name before "("
 	// Tried last to match non-file syscalls (e.g., ptrace, bpf) that have no path arg.
 	fallbackRegex = regexp.MustCompile(`^\d*\s*(\w+)\(`)
 
-	fdFirstSyscalls = map[string]bool{
+	fdFirstSyscalls = map[string]bool{ //nolint:gochecknoglobals // package-private, used read-only
 		"openat": true, "fstatat": true, "newfstatat": true, "faccessat": true,
 		"faccessat2": true, "readlinkat": true, "mkdirat": true, "unlinkat": true,
 		"renameat": true, "renameat2": true, "linkat": true, "symlinkat": true,
@@ -43,7 +43,7 @@ var (
 	}
 )
 
-func parseLine(sr *syscallrules.Resolver, line string) (straceParseResult, bool) {
+func parseLine(resolver *syscallrules.Resolver, line string) (straceParseResult, bool) {
 	pid := extractPid(line)
 	failed := isFailed(line)
 
@@ -53,7 +53,7 @@ func parseLine(sr *syscallrules.Resolver, line string) (straceParseResult, bool)
 		if result, ok := parseAtSyscall(pid, matches, failed); ok {
 			return result, true
 		}
-		return straceParseResult{}, false
+		return straceParseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
 	}
 
 	// Try standard syscall format
@@ -80,12 +80,12 @@ func parseLine(sr *syscallrules.Resolver, line string) (straceParseResult, bool)
 	matches = fallbackRegex.FindStringSubmatch(line)
 	if len(matches) >= 2 { //nolint:mnd // minimum regex group count
 		name := matches[1]
-		if sr != nil && sr.CheckAccess(name).Known {
+		if resolver != nil && resolver.CheckAccess(name).Known {
 			return straceParseResult{pid: pid, syscall: name, path: "", cwdHint: "", failed: failed}, true
 		}
 	}
 
-	return straceParseResult{}, false
+	return straceParseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
 }
 
 // extractPid reads the pid prefix from a strace line.
@@ -132,7 +132,7 @@ func parseAtSyscall(pid string, matches []string, failed bool) (straceParseResul
 		if fdType != "AT_FDCWD" && fdPath != "" && filepath.IsAbs(fdPath) {
 			path = fdPath
 		} else {
-			return straceParseResult{}, false
+			return straceParseResult{pid: "", syscall: "", path: "", cwdHint: "", failed: false}, false
 		}
 	}
 

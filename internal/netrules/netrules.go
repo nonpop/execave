@@ -7,6 +7,7 @@
 package netrules
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -329,13 +330,13 @@ func validateDomainLabels(domain string) error {
 // validateLabel validates a single DNS label per RFC 1123.
 func validateLabel(label string) error {
 	if len(label) == 0 {
-		return fmt.Errorf("empty")
+		return errors.New("empty")
 	}
 	if len(label) > maxDNSLabelLen {
 		return fmt.Errorf("exceeds %d characters", maxDNSLabelLen)
 	}
 	if label[0] == '-' || label[len(label)-1] == '-' {
-		return fmt.Errorf("must not start or end with hyphen")
+		return errors.New("must not start or end with hyphen")
 	}
 	for _, c := range label {
 		if !isLabelChar(c) {
@@ -352,7 +353,7 @@ func validateTLD(label string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("last label must contain at least one alphabetic character")
+	return errors.New("last label must contain at least one alphabetic character")
 }
 
 func isLabelChar(c rune) bool {

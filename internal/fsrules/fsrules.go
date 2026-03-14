@@ -55,8 +55,8 @@ func (r Rule) Canonical() string {
 // ParseRule parses "permission:path" into a [Rule].
 // Paths are expanded via [pathutil.ExpandPath] relative to configDir.
 func ParseRule(ruleBody, configDir, configPath string) (Rule, error) {
-	parts := strings.SplitN(ruleBody, ":", 2)
-	if len(parts) != 2 {
+	parts := strings.SplitN(ruleBody, ":", 2) //nolint:mnd
+	if len(parts) != 2 {                      //nolint:mnd
 		return Rule{}, fmt.Errorf("malformed rule %q (expected format: permission:path)", ruleBody)
 	}
 

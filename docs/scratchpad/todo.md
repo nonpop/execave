@@ -8,6 +8,9 @@
 - verify "ruleable" syscalls really are so
 - Maybe use 'tcp' vs 'http' in net rules? Or 'tunnel' vs 'forward'?
 - find a way to run tests reliably without -count=1
+- go through nolints & nosec & gosec. Tweak lint settings?
+
+- flags to add temporary rules, like `--rule fs:ro:/foo/bar` (or `--fs ro:/foo/bar` maybe rather)
 
 - sequences like `^[[?1049;2$y` sometimes appear
 - monitor to execave-access.log by default, and allow stderr/out with

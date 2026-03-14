@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,12 +18,15 @@ func init() {
 
 const defaultConfigPath = "./execave.toml"
 
+// subcmdNameWidth is the column width for subcommand name alignment in usage output.
+const subcmdNameWidth = 16
+
 // configPath is the --config flag value shared by all subcommands.
 var configPath string
 
 // Execute runs the root Cobra command.
 func Execute() error {
-	return rootCmd.Execute()
+	return rootCmd.Execute() //nolint:wrapcheck
 }
 
 func rootUsageFunc(cmd *cobra.Command) error {
@@ -32,7 +36,7 @@ func rootUsageFunc(cmd *cobra.Command) error {
 			cmd.Print("\nSubcommands:\n")
 			for _, sub := range cmd.Commands() {
 				if sub.IsAvailableCommand() || sub.Name() == "help" {
-					cmd.Printf("  %s%s%s\n", sub.Name(), strings.Repeat(" ", 16-len(sub.Name())), sub.Short)
+					cmd.Printf("  %s%s%s\n", sub.Name(), strings.Repeat(" ", subcmdNameWidth-len(sub.Name())), sub.Short)
 				}
 			}
 		}
@@ -50,7 +54,7 @@ Subcommands:
 `)
 	for _, subcmd := range cmd.Commands() {
 		if subcmd.IsAvailableCommand() || subcmd.Name() == "help" {
-			usage.WriteString("  " + subcmd.Name() + strings.Repeat(" ", 16-len(subcmd.Name())) + subcmd.Short + "\n")
+			usage.WriteString("  " + subcmd.Name() + strings.Repeat(" ", subcmdNameWidth-len(subcmd.Name())) + subcmd.Short + "\n")
 		}
 	}
 	usage.WriteString("\nFlags:\n")
@@ -73,9 +77,7 @@ Runs a target command with bubblewrap-enforced sandbox policy and optional acces
 	Args:          validateTargetArgv,
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(cmd, args)
-	},
+	RunE:          runCommand,
 }
 
 // runCmd is an alias for the root command.
@@ -84,21 +86,19 @@ var runCmd = &cobra.Command{
 	Short:        "Run a command with sandbox policy",
 	Args:         validateTargetArgv,
 	SilenceUsage: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand(cmd, args)
-	},
+	RunE:         runCommand,
 }
 
 func validateTargetArgv(cmd *cobra.Command, args []string) error {
 	argsLenAtDash := cmd.ArgsLenAtDash()
 	if argsLenAtDash == -1 {
 		if len(args) == 0 {
-			return fmt.Errorf("no command specified")
+			return errors.New("no command specified")
 		}
 		return nil
 	}
 	if argsLenAtDash >= len(args) {
-		return fmt.Errorf("no command specified")
+		return errors.New("no command specified")
 	}
 	return nil
 }
@@ -113,6 +113,7 @@ func runCommand(cmd *cobra.Command, args []string) error {
 	sandboxCfg := run.SandboxConfig{
 		ConfigPath:    configPath,
 		TargetArgv:    targetArgv,
+		TunnelBinary:  "",
 		MonitorConfig: nil,
 	}
 

@@ -66,6 +66,7 @@ func New(logger *accesslog.Logger, resolver *netrules.Resolver, udsPath string, 
 		server:    nil,
 		transport: &http.Transport{},
 		wg:        sync.WaitGroup{},
+		serveErr:  nil,
 	}
 	return proxy
 }
@@ -228,7 +229,7 @@ func (p *Proxy) logAccess(opType accesslog.OperationType, target string, result 
 	}
 
 	var logResult accesslog.ResultType
-	if p.noEnforce {
+	if p.noEnforce { //nolint:gocritic // if-else checks different variables; switch would be less clear
 		logResult = accesslog.ResultUnenforced
 	} else if result.Allowed {
 		logResult = accesslog.ResultOK

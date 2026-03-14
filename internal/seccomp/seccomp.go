@@ -139,20 +139,20 @@ func FilterPipe(allowed map[string]bool) (*os.File, error) {
 		}
 	}
 	data := filterFromNrs(extractNrs(effective))
-	r, w, err := os.Pipe()
+	pipeRead, pipeWrite, err := os.Pipe()
 	if err != nil {
 		return nil, fmt.Errorf("create seccomp filter pipe: %w", err)
 	}
-	if _, err := w.Write(data); err != nil {
-		_ = r.Close()
-		_ = w.Close()
+	if _, err := pipeWrite.Write(data); err != nil {
+		_ = pipeRead.Close()
+		_ = pipeWrite.Close()
 		return nil, fmt.Errorf("write seccomp filter to pipe: %w", err)
 	}
-	if err := w.Close(); err != nil {
-		_ = r.Close()
+	if err := pipeWrite.Close(); err != nil {
+		_ = pipeRead.Close()
 		return nil, fmt.Errorf("close seccomp filter pipe write end: %w", err)
 	}
-	return r, nil
+	return pipeRead, nil
 }
 
 // filterFromNrs compiles a BPF deny-list filter from raw syscall numbers.

@@ -29,6 +29,7 @@ func bbRule(perm fsrules.Permission, path string) fsrules.Rule {
 		Permission: perm,
 		Path:       path,
 		RawRule:    permStr + ":" + path,
+		SourcePath: "",
 	}
 }
 

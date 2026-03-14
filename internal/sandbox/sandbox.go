@@ -23,6 +23,10 @@ import (
 // tiocSTISysctlPath is the sysctl path for TIOCSTI legacy mode.
 const tiocSTISysctlPath = "/proc/sys/dev/tty/legacy_tiocsti"
 
+// bwrapExecCount is the number of exec transitions bwrap performs internally
+// before reaching the user command (bwrap exec + tunnel exec).
+const bwrapExecCount = 2
+
 // managedDirs are directories the sandbox handles automatically.
 // Includes: runtime infrastructure (/dev, /proc), isolation (/tmp),
 // and bwrap's internal pivot_root directories (/newroot, /oldroot).
@@ -73,11 +77,11 @@ func Prepare(bwrapPath string, cfg *config.Config, command []string, seccompFD i
 		BwrapPath:    bwrapPath,
 		Args:         bwrapArgs,
 		ExtraFiles:   []*os.File{pipe},
-		SetupExecves: 2 + tunnel.ExecCount, // bwrap exec, tunnel exec, then user command exec
+		SetupExecves: bwrapExecCount + tunnel.ExecCount, // bwrap exec, tunnel exec, then user command exec
 	}, cleanup, nil
 }
 
-// allowedSyscallMap builds a map of allowed syscall names from cfg.SyscallRules,
+// allowedSyscallMap builds a map of allowed syscall names from cfg.SyscallRules.
 func allowedSyscallMap(cfg *config.Config) map[string]bool {
 	m := make(map[string]bool, len(cfg.SyscallRules))
 	for _, rule := range cfg.SyscallRules {

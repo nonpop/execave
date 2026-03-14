@@ -70,9 +70,9 @@ func TestCanonicalRoundTrip(t *testing.T) {
 		"ro:/usr/bin",
 		"none:/secrets",
 	}
-	for _, tc := range cases {
-		t.Run(tc, func(t *testing.T) {
-			rule1, err := fsrules.ParseRule(tc, "/tmp", "")
+	for _, tt := range cases {
+		t.Run(tt, func(t *testing.T) {
+			rule1, err := fsrules.ParseRule(tt, "/tmp", "")
 			require.NoError(t, err)
 			canonical1 := rule1.Canonical()
 

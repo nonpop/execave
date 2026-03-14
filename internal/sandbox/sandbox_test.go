@@ -247,7 +247,11 @@ func TestPrepare_SetupExecves3(t *testing.T) {
 	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+		ConfigPaths:  nil,
 	}
 	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
 	require.NoError(t, err)
@@ -260,7 +264,11 @@ func TestPrepare_InsertsSeccompAtFD(t *testing.T) {
 	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+		ConfigPaths:  nil,
 	}
 	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, []string{"true"}, 3)
 	require.NoError(t, err)
@@ -274,7 +282,11 @@ func TestPrepare_DoesNotModifyOriginalArgs(t *testing.T) {
 	bwrapPath := resolveBwrap(t)
 
 	cfg := &config.Config{
-		FSRules: []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
+		NetRules:     nil,
+		SyscallRules: nil,
+		ManagedPaths: nil,
+		ConfigPaths:  nil,
 	}
 	command := []string{"true"}
 	sc, cleanup, err := sandbox.Prepare(bwrapPath, cfg, command, 3)

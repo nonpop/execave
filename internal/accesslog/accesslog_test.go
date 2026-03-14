@@ -24,10 +24,10 @@ type syncBuffer struct {
 	buf bytes.Buffer
 }
 
-func (s *syncBuffer) Write(p []byte) (n int, err error) {
+func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.buf.Write(p)
+	return s.buf.Write(p) //nolint:wrapcheck
 }
 
 func (s *syncBuffer) String() string {
@@ -45,7 +45,7 @@ func (f *failWriter) Write(_ []byte) (int, error) {
 
 func TestLogger_ConcurrentAccess(t *testing.T) {
 	var buf syncBuffer
-	cfg := &accesslog.Config{ShowAllowed: true}
+	cfg := &accesslog.Config{ManagedPaths: nil, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&buf, cfg)
 
 	const numGoroutines = 10
@@ -116,7 +116,7 @@ func TestLogger_ManagedPathBoundaryFiltering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			cfg := &accesslog.Config{ManagedPaths: managedPaths, ShowAllowed: true}
+			cfg := &accesslog.Config{ManagedPaths: managedPaths, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 			logger := accesslog.New(&buf, cfg)
 
 			logger.Log(accesslog.Entry{
@@ -136,7 +136,7 @@ func TestLogger_ManagedPathBoundaryFiltering(t *testing.T) {
 }
 
 func TestLogger_Close_WriteError(t *testing.T) {
-	cfg := &accesslog.Config{ShowAllowed: true}
+	cfg := &accesslog.Config{ManagedPaths: nil, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&failWriter{}, cfg)
 
 	logger.Log(accesslog.Entry{

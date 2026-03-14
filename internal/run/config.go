@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
 func CreateProxyDir() (string, error) {
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
-		return "", fmt.Errorf("create proxy dir: XDG_RUNTIME_DIR not set")
+		return "", errors.New("create proxy dir: XDG_RUNTIME_DIR not set")
 	}
 	dir, err := os.MkdirTemp(runtimeDir, "execave-*")
 	if err != nil {

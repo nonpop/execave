@@ -45,10 +45,10 @@ func Test_ConfiguringExecave_CustomConfigPathViaConfig(t *testing.T) {
 		{"custom filename", "myconfig.toml"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			configDir := testTempDir(t)
-			configPath := filepath.Join(configDir, tc.configName)
+			configPath := filepath.Join(configDir, tt.configName)
 			err := os.WriteFile(configPath, tomlConfig(systemPaths()), 0o600)
 			require.NoError(t, err)
 
@@ -92,12 +92,12 @@ func Test_ConfiguringExecave_MonitorFlagsRejectedOnRun(t *testing.T) {
 		{"--no-sandbox"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.flag, func(t *testing.T) {
-			result := runExecave(t, "", "run", tc.flag, "--", "true")
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			result := runExecave(t, "", "run", tt.flag, "--", "true")
 
 			assertExitCode(t, result, 1)
-			assert.Contains(t, result.Stderr, "unknown flag: "+tc.flag)
+			assert.Contains(t, result.Stderr, "unknown flag: "+tt.flag)
 		})
 	}
 }
@@ -114,6 +114,7 @@ func Test_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
 	}{
 		{
 			name:      "absolute path",
+			workDir:   "",
 			configArg: "/nonexistent/dir/config.toml",
 			wantPath:  "/nonexistent/dir/config.toml",
 		},
@@ -125,13 +126,13 @@ func Test_ConfiguringExecave_MissingConfigFileShowsError(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := runExecave(t, tc.workDir, "--config", tc.configArg, "--", "true")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := runExecave(t, tt.workDir, "--config", tt.configArg, "--", "true")
 
 			assertExitCode(t, result, 1)
 			assert.Contains(t, result.Stderr, "file not found")
-			assert.Contains(t, result.Stderr, tc.wantPath)
+			assert.Contains(t, result.Stderr, tt.wantPath)
 		})
 	}
 }
@@ -155,15 +156,15 @@ func Test_ConfiguringExecave_InvalidRuleSyntaxRejectedBeforeExecution(t *testing
 		{"net deep wildcard domain", "net:http:*.*.example.com:443", "invalid domain pattern"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rule)
+			s.givenRulesOnly(tt.rule)
 
 			s.whenRun("true")
 
 			s.thenExitCode(1)
-			s.thenStderrContains(tc.wantStderr)
+			s.thenStderrContains(tt.wantStderr)
 		})
 	}
 }
@@ -206,10 +207,10 @@ func Test_ConfiguringExecave_InvalidNetActionRejected(t *testing.T) {
 		{"block (intuitive deny synonym)", "net:block:example.com:80"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rule)
+			s.givenRulesOnly(tt.rule)
 
 			s.whenRun("true")
 
@@ -232,10 +233,10 @@ func Test_ConfiguringExecave_DuplicateFilesystemPathsRejected(t *testing.T) {
 		{"trailing slash normalizes to same path", []string{"fs:ro:/home/user/", "fs:rw:/home/user"}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rules...)
+			s.givenRulesOnly(tt.rules...)
 
 			s.whenRun("true")
 
@@ -268,9 +269,9 @@ func Test_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
 		{"tilde trailing slash", []string{"fs:ro:" + tilde + "/", "fs:rw:" + tilde}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			result := runExecave(t, "", "--config", writeConfig(t, tc.rules), "--", "true")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := runExecave(t, "", "--config", writeConfig(t, tt.rules), "--", "true")
 
 			assertExitCode(t, result, 1)
 			assert.Contains(t, result.Stderr, "duplicate path")
@@ -292,10 +293,10 @@ func Test_ConfiguringExecave_DuplicateNetworkRuleIdentityRejected(t *testing.T) 
 		{"different actions same CIDR", []string{"net:http:10.0.0.0/24:443", "net:none:10.0.0.0/24:443"}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRules(tc.rules...)
+			s.givenRules(tt.rules...)
 
 			s.whenRun("true")
 
@@ -317,10 +318,10 @@ func Test_ConfiguringExecave_MixedPortPatternsOnSameTargetRejected(t *testing.T)
 		{"CIDR wildcard then specific", []string{"net:http:10.0.0.0/24:*", "net:none:10.0.0.0/24:443"}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRules(tc.rules...)
+			s.givenRules(tt.rules...)
 
 			s.whenRun("true")
 
@@ -343,10 +344,10 @@ func Test_ConfiguringExecave_ValidNetRuleConfigurationsAccepted(t *testing.T) {
 		{"different targets different port styles", []string{"net:http:example.com:*", "net:http:other.com:443"}},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRules(tc.rules...)
+			s.givenRules(tt.rules...)
 
 			s.whenRun("true")
 
@@ -372,24 +373,24 @@ func Test_ConfiguringExecave_ConfigFileExplicitlyWritableRejected(t *testing.T) 
 		{"ro dir covers config path", "ro", true, 0, ""},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := testTempDir(t)
 			configPath := filepath.Join(tmpDir, "execave.toml")
 
 			target := configPath
-			if tc.useDir {
+			if tt.useDir {
 				target = tmpDir
 			}
-			rules := append(systemPaths(), "fs:"+tc.perm+":"+target)
+			rules := append(systemPaths(), "fs:"+tt.perm+":"+target)
 			err := os.WriteFile(configPath, tomlConfig(rules), 0o600)
 			require.NoError(t, err)
 
 			result := runExecave(t, "", "--config", configPath, "--", "true")
 
-			assertExitCode(t, result, tc.wantExit)
-			if tc.wantStderr != "" {
-				assert.Contains(t, result.Stderr, tc.wantStderr)
+			assertExitCode(t, result, tt.wantExit)
+			if tt.wantStderr != "" {
+				assert.Contains(t, result.Stderr, tt.wantStderr)
 			}
 		})
 	}
@@ -426,10 +427,10 @@ func Test_ConfiguringExecave_ManagedPathsInRulesRejected(t *testing.T) {
 		{"exact /tmp", "fs:ro:/tmp"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rule)
+			s.givenRulesOnly(tt.rule)
 
 			s.whenRun("true")
 
@@ -538,16 +539,16 @@ func Test_ConfiguringExecave_SelectivelyAllowABlockedSyscall(t *testing.T) {
 		{"allowed via rule", []string{"syscall:allow:bpf"}, "22"}, // EINVAL from kernel
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenPython3()
-			s.givenRules(tc.extraRules...)
+			s.givenRules(tt.extraRules...)
 
 			s.whenRun("python3", "-c", callBpfPrintErrno)
 
 			s.thenExitCode(0)
-			s.thenStdoutContains(tc.wantErrno)
+			s.thenStdoutContains(tt.wantErrno)
 		})
 	}
 }
@@ -567,15 +568,15 @@ func Test_ConfiguringExecave_InvalidSyscallNameRejectedAtConfigParse(t *testing.
 		{"missing colon in syscall rule", "syscall:allow", "malformed syscall rule"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rule)
+			s.givenRulesOnly(tt.rule)
 
 			s.whenRun("true")
 
 			s.thenExitCode(1)
-			s.thenStderrContains(tc.want)
+			s.thenStderrContains(tt.want)
 		})
 	}
 }
@@ -628,10 +629,10 @@ func Test_ConfiguringExecave_SyscallNologRuleRejected(t *testing.T) {
 		{"deny (intuitive but invalid)", "syscall:deny:ptrace"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
-			s.givenRulesOnly(tc.rule)
+			s.givenRulesOnly(tt.rule)
 
 			s.whenRun("true")
 
@@ -690,7 +691,7 @@ func Test_ConfiguringExecave_CrossFileConflictingRulesRejectedWithSourceFilePath
 
 		parentDir := testTempDir(t)
 		parentPath := filepath.Join(parentDir, "parent.toml")
-		require.NoError(t, os.WriteFile(parentPath, []byte(fmt.Sprintf("extends = [%q]\n", grandparentPath)), 0o600))
+		require.NoError(t, os.WriteFile(parentPath, fmt.Appendf(nil, "extends = [%q]\n", grandparentPath), 0o600))
 
 		childDir := testTempDir(t)
 		childPath := filepath.Join(childDir, "child.toml")
@@ -714,8 +715,8 @@ func Test_ConfiguringExecave_CyclicExtendsChainIsRejected(t *testing.T) {
 		dir := testTempDir(t)
 		aPath := filepath.Join(dir, "a.toml")
 		bPath := filepath.Join(dir, "b.toml")
-		require.NoError(t, os.WriteFile(aPath, []byte(fmt.Sprintf("extends = [%q]\n", bPath)), 0o600))
-		require.NoError(t, os.WriteFile(bPath, []byte(fmt.Sprintf("extends = [%q]\n", aPath)), 0o600))
+		require.NoError(t, os.WriteFile(aPath, fmt.Appendf(nil, "extends = [%q]\n", bPath), 0o600))
+		require.NoError(t, os.WriteFile(bPath, fmt.Appendf(nil, "extends = [%q]\n", aPath), 0o600))
 
 		result := runExecave(t, "", "--config", aPath, "--", "true")
 
@@ -726,7 +727,7 @@ func Test_ConfiguringExecave_CyclicExtendsChainIsRejected(t *testing.T) {
 	t.Run("self-reference", func(t *testing.T) {
 		dir := testTempDir(t)
 		aPath := filepath.Join(dir, "a.toml")
-		require.NoError(t, os.WriteFile(aPath, []byte(fmt.Sprintf("extends = [%q]\n", aPath)), 0o600))
+		require.NoError(t, os.WriteFile(aPath, fmt.Appendf(nil, "extends = [%q]\n", aPath), 0o600))
 
 		result := runExecave(t, "", "--config", aPath, "--", "true")
 
@@ -735,7 +736,7 @@ func Test_ConfiguringExecave_CyclicExtendsChainIsRejected(t *testing.T) {
 	})
 }
 
-func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.T) {
+func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.T) { //nolint:funlen // e2e scenario test
 	// An extends chain merges rules from all files; commands can access resources
 	// permitted by any file in the chain. Exact duplicate rules across files are
 	// silently deduplicated. A missing extends target exits with a clear error.
@@ -753,7 +754,7 @@ func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.
 
 		projectDir := testTempDir(t)
 		projectPath := filepath.Join(projectDir, "execave.toml")
-		require.NoError(t, os.WriteFile(projectPath, []byte(fmt.Sprintf("extends = [%q]\n", basePath)), 0o600))
+		require.NoError(t, os.WriteFile(projectPath, fmt.Appendf(nil, "extends = [%q]\n", basePath), 0o600))
 
 		result := runExecave(t, "", "--config", projectPath, "--", "cat", dataFile)
 
@@ -779,7 +780,7 @@ func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.
 
 		projectDir := testTempDir(t)
 		projectPath := filepath.Join(projectDir, "execave.toml")
-		require.NoError(t, os.WriteFile(projectPath, []byte(fmt.Sprintf("extends = [%q]\n", parentPath)), 0o600))
+		require.NoError(t, os.WriteFile(projectPath, fmt.Appendf(nil, "extends = [%q]\n", parentPath), 0o600))
 
 		result := runExecave(t, "", "--config", projectPath, "--", "cat", dataFile)
 
@@ -831,7 +832,7 @@ func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.
 		projectDir := testTempDir(t)
 		projectPath := filepath.Join(projectDir, "execave.toml")
 		missingPath := filepath.Join(projectDir, "nonexistent.toml")
-		require.NoError(t, os.WriteFile(projectPath, []byte(fmt.Sprintf("extends = [%q]\n", missingPath)), 0o600))
+		require.NoError(t, os.WriteFile(projectPath, fmt.Appendf(nil, "extends = [%q]\n", missingPath), 0o600))
 
 		result := runExecave(t, "", "--config", projectPath, "--", "true")
 
@@ -841,7 +842,7 @@ func Test_ConfiguringExecave_ComposeProjectConfigFromSharedBaseFiles(t *testing.
 	})
 }
 
-func Test_ConfiguringExecave_ExtendsPathsResolveWithAbsoluteRelativeAndTildeForms(t *testing.T) {
+func Test_ConfiguringExecave_ExtendsPathsResolveWithAbsoluteRelativeAndTildeForms(t *testing.T) { //nolint:funlen // e2e scenario test
 	// extends paths resolve correctly regardless of whether they use absolute,
 	// relative (same dir or parent dir), or tilde forms; the base config is loaded
 	// and its rules merged into the effective config in all cases.
@@ -872,7 +873,7 @@ func Test_ConfiguringExecave_ExtendsPathsResolveWithAbsoluteRelativeAndTildeForm
 				t.Helper()
 				dir := testTempDir(t)
 				path := filepath.Join(dir, "execave.toml")
-				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("extends = [%q]\n", basePath)), 0o600))
+				require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "extends = [%q]\n", basePath), 0o600))
 				return path
 			},
 		},
@@ -902,15 +903,15 @@ func Test_ConfiguringExecave_ExtendsPathsResolveWithAbsoluteRelativeAndTildeForm
 				t.Helper()
 				dir := testTempDir(t)
 				path := filepath.Join(dir, "execave.toml")
-				require.NoError(t, os.WriteFile(path, []byte(fmt.Sprintf("extends = [%q]\n", "~/"+relFromHome)), 0o600))
+				require.NoError(t, os.WriteFile(path, fmt.Appendf(nil, "extends = [%q]\n", "~/"+relFromHome), 0o600))
 				return path
 			},
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			projectPath := tc.projectSetup(t)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projectPath := tt.projectSetup(t)
 
 			result := runExecave(t, "", "--config", projectPath, "--", "cat", dataFile)
 

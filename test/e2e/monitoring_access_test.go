@@ -27,19 +27,19 @@ func Test_MonitoringAccess_DefaultOutputIsStderr(t *testing.T) {
 		wantOp   string
 		wantCode int
 	}{
-		{name: "DENY with default view", action: "none", wantOp: "DENY", wantCode: 1},
+		{name: "DENY with default view", action: "none", flags: nil, wantOp: "DENY", wantCode: 1},
 		{name: "OK with --show-allowed", action: "ro", flags: []string{"--show-allowed"}, wantOp: "OK", wantCode: 0},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			dir := s.givenDir("data")
 			filePath := dir.file("file.txt", "content")
-			s.givenRules("fs:" + tc.action + ":" + dir.String())
-			s.whenRunTextLogWithFlags(tc.flags, "cat", filePath)
-			s.thenExitCode(tc.wantCode)
-			s.thenStderrHasEntry("READ", dir.rel("file.txt"), tc.wantOp)
+			s.givenRules("fs:" + tt.action + ":" + dir.String())
+			s.whenRunTextLogWithFlags(tt.flags, "cat", filePath)
+			s.thenExitCode(tt.wantCode)
+			s.thenStderrHasEntry("READ", dir.rel("file.txt"), tt.wantOp)
 			assert.NotContains(t, s.lastResult.Stdout, dir.rel("file.txt"))
 		})
 	}
@@ -153,8 +153,8 @@ func Test_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *testin
 		{name: "fs allowed net denied", fsAction: "ro", withNetRule: false, wantFSResult: "OK", wantNetResult: "DENY"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenCurl()
 
@@ -162,8 +162,8 @@ func Test_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *testin
 			data := s.givenDir("data")
 			dataFile := data.file("data.txt", "fs data")
 
-			fsRule := "fs:" + tc.fsAction + ":" + data.String()
-			if tc.withNetRule {
+			fsRule := "fs:" + tt.fsAction + ":" + data.String()
+			if tt.withNetRule {
 				s.givenRules(fsRule, "net:http:"+srv.addr())
 			} else {
 				s.givenRules(fsRule)
@@ -172,8 +172,8 @@ func Test_MonitoringAccess_MonitorBothFilesystemAndNetworkConcurrently(t *testin
 			s.whenRunTextLogWithFlags([]string{"--show-allowed"},
 				"sh", "-c", fmt.Sprintf("cat %s || true; curl -sf http://%s/ || true", dataFile, srv.hostPort()))
 
-			s.thenStderrHasEntry("READ", data.rel("data.txt"), tc.wantFSResult)
-			s.thenStderrHasEntry("HTTP", srv.addr(), tc.wantNetResult)
+			s.thenStderrHasEntry("READ", data.rel("data.txt"), tt.wantFSResult)
+			s.thenStderrHasEntry("HTTP", srv.addr(), tt.wantNetResult)
 		})
 	}
 }
@@ -190,15 +190,15 @@ func Test_MonitoringAccess_MonitorWithoutNetRules(t *testing.T) {
 		{name: "HTTPS CONNECT denied and logged", useHTTPS: true},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenCurl()
 			s.givenRules() // no net rules
 
 			var srv testServer
 			var curlArgs []string
-			if tc.useHTTPS {
+			if tt.useHTTPS {
 				srv = s.givenHTTPSServer("should not see this")
 				curlArgs = []string{"-sk", "--max-time", "5", fmt.Sprintf("https://%s/", srv.hostPort())}
 			} else {
@@ -213,13 +213,13 @@ func Test_MonitoringAccess_MonitorWithoutNetRules(t *testing.T) {
 	}
 }
 
-func Test_MonitoringAccess_AccessLogAfterSIGINT(t *testing.T) {
+func Test_MonitoringAccess_AccessLogAfterSIGINT(t *testing.T) { //nolint:funlen // e2e scenario test
 	// SIGINT is forwarded to the sandboxed process (exit code 130) and log entries
 	// collected before the interrupt are preserved in the output.
 	failIfNoBwrap(t)
 	failIfNoStrace(t)
 
-	startAndInterrupt := func(t *testing.T, args []string) (exitCode int, stderr string) {
+	startAndInterrupt := func(t *testing.T, args []string) (int, string) {
 		t.Helper()
 		var stderrBuf strings.Builder
 		//nolint:gosec // G204: test uses controlled input from test fixtures
@@ -354,7 +354,7 @@ func Test_MonitoringAccess_LogDeduplication(t *testing.T) {
 	})
 }
 
-func Test_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
+func Test_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) { //nolint:funlen // e2e scenario test
 	// Each hop in a symlink resolution chain is logged as a separate READ entry.
 
 	t.Run("single hop all allowed", func(t *testing.T) {
@@ -425,11 +425,11 @@ func Test_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 
 	t.Run("rule boundary is a dir symlink", func(t *testing.T) {
 		s := newScenario(t)
-		real := s.givenDir("real")
-		real.file("file.txt", "content")
+		realDir := s.givenDir("real")
+		realDir.file("file.txt", "content")
 
 		link := testDir(filepath.Join(s.tmpDir, "link"))
-		s.givenSymlink(real.String(), link.String())
+		s.givenSymlink(realDir.String(), link.String())
 
 		// Rule points to the symlink, not the real dir
 		s.givenRules("fs:ro:" + link.String())
@@ -439,16 +439,16 @@ func Test_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 		s.thenExitCode(0)
 		s.thenStderrHasEntry("READ", link.rel("file.txt"), "OK", "ro:"+link.String())
 		// The real (resolved) path must NOT appear in the log
-		s.thenStderrNotContains(real.rel("file.txt"))
+		s.thenStderrNotContains(realDir.rel("file.txt"))
 	})
 
 	t.Run("rule boundary is a dir symlink with nested subdirectory", func(t *testing.T) {
 		s := newScenario(t)
-		real := s.givenDir("real")
-		real.file("sub/file.txt", "content")
+		realDir := s.givenDir("real")
+		realDir.file("sub/file.txt", "content")
 
 		link := testDir(filepath.Join(s.tmpDir, "link"))
-		s.givenSymlink(real.String(), link.String())
+		s.givenSymlink(realDir.String(), link.String())
 
 		// Rule points to the symlink, not the real dir
 		s.givenRules("fs:ro:" + link.String())
@@ -458,7 +458,7 @@ func Test_MonitoringAccess_SymlinkResolutionHopsLogged(t *testing.T) {
 		s.thenExitCode(0)
 		s.thenStderrHasEntry("READ", link.rel("sub/file.txt"), "OK", "ro:"+link.String())
 		// The real (resolved) path must NOT appear in the log
-		s.thenStderrNotContains(real.rel("sub/file.txt"))
+		s.thenStderrNotContains(realDir.rel("sub/file.txt"))
 	})
 
 	t.Run("symlink target in managed path logged as UNKNOWN", func(t *testing.T) {
@@ -493,8 +493,8 @@ func Test_MonitoringAccess_WriteThroughSymlinkLogsHopAndTarget(t *testing.T) {
 		{name: "ro link dir to rw target dir", linkRule: "ro", targetRule: "rw"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			linkDir := s.givenDir("links")
 			targetDir := s.givenDir("targets")
@@ -502,14 +502,14 @@ func Test_MonitoringAccess_WriteThroughSymlinkLogsHopAndTarget(t *testing.T) {
 			linkPath := linkDir.join("link.txt")
 			s.givenSymlink(targetDir.join("target.txt"), linkPath)
 
-			s.givenRules("fs:"+tc.linkRule+":"+linkDir.String(), "fs:"+tc.targetRule+":"+targetDir.String())
+			s.givenRules("fs:"+tt.linkRule+":"+linkDir.String(), "fs:"+tt.targetRule+":"+targetDir.String())
 
 			s.whenRunTextLogWithFlags([]string{"--show-allowed"},
 				"sh", "-c", "echo new > "+linkPath)
 
 			s.thenExitCode(0)
-			s.thenStderrHasEntry("READ", linkDir.rel("link.txt"), "OK", tc.linkRule+":"+linkDir.String())
-			s.thenStderrHasEntry("WRITE", targetDir.rel("target.txt"), "OK", tc.targetRule+":"+targetDir.String())
+			s.thenStderrHasEntry("READ", linkDir.rel("link.txt"), "OK", tt.linkRule+":"+linkDir.String())
+			s.thenStderrHasEntry("WRITE", targetDir.rel("target.txt"), "OK", tt.targetRule+":"+targetDir.String())
 		})
 	}
 }
@@ -589,14 +589,14 @@ func Test_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged(
 		{name: "HTTPS denied by none rule", useHTTPS: true, action: "none", wantResult: "DENY"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenCurl()
 
 			var srv testServer
 			var curlArgs []string
-			if tc.useHTTPS {
+			if tt.useHTTPS {
 				srv = s.givenHTTPSServer("ENFORCE_BODY")
 				curlArgs = []string{"curl", "-sk", fmt.Sprintf("https://%s/", srv.hostPort())}
 			} else {
@@ -604,15 +604,15 @@ func Test_MonitoringAccess_VerifyNetworkEnforcementDecisionsAreAccuratelyLogged(
 				curlArgs = []string{"curl", "-s", fmt.Sprintf("http://%s/", srv.hostPort())}
 			}
 
-			rule := tc.action + ":" + srv.addr()
+			rule := tt.action + ":" + srv.addr()
 			s.givenRules("net:" + rule)
 
 			s.whenRunTextLogWithFlags([]string{"--show-allowed"}, curlArgs...)
 
-			if tc.wantResult == "OK" {
+			if tt.wantResult == "OK" {
 				s.thenStdoutContains("ENFORCE_BODY")
 			}
-			s.thenStderrHasEntry("HTTP", srv.addr(), tc.wantResult, rule)
+			s.thenStderrHasEntry("HTTP", srv.addr(), tt.wantResult, rule)
 		})
 	}
 }
@@ -645,7 +645,7 @@ func Test_MonitoringAccess_MonitorReflectsFilesystemRulePrecedenceCorrectly(t *t
 	s.thenStderrHasEntry("WRITE", project.rel(".git/config"), "DENY", "ro:"+gitDir)
 }
 
-func Test_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly(t *testing.T) {
+func Test_MonitoringAccess_MonitorReflectsNetworkRulePrecedenceCorrectly(t *testing.T) { //nolint:funlen // e2e scenario test
 	t.Run("specific deny overrides broad CIDR allow", func(t *testing.T) {
 		// When a broad CIDR allow and a more-specific IP/port deny overlap, the specific
 		// deny wins. Requests to the unoverridden port show OK with the broad rule; requests
@@ -742,8 +742,8 @@ func Test_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog(t *testin
 		{name: "denied by none rule", gitDirAction: "none", wantResult: "DENY"},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenGcc()
 
@@ -760,22 +760,22 @@ func Test_MonitoringAccess_BarePathRelativeAccessesResolvedInAccessLog(t *testin
 			gccCmd := exec.CommandContext(context.Background(), "gcc", "-o", cBinary, cSource)
 			require.NoError(t, gccCmd.Run())
 
-			// Binary is in tmpDir (ro); .git dir uses tc.gitDirAction (project itself stays ro).
+			// Binary is in tmpDir (ro); .git dir uses tt.gitDirAction (project itself stays ro).
 			s.givenRules(
 				"fs:ro:"+testDir(s.tmpDir).String(),
-				"fs:"+tc.gitDirAction+":"+gitDir,
+				"fs:"+tt.gitDirAction+":"+gitDir,
 			)
 
 			s.whenRunTextLogWithFlags([]string{"--show-allowed"},
 				cBinary, project.String())
 
-			s.thenStderrHasEntry("READ", project.rel(".git/config"), tc.wantResult,
-				tc.gitDirAction+":"+gitDir)
+			s.thenStderrHasEntry("READ", project.rel(".git/config"), tt.wantResult,
+				tt.gitDirAction+":"+gitDir)
 		})
 	}
 }
 
-func Test_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked(t *testing.T) {
+func Test_MonitoringAccess_UnresolvedRelativePathWhenNoCwdTracked(t *testing.T) { //nolint:funlen // e2e scenario test
 	// A bare-path relative syscall issued before execave tracks the pid's cwd produces an
 	// UNKNOWN entry with rule "unresolved-relative-path" instead of being silently dropped.
 	// Both the AT_FDCWD variant (access syscall) and the numeric dirfd variant (openat with
@@ -827,14 +827,14 @@ void _start(void) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenGcc()
 
 			cSource := filepath.Join(s.tmpDir, "bare.c")
 			cBinary := filepath.Join(s.tmpDir, "bare")
-			createFile(t, cSource, tc.src)
+			createFile(t, cSource, tt.src)
 			//nolint:gosec // G204: test code with controlled args
 			cmd := exec.CommandContext(context.Background(), "gcc", "-nostdlib", "-static", "-o", cBinary, cSource)
 			require.NoError(t, cmd.Run())
@@ -843,7 +843,7 @@ void _start(void) {
 			s.whenRunTextLog("", cBinary)
 
 			s.thenExitCode(0)
-			s.thenStderrHasEntry("READ", tc.wantPath, "UNKNOWN", "unresolved-relative-path")
+			s.thenStderrHasEntry("READ", tt.wantPath, "UNKNOWN", "unresolved-relative-path")
 		})
 	}
 }
@@ -983,7 +983,7 @@ func Test_MonitoringAccess_ObserveNativeNetworkAccessesWithoutIsolation(t *testi
 	})
 }
 
-func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
+func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) { //nolint:funlen // e2e scenario test
 	// No-sandbox monitor logs filesystem accesses as UNENFORCED regardless of matching rules.
 	failIfNoStrace(t)
 	tests := []struct {
@@ -1002,6 +1002,7 @@ func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 			targetDirKey:   "blocked",
 			targetFile:     "secret.txt",
 			targetContents: "secret",
+			wantRuleSub:    "",
 		},
 		{
 			name:           "explicit deny rule",
@@ -1023,8 +1024,8 @@ func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			data := s.givenDir("data")
 			data.file("allowed.txt", "allowed")
@@ -1035,12 +1036,12 @@ func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 				"data":    data,
 				"blocked": blocked,
 			}
-			targetDir := dirByKey[tc.targetDirKey]
-			ruleDir := dirByKey[tc.ruleDirKey]
-			targetPath := targetDir.join(tc.targetFile)
+			targetDir := dirByKey[tt.targetDirKey]
+			ruleDir := dirByKey[tt.ruleDirKey]
+			targetPath := targetDir.join(tt.targetFile)
 
-			rules := make([]string, 0, len(tc.rules))
-			for _, rule := range tc.rules {
+			rules := make([]string, 0, len(tt.rules))
+			for _, rule := range tt.rules {
 				rules = append(rules, fmt.Sprintf(rule, ruleDir.String()))
 			}
 			s.givenRules(rules...)
@@ -1048,10 +1049,10 @@ func Test_NoSandbox_UnenforcedEntriesAppearInLog(t *testing.T) {
 			s.whenRunNoSandboxMonitorFile("", "cat", targetPath)
 
 			s.thenExitCode(0)
-			s.thenStdoutContains(tc.targetContents)
-			s.thenStderrHasEntry("READ", targetDir.rel(tc.targetFile), "UNENFORCED")
-			if tc.wantRuleSub != "" {
-				s.thenStderrHasEntry(fmt.Sprintf(tc.wantRuleSub, ruleDir.String()))
+			s.thenStdoutContains(tt.targetContents)
+			s.thenStderrHasEntry("READ", targetDir.rel(tt.targetFile), "UNENFORCED")
+			if tt.wantRuleSub != "" {
+				s.thenStderrHasEntry(fmt.Sprintf(tt.wantRuleSub, ruleDir.String()))
 			}
 		})
 	}
@@ -1124,15 +1125,15 @@ func Test_MonitoringAccess_ViewSeccompDeniedSyscallAttemptsInAccessLog(t *testin
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenPython3()
 			s.givenRules()
 
-			s.whenRunTextLog("", "python3", "-c", tc.cmd)
+			s.whenRunTextLog("", "python3", "-c", tt.cmd)
 
-			for _, sc := range tc.wantSyscalls {
+			for _, sc := range tt.wantSyscalls {
 				s.thenStderrHasEntry("SYSCALL", sc, "DENY", "no-matching-rule")
 			}
 		})
@@ -1186,15 +1187,15 @@ func Test_MonitoringAccess_SeccompDeniedSyscallEntriesDeduplicated(t *testing.T)
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			s := newScenario(t)
 			s.givenPython3()
 			s.givenRules()
 
-			s.whenRunTextLog("", "python3", "-c", tc.cmd)
+			s.whenRunTextLog("", "python3", "-c", tt.cmd)
 
-			for _, sc := range tc.wantSyscalls {
+			for _, sc := range tt.wantSyscalls {
 				s.thenStderrHasEntry("SYSCALL", sc, "DENY", "no-matching-rule")
 				var count int
 				for line := range strings.SplitSeq(s.lastResult.Stderr, "\n") {

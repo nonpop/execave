@@ -25,41 +25,45 @@ func Test_InspectingEffectiveConfig_ShowDefaultConfig(t *testing.T) {
 			config:     `fs = ["ro:/usr"]`,
 			wantExit:   0,
 			wantStdout: []string{`"ro:/usr",`},
+			wantStderr: "",
 		},
 		{
 			name:       "all rule types",
 			config:     "fs = [\"ro:/usr\"]\nnet = [\"http:api.example.com:443\"]\nsyscall = [\"allow:ptrace\"]",
 			wantExit:   0,
 			wantStdout: []string{`"ro:/usr",`, `"http:api.example.com:443",`, `"allow:ptrace",`},
+			wantStderr: "",
 		},
 		{
 			name:       "missing config",
+			config:     "",
 			wantExit:   1,
+			wantStdout: nil,
 			wantStderr: "file not found",
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			workDir := s.givenDir(tc.name)
-			if tc.config != "" {
-				require.NoError(t, os.WriteFile(workDir.join("execave.toml"), []byte(tc.config), 0o600))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workDir := s.givenDir(tt.name)
+			if tt.config != "" {
+				require.NoError(t, os.WriteFile(workDir.join("execave.toml"), []byte(tt.config), 0o600))
 			}
 
 			result := runExecave(t, workDir.String(), "config", "show")
 
-			assertExitCode(t, result, tc.wantExit)
-			for _, sub := range tc.wantStdout {
+			assertExitCode(t, result, tt.wantExit)
+			for _, sub := range tt.wantStdout {
 				assert.Contains(t, result.Stdout, sub)
 			}
-			if tc.wantStderr != "" {
-				assert.Contains(t, result.Stderr, tc.wantStderr)
+			if tt.wantStderr != "" {
+				assert.Contains(t, result.Stderr, tt.wantStderr)
 			}
 		})
 	}
 }
 
-func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T) {
+func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T) { //nolint:funlen // e2e scenario test
 	// config show annotates each rule with a TOML comment naming the source file.
 	// Duplicate rules are deduplicated (first occurrence wins). Synthetic rules
 	// injected by the runtime appear under a # <synthetic> comment.
@@ -92,6 +96,7 @@ func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T
 					"  # " + rootPath + "\n  \"allow:reboot\",",
 				}
 			},
+			wantNotStdout: nil,
 		},
 		{
 			name: "three source files: each base attributed separately",
@@ -115,6 +120,7 @@ func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T
 					"  # " + rootPath + "\n  \"allow:ptrace\",",
 				}
 			},
+			wantNotStdout: nil,
 		},
 		{
 			name: "duplicate rule: first occurrence (base) wins for provenance",
@@ -155,22 +161,23 @@ func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T
 				configPath := filepath.Join(dir, "execave.toml")
 				return []string{"  # <synthetic>\n  \"ro:" + configPath + "\","}
 			},
+			wantNotStdout: nil,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			dir := testTempDir(t)
-			configPath := tc.setup(t, dir)
+			configPath := tt.setup(t, dir)
 
 			result := runExecave(t, "", "--config", configPath, "config", "show")
 
 			assertExitCode(t, result, 0)
-			for _, sub := range tc.wantStdout(dir) {
+			for _, sub := range tt.wantStdout(dir) {
 				assert.Contains(t, result.Stdout, sub)
 			}
-			if tc.wantNotStdout != nil {
-				for _, sub := range tc.wantNotStdout(dir) {
+			if tt.wantNotStdout != nil {
+				for _, sub := range tt.wantNotStdout(dir) {
 					assert.NotContains(t, result.Stdout, sub)
 				}
 			}

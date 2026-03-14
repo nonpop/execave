@@ -33,7 +33,7 @@ type Rule struct {
 
 // Canonical returns the normalized "allow:name" form for deduplication and display.
 func (r Rule) Canonical() string {
-	return fmt.Sprintf("allow:%s", r.Name)
+	return "allow:" + r.Name
 }
 
 // ParseRule parses "allow:name" into a [Rule].

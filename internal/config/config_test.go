@@ -129,7 +129,7 @@ func TestLoad_InterpreterRule_AddedWhenNotCovered(t *testing.T) {
 	assert.Equal(t, fsrules.PermissionReadOnly, synthetic.Permission)
 	assert.Equal(t, "/lib64/ld-linux-x86-64.so.2", synthetic.Path)
 	assert.Equal(t, "ro:/lib64/ld-linux-x86-64.so.2", synthetic.RawRule)
-	assert.Equal(t, "", synthetic.SourcePath)
+	assert.Empty(t, synthetic.SourcePath)
 }
 
 func TestLoad_InterpreterRule_NotAddedWhenReadOnly(t *testing.T) {

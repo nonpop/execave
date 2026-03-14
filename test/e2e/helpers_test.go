@@ -145,7 +145,7 @@ type execaveResult struct {
 func runExecave(t *testing.T, workDir string, args ...string) execaveResult {
 	t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), binaryPath, args...)
+	cmd := exec.CommandContext(context.Background(), binaryPath, args...) //nolint:gosec // G204 -- binaryPath is a trusted test binary path, not user input
 	if workDir != "" {
 		cmd.Dir = workDir
 	}

@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func startTestProxy(t *testing.T, ruleBodies ...string) (*proxy.Proxy, string, func()) {
+func startTestProxy(t *testing.T, ruleBodies ...string) (string, func()) {
 	t.Helper()
 
 	resolver := newTestResolver(t, ruleBodies...)
@@ -28,7 +28,7 @@ func startTestProxy(t *testing.T, ruleBodies ...string) (*proxy.Proxy, string, f
 	err := p.Start()
 	require.NoError(t, err)
 
-	return p, udsPath, func() { _ = p.Stop() }
+	return udsPath, func() { _ = p.Stop() }
 }
 
 func newTestResolver(t *testing.T, ruleBodies ...string) *netrules.Resolver {
@@ -62,7 +62,7 @@ func httpClientViaUDS(udsPath string, useTLS bool) *http.Client {
 
 func Test_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allowed(t *testing.T) {
 	var logBuf bytes.Buffer
-	cfg := &accesslog.Config{ShowAllowed: true}
+	cfg := &accesslog.Config{ManagedPaths: nil, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:localhost:80")
 
@@ -86,7 +86,7 @@ func Test_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Allowed(t *testi
 
 func Test_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denied(t *testing.T) {
 	var logBuf bytes.Buffer
-	cfg := &accesslog.Config{ShowAllowed: true}
+	cfg := &accesslog.Config{ManagedPaths: nil, HomeDir: "", ConfigDir: "", ShowAllowed: true}
 	logger := accesslog.New(&logBuf, cfg)
 	resolver := newTestResolver(t, "http:other.example.com:80")
 
@@ -108,7 +108,7 @@ func Test_PlainHTTPForwarding_HTTPRequestWithoutPortDefaultsTo80Denied(t *testin
 }
 
 func Test_MalformedRequestHandling_RawBytesSentToUDS(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
+	udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)
@@ -123,7 +123,7 @@ func Test_MalformedRequestHandling_RawBytesSentToUDS(t *testing.T) {
 }
 
 func Test_MalformedRequestHandling_CONNECTWithMissingHost(t *testing.T) {
-	_, udsPath, cleanup := startTestProxy(t, "http:example.com:443")
+	udsPath, cleanup := startTestProxy(t, "http:example.com:443")
 	defer cleanup()
 
 	conn, err := net.Dial("unix", udsPath)

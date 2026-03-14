@@ -132,9 +132,9 @@ func TestCanonicalRoundTrip(t *testing.T) {
 		"http:[2001:db8::]/32:443",
 		"http:example.com:*",
 	}
-	for _, tc := range cases {
-		t.Run(tc, func(t *testing.T) {
-			rule1, err := netrules.ParseAccessRule(tc, "")
+	for _, tt := range cases {
+		t.Run(tt, func(t *testing.T) {
+			rule1, err := netrules.ParseAccessRule(tt, "")
 			require.NoError(t, err)
 			canonical1 := rule1.Canonical()
 
@@ -183,13 +183,13 @@ func Test_ParseAccessRule(t *testing.T) {
 		{"invalid characters rejected", "http:exam_ple.com:443", "invalid character"},
 		{"label too long rejected", "http:" + strings.Repeat("a", 64) + ".com:443", "exceeds"},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := netrules.ParseAccessRule(tc.input, "")
-			if tc.wantErr == "" {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := netrules.ParseAccessRule(tt.input, "")
+			if tt.wantErr == "" {
 				assert.NoError(t, err)
 			} else {
-				assert.ErrorContains(t, err, tc.wantErr)
+				assert.ErrorContains(t, err, tt.wantErr)
 			}
 		})
 	}
@@ -211,17 +211,17 @@ func Test_ValidateRules(t *testing.T) {
 		// No mixed port patterns
 		{"different targets can have different port styles", []string{"net:http:example.com:*", "net:http:other.com:443"}, ""},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var rules []netrules.Rule
-			for _, r := range tc.rules {
+			for _, r := range tt.rules {
 				rules = append(rules, parseNetRule(t, r))
 			}
 			err := netrules.ValidateRules(rules)
-			if tc.wantErr == "" {
+			if tt.wantErr == "" {
 				assert.NoError(t, err)
 			} else {
-				assert.ErrorContains(t, err, tc.wantErr)
+				assert.ErrorContains(t, err, tt.wantErr)
 			}
 		})
 	}

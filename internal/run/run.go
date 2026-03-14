@@ -46,7 +46,7 @@ type MonitorConfig struct {
 }
 
 // Run executes the target command inside the sandbox. Returns the process exit code.
-func Run(sandboxCfg SandboxConfig) (_ int, err error) {
+func Run(sandboxCfg SandboxConfig) (_ int, err error) { //nolint:gocognit,gocyclo,cyclop,funlen,maintidx // orchestration function with load-bearing defer ordering
 	runtimeCfg, cleanup, err := LoadRuntimeConfig(sandboxCfg.ConfigPath)
 	if err != nil {
 		return 0, fmt.Errorf("load config: %w", err)
@@ -91,7 +91,7 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 
 	// Set up log writer and accesslog.Logger.
 	var logger *accesslog.Logger
-	if monitored {
+	if monitored { //nolint:nestif // natural setup block
 		monCfg := sandboxCfg.MonitorConfig
 		homeDir, homeErr := os.UserHomeDir()
 		if homeErr != nil {
@@ -160,7 +160,7 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 		if err != nil {
 			return 0, fmt.Errorf("resolve strace: %w", err)
 		}
-		if warn, verr := binutil.CheckStraceVersion(stracePath); verr != nil {
+		if warn, verr := binutil.CheckStraceVersion(ctx, stracePath); verr != nil {
 			return 0, fmt.Errorf("check strace version: %w", verr)
 		} else if warn != "" {
 			fmt.Fprintln(os.Stderr, "execave: warning:", warn)
@@ -175,7 +175,7 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 		if err != nil {
 			return 0, fmt.Errorf("resolve bwrap: %w", err)
 		}
-		if warn, verr := binutil.CheckBwrapVersion(bwrapPath); verr != nil {
+		if warn, verr := binutil.CheckBwrapVersion(ctx, bwrapPath); verr != nil {
 			return 0, fmt.Errorf("check bwrap version: %w", verr)
 		} else if warn != "" {
 			fmt.Fprintln(os.Stderr, "execave: warning:", warn)
@@ -196,17 +196,17 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 
 	if sandboxed {
 		// Sandbox's seccomp pipe is always first in ExtraFiles.
-		sc, cleanup, prepErr := sandbox.Prepare(bwrapPath, cfg, tunnelCmd, extraFilesBaseFD)
+		sandboxCmd, cleanup, prepErr := sandbox.Prepare(bwrapPath, cfg, tunnelCmd, extraFilesBaseFD)
 		if prepErr != nil {
 			return 0, fmt.Errorf("prepare sandbox: %w", prepErr)
 		}
 		defer cleanup()
-		innerCmd = append([]string{sc.BwrapPath}, sc.Args...)
+		innerCmd = append([]string{sandboxCmd.BwrapPath}, sandboxCmd.Args...)
 		if monitored {
-			extraFile = sc.ExtraFiles[0]
-			setupExecves = sc.SetupExecves
+			extraFile = sandboxCmd.ExtraFiles[0]
+			setupExecves = sandboxCmd.SetupExecves
 		} else {
-			cmdExtraFiles = sc.ExtraFiles
+			cmdExtraFiles = sandboxCmd.ExtraFiles
 		}
 	} else {
 		innerCmd = tunnelCmd
@@ -214,19 +214,19 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 	}
 
 	// Wrap inner command with strace.
-	var mc *monitor.MonitoredCommand
+	var monCmd *monitor.MonitoredCommand
 	var mon *monitor.Monitor
 	var cmdPath string
 	var cmdArgs []string
 	if monitored {
 		mon = monitor.New(logger, fsResolver, syscallResolver, setupExecves, unenforced)
-		mc, err = monitor.Prepare(stracePath, innerCmd, extraFile, syscallResolver, extraFilesBaseFD)
+		monCmd, err = monitor.Prepare(stracePath, innerCmd, extraFile, syscallResolver, extraFilesBaseFD)
 		if err != nil {
 			return 0, fmt.Errorf("prepare monitor: %w", err)
 		}
-		cmdExtraFiles = mc.ExtraFiles
-		cmdPath = mc.StracePath
-		cmdArgs = mc.Args
+		cmdExtraFiles = monCmd.ExtraFiles
+		cmdPath = monCmd.StracePath
+		cmdArgs = monCmd.Args
 	} else {
 		cmdPath = innerCmd[0]
 		cmdArgs = innerCmd[1:]
@@ -240,7 +240,7 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 
 	if startErr := cmd.Start(); startErr != nil {
 		if monitored {
-			mc.Abort()
+			monCmd.Abort()
 		}
 		return 1, fmt.Errorf("start %s: %w", cmdPath, startErr)
 	}
@@ -249,11 +249,11 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 	var processingErrCh chan error
 	if monitored {
 		// Close parent-side pipe ends after child inherits them via ExtraFiles.
-		mc.Started()
+		monCmd.Started()
 		processingErrCh = make(chan error, 1)
 		go func() {
-			processingErrCh <- mon.Run(mc.StraceReader)
-			_ = mc.StraceReader.Close()
+			processingErrCh <- mon.Run(monCmd.StraceReader)
+			_ = monCmd.StraceReader.Close()
 		}()
 	}
 
@@ -270,7 +270,7 @@ func Run(sandboxCfg SandboxConfig) (_ int, err error) {
 		// restoration, screen clearing, etc.).
 		// In the normal exit case this is harmless: strace has already closed its
 		// write end and the goroutine has already reached EOF or is about to.
-		_ = mc.StraceReader.Close()
+		_ = monCmd.StraceReader.Close()
 	}
 
 	// Reclaim foreground and clean terminal artifacts unconditionally.
