@@ -9,12 +9,14 @@ The access-log capability handles formatting, deduplication, and filtering of ac
 ### Requirement: Log format
 
 Each log entry SHALL be a structured record with fields:
-- Operation: `READ`, `WRITE`, or `HTTP`
-- Target: the path accessed (for filesystem operations) or `host:port` (for network operations)
-- Result: `OK`, `DENY`, `UNKNOWN` (access cannot be evaluated against config rules, e.g., unresolvable relative path), or `UNENFORCED` (no sandbox enforcement was active; access was observed but not controlled)
-- Rule: the matching rule (e.g., `fs:ro:/etc` or `net:http:api.anthropic.com:443`) or an exception (e.g., `no-matching-rule`)
+- Operation: `READ`, `WRITE`, `HTTP`, or `SYSCALL`
+- Target: the path accessed (for filesystem operations), `host:port` (for network operations), or the syscall name (for blocked syscall operations)
+- Result: `OK`, `DENY`, or `UNKNOWN` (access cannot be evaluated against config rules, e.g., unresolvable relative path)
+- Rule: the matching rule (e.g., `fs:ro:/etc`, `net:http:api.anthropic.com:443`, `syscall:allow:bpf`) or an exception (e.g., `no-matching-rule`, `seccomp`)
 
 Network entries use `HTTP` for all network requests (both CONNECT-tunneled and plain HTTP). The proxy feeds network entries to the same logger that receives filesystem entries from the monitor.
+
+Syscall entries use `SYSCALL` for blocked syscall attempts. Denied entries use rule `seccomp`. Allowed entries (via `syscall:allow` config rules) use the matching rule string (e.g., `syscall:allow:bpf`).
 
 #### Scenario: Allowed read logged
 - **WHEN** Logger receives entry (READ, `/tmp/data/file.txt`, OK, `fs:ro:/tmp/data`)
@@ -52,15 +54,22 @@ Network entries use `HTTP` for all network requests (both CONNECT-tunneled and p
 - **WHEN** Logger receives entry (HTTP, `localhost:3000`, DENY, `no-matching-rule`)
 - **THEN** Entries() returns entry: Operation=`HTTP`, Target=`localhost:3000`, Result=`DENY`, Rule=`no-matching-rule`
 
-#### Scenario: Unenforced entry logged
+#### Scenario: Seccomp-denied syscall logged
+- **WHEN** Logger receives entry (SYSCALL, `bpf`, DENY, `seccomp`)
+- **THEN** Entries() returns entry: Operation=`SYSCALL`, Target=`bpf`, Result=`DENY`, Rule=`seccomp`
 
-- **WHEN** Logger receives entry (READ, `/tmp/secret`, UNENFORCED, `no-matching-rule`)
-- **THEN** Entries() returns entry: Operation=`READ`, Target=`/tmp/secret`, Result=`UNENFORCED`, Rule=`no-matching-rule`
+#### Scenario: Allowed syscall logged
+- **WHEN** Logger receives entry (SYSCALL, `bpf`, OK, `syscall:allow:bpf`)
+- **THEN** Entries() returns entry: Operation=`SYSCALL`, Target=`bpf`, Result=`OK`, Rule=`syscall:allow:bpf`
 
-#### Scenario: Unenforced entry with matching rule logged
+#### Scenario: Syscall entries deduplicated
+- **WHEN** Logger receives entry (SYSCALL, `bpf`, DENY, `seccomp`) twice
+- **THEN** Entries() returns exactly one entry
 
-- **WHEN** Logger receives entry (HTTP, `api.example.com:443`, UNENFORCED, `net:http:api.example.com:443`)
-- **THEN** Entries() returns entry: Operation=`HTTP`, Target=`api.example.com:443`, Result=`UNENFORCED`, Rule=`net:http:api.example.com:443`
+#### Scenario: Syscall entries not filtered by managed paths
+- **WHEN** Logger is configured with managed paths `/dev`, `/proc`, `/tmp`
+- **AND** Logger receives entry (SYSCALL, `mount`, DENY, `seccomp`)
+- **THEN** Entries() returns the entry (syscall targets are names, not paths)
 
 ### Requirement: Log deduplication
 
