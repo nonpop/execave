@@ -8,6 +8,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	// Force test binary recompilation when any project source changes.
+	// Without this, the test cache stays stale because this package
+	// would otherwise have no compile-time dependency on project code.
+	_ "github.com/nonpop/execave/cmd/execave/commands"
 )
 
 var binaryPath string //nolint:gochecknoglobals

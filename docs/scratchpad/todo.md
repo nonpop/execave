@@ -1,7 +1,5 @@
 # execave TODOs
 
-- find a way to run tests reliably without -count=1
-
 - flags to add temporary rules, like `--rule fs:ro:/foo/bar` (or `--fs ro:/foo/bar` maybe rather)
   - maybe need to allow http:*:*
 - monitor to execave-access.log by default, and allow stderr/out with
