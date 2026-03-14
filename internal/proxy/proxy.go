@@ -51,10 +51,10 @@ type Proxy struct {
 // empty (panics otherwise). logger may be nil.
 func New(logger *accesslog.Logger, resolver *netrules.Resolver, udsPath string, noEnforce bool) *Proxy {
 	if resolver == nil {
-		panic("resolver must not be nil")
+		panic("execave bug: proxy created without network rule resolver")
 	}
 	if udsPath == "" {
-		panic("udsPath must not be empty")
+		panic("execave bug: proxy created without socket path")
 	}
 	proxy := &Proxy{
 		logger:    logger,
@@ -157,7 +157,7 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request) {
 
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		panic("execave: BUG: http.ResponseWriter does not implement http.Hijacker")
+		panic("execave bug: HTTP response writer does not support connection hijacking")
 	}
 
 	clientConn, _, err := hijacker.Hijack()

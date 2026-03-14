@@ -81,7 +81,7 @@ func validateBinary(path string) error {
 	}
 	lstat, ok := linfo.Sys().(*syscall.Stat_t)
 	if !ok {
-		panic("FileInfo.Sys() is not *syscall.Stat_t")
+		panic("execave bug: OS returned unexpected file info type (expected syscall.Stat_t)")
 	}
 	if lstat.Uid != 0 {
 		return fmt.Errorf("%s not owned by root (uid %d)", path, lstat.Uid)

@@ -58,7 +58,7 @@ type SandboxedCommand struct {
 // for the seccomp pipe in the child. The returned cleanup releases resources.
 func Prepare(bwrapPath string, cfg *config.Config, command []string, seccompFD int) (*SandboxedCommand, func(), error) {
 	if bwrapPath == "" {
-		panic("bwrapPath must not be empty")
+		panic("execave bug: sandbox prepared without bwrap path")
 	}
 	s := &sandbox{cfg: cfg}
 
@@ -149,7 +149,7 @@ func (s *sandbox) addRuleMounts(args []string) []string {
 		path := rule.Path
 
 		if mounted[path] {
-			panic("duplicate mount path: " + path)
+			panic("execave bug: duplicate mount path in resolved rules: " + path)
 		}
 
 		info, err := os.Stat(path)
@@ -218,7 +218,7 @@ func appendMountArgs(args []string, rule fsrules.Rule, info os.FileInfo, rules [
 		return append(args, "--bind", "/dev/null", path)
 
 	case fsrules.PermissionUnknown:
-		panic("rule has PermissionUnknown: " + rule.RawRule)
+		panic("execave bug: unresolved permission reached sandbox for rule: " + rule.RawRule)
 	}
 
 	return args

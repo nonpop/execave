@@ -89,7 +89,7 @@ type Logger struct {
 // cfg must not be nil (panics otherwise).
 func New(out io.Writer, cfg *Config) *Logger {
 	if cfg == nil {
-		panic("cfg must not be nil")
+		panic("execave bug: access logger created without config")
 	}
 	// All other Config fields have valid zero values: empty HomeDir/ConfigDir means
 	// no path shortening, empty ManagedPaths means no infrastructure filtering,

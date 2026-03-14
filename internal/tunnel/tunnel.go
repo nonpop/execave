@@ -31,7 +31,7 @@ const ExecCount = 1
 // command must not be empty (panics otherwise).
 func WrapCommand(tunnelBinary, udsPath string, command []string) []string {
 	if len(command) == 0 {
-		panic("command must not be empty")
+		panic("execave bug: tunnel started with no command")
 	}
 	result := make([]string, 0, 3+1+len(command))
 	result = append(result, tunnelBinary, Subcommand, udsPath, "--")
@@ -69,7 +69,7 @@ func startBridge(ctx context.Context, udsPath string) (int, func(), error) {
 
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
-		panic("TCP listener returned non-TCP address")
+		panic("execave bug: TCP listener returned non-TCP address")
 	}
 	port := tcpAddr.Port
 

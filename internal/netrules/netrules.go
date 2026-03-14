@@ -75,7 +75,7 @@ func (r Rule) Canonical() string {
 	case protocolNone:
 		proto = "none"
 	default:
-		panic(fmt.Sprintf("unknown protocol %d", r.protocol))
+		panic(fmt.Sprintf("execave bug: unhandled network protocol %d in rule display", r.protocol))
 	}
 	return fmt.Sprintf("%s:%s:%s", proto, r.canonicalTarget, r.canonicalPort)
 }

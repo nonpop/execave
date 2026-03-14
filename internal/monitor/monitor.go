@@ -39,7 +39,7 @@ func New(
 	unenforced bool,
 ) *Monitor {
 	if setupExecves < 0 {
-		panic("setupExecves must not be negative")
+		panic("execave bug: monitor created with negative setup exec count")
 	}
 	return &Monitor{
 		logger:          logger,
@@ -337,6 +337,6 @@ func toAccesslogOperation(opType operationType) accesslog.OperationType {
 	case operationWrite:
 		return accesslog.OperationWrite
 	default:
-		panic(fmt.Sprintf("unexpected operation type %q", opType))
+		panic(fmt.Sprintf("execave bug: unhandled filesystem operation type %q", opType))
 	}
 }

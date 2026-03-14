@@ -132,10 +132,10 @@ func (r *Resolver) CheckAccess(path string, operation Operation) AccessResult {
 // Used by the sandbox package to generate bwrap mount arguments.
 func (r *Resolver) PermissionFor(path string) Permission {
 	if !filepath.IsAbs(path) {
-		panic("path must be absolute: " + path)
+		panic("execave bug: resolver received relative path: " + path)
 	}
 	if path != filepath.Clean(path) {
-		panic("path must be clean: " + path)
+		panic("execave bug: resolver received unclean path: " + path)
 	}
 
 	rule := r.findMatchingRule(path)
@@ -184,7 +184,7 @@ func (r *Resolver) checkPermission(perm Permission, operation Operation) bool {
 	case PermissionReadWrite:
 		return true
 	default:
-		panic(fmt.Sprintf("invalid permission %d", perm))
+		panic(fmt.Sprintf("execave bug: unhandled permission type %d in rule check", perm))
 	}
 }
 

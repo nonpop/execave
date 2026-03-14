@@ -59,7 +59,7 @@ func CheckBwrapVersion(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("incompatible bwrap version %d.%d.%d (pinned: %d.%d.%d)",
 			ver[0], ver[1], ver[2], PinnedBwrapVersion[0], PinnedBwrapVersion[1], PinnedBwrapVersion[2])
 	}
-	panic("unexpected compat level")
+	panic("execave bug: unhandled bwrap version compatibility level")
 }
 
 // CheckStraceVersion checks the strace version at path against [PinnedStraceVersion].
@@ -86,7 +86,7 @@ func CheckStraceVersion(ctx context.Context, path string) (string, error) {
 		return "", fmt.Errorf("incompatible strace version %d.%d (pinned: %d.%d)",
 			ver[0], ver[1], PinnedStraceVersion[0], PinnedStraceVersion[1])
 	}
-	panic("unexpected compat level")
+	panic("execave bug: unhandled strace version compatibility level")
 }
 
 // parseBwrapVersion extracts the version from bwrap --version output.

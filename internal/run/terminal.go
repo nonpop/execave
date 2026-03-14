@@ -165,7 +165,7 @@ func saveTerminalState() func() {
 	if err != nil {
 		// IsTerminal just confirmed stdin is a terminal; GetState uses the
 		// same ioctl so failure here means the fd was closed concurrently.
-		panic(fmt.Sprintf("get terminal state after IsTerminal succeeded: %v", err))
+		panic(fmt.Sprintf("execave bug: terminal state query failed after IsTerminal: %v", err))
 	}
 	// Ignore restore errors - terminal is already in unknown state.
 	return func() { _ = term.Restore(stdinFd, oldState) }

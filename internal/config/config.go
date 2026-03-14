@@ -37,7 +37,7 @@ type rawConfig struct {
 // buildConfig parses already-separated rule slices directly.
 func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) { //nolint:cyclop // linear pipeline; complexity from error handling
 	if !filepath.IsAbs(configPath) {
-		panic(fmt.Sprintf("configPath must be absolute: %q", configPath))
+		panic(fmt.Sprintf("execave bug: config built with relative path: %q", configPath))
 	}
 
 	fsAccess := make([]fsrules.Rule, 0, len(raw.FS))

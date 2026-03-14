@@ -22,7 +22,7 @@ func IsUnder(path, dir string) bool {
 // disables the corresponding shortening.
 func ShortenPath(absPath, homeDir, configDir string) string {
 	if !filepath.IsAbs(absPath) {
-		panic("absPath must be absolute: " + absPath)
+		panic("execave bug: ShortenPath received relative path: " + absPath)
 	}
 	if rel, err := filepath.Rel(configDir, absPath); err == nil && !strings.HasPrefix(rel, "..") {
 		return rel

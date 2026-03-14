@@ -14,7 +14,7 @@ type effectiveRule struct {
 // cfg must not be nil (panics otherwise).
 func RenderEffectiveTOML(cfg *Config) string {
 	if cfg == nil {
-		panic("cfg must not be nil")
+		panic("execave bug: config render called without config")
 	}
 
 	fsRules := renderFSRules(cfg)

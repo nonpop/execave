@@ -102,7 +102,7 @@ func auditArch() uint32 {
 	case "arm64":
 		return unix.AUDIT_ARCH_AARCH64
 	default:
-		panic("unsupported architecture: " + runtime.GOARCH)
+		panic("execave does not support architecture " + runtime.GOARCH + " (only amd64 and arm64)")
 	}
 }
 
@@ -162,7 +162,7 @@ func filterFromNrs(nrs []uint32) []byte {
 	for _, insn := range insns {
 		if err := binary.Write(&buf, binary.NativeEndian, insn); err != nil {
 			// bytes.Buffer never returns write errors; SockFilter is a fixed-size struct.
-			panic("serialize BPF instruction: " + err.Error())
+			panic("execave bug: failed to serialize seccomp BPF instruction: " + err.Error())
 		}
 	}
 	return buf.Bytes()

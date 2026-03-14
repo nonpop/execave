@@ -31,7 +31,7 @@ func mapSyscallToOperation(syscall string, line string) operationType {
 	}
 
 	// Unknown syscall - could indicate a new kernel syscall we should handle.
-	panic("unknown syscall in strace output: " + syscall)
+	panic("execave bug: unrecognized syscall in strace output: " + syscall)
 }
 
 // syscallOperationMap maps syscalls to read or write operations.
@@ -105,7 +105,7 @@ func classifyOpenOperation(line string) operationType {
 	// Strace format: open("/path", O_RDONLY) or openat(fd, "/path", O_CREAT|O_WRONLY)
 	lastQuote := strings.LastIndex(line, "\"")
 	if lastQuote == -1 {
-		panic("line lacking quotes: " + line)
+		panic("execave bug: open/openat strace line has no quoted path: " + line)
 	}
 
 	flagsPart := line[lastQuote+1:]

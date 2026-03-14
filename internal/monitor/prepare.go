@@ -26,10 +26,10 @@ type MonitoredCommand struct {
 // syscallResolver adds syscall names to the trace expression; nil means file ops only.
 func Prepare(stracePath string, command []string, extraFile *os.File, syscallResolver *syscallrules.Resolver, baseFD int) (*MonitoredCommand, error) {
 	if stracePath == "" {
-		panic("stracePath must not be empty")
+		panic("execave bug: monitor prepared without strace path")
 	}
 	if len(command) == 0 {
-		panic("command must not be empty")
+		panic("execave bug: monitor prepared with no command")
 	}
 
 	straceR, straceW, err := os.Pipe()
@@ -60,11 +60,11 @@ func Prepare(stracePath string, command []string, extraFile *os.File, syscallRes
 // to the child. Must be called exactly once after a successful cmd.Start.
 func (p *MonitoredCommand) Started() {
 	if err := p.straceW.Close(); err != nil {
-		panic("close strace pipe write end: " + err.Error())
+		panic("execave bug: close strace pipe after start: " + err.Error())
 	}
 	if p.extraFile != nil {
 		if err := p.extraFile.Close(); err != nil {
-			panic("close extra file: " + err.Error())
+			panic("execave bug: close extra file after start: " + err.Error())
 		}
 	}
 }
