@@ -407,6 +407,7 @@ func Test_SandboxingFilesystem_InterpreterAutoMountEnablesDynamicallyLinkedBinar
 	s.givenRulesOnly(
 		"fs:ro:/usr",
 		"fs:ro:/etc/ld.so.cache",
+		"env:pass:PATH",
 	)
 
 	s.whenRun("ls", "/usr/bin")

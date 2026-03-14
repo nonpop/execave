@@ -68,7 +68,7 @@ flowchart LR
 | Dangerous syscalls | Seccomp-bpf deny-list | None |
 | Resource exhaustion (fork bomb, tmpfs fill, OOM) | None: no cgroup limits | Sandbox can DoS host |
 | Read host info via /proc | PID namespace hides processes | `/proc/cpuinfo`, `/proc/meminfo`, kernel tunables visible |
-| Env var secrets (API keys, tokens) | None: env vars pass through unfiltered | Secrets available inside sandbox |
+| Env var secrets (API keys, tokens) | Default-deny `env` rules: only explicitly passed vars enter sandbox | Explicitly passed secrets still visible |
 
 ## Security-Critical Code
 
@@ -96,7 +96,6 @@ Of ~34 blocked syscalls, 13 are **defense-in-depth** (already kernel-prevented i
 
 - No protection against privileged attackers (root, config modification)
 - Not a container runtime
-- Environment variables pass through unfiltered
 - Linux only
 - `fs` `none` paths remain visible as directory entries (but cannot be listed or written: chmod 0000/0111)
 - HTTPS cannot be enforced: the proxy is a non-MITM TCP relay
@@ -107,12 +106,12 @@ Of ~34 blocked syscalls, 13 are **defense-in-depth** (already kernel-prevented i
 - No resource limits (CPU, memory, I/O) — no cgroup controls; sandbox can exhaust host resources
 - `/proc` exposes host system info (CPU, memory, kernel tunables) despite PID namespace isolation
 - `/tmp` and `fs` `none` tmpfs mounts have no size cap; filling them consumes host RAM
-- Host environment variables (including secrets like API keys) are visible inside the sandbox
+- Host environment variables not covered by `pass` rules are excluded from the sandbox; explicitly passed secrets remain visible to the sandboxed process
 
 ## Safe Usage
 
 - **Least privilege:** start with `ro` in `fs`; only add `rw` for paths the process must write. Prefer narrow paths over broad ones (`rw:~/project` not `rw:~`).
-- **Environment:** strip secrets from the environment before invoking execave (`env -u AWS_SECRET_ACCESS_KEY -u GITHUB_TOKEN execave ...`), or launch from a clean shell. All env vars pass through unfiltered.
+- **Environment:** use the `env` section in config to explicitly list variables the sandboxed process needs (`pass:HOME`, `pass:PATH`). All other host env vars are excluded by default. Do not add `pass` rules for secrets unless the sandboxed process genuinely requires them.
 - **Network rules:** prefer exact hosts over wildcards (`http:registry.npmjs.org:443` not `http:*.npmjs.org:443`). The proxy sees all HTTP traffic in cleartext; only CONNECT tunnels are opaque.
 - **Syscall rules:** each `allow` rule in the `syscall` section re-enables a blocked syscall for the entire sandbox. Avoid unless the process genuinely needs it; prefer fixing the process over weakening the sandbox.
 - **Shared directories:** if multiple agents share an `fs` `rw` path, they can interfere with each other. Use separate directories per agent.

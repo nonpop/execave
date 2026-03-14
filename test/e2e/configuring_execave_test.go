@@ -503,7 +503,8 @@ fs = [
     "ro:/lib",
     "ro:/lib64",
     "ro:/etc/ld.so.cache",  # linker cache
-]`)
+]
+env = ["pass:PATH"]`)
 
 		s.whenRun("echo", "hello")
 
@@ -513,7 +514,8 @@ fs = [
 
 	t.Run("trailing comma", func(t *testing.T) {
 		s := newScenario(t)
-		s.givenRawConfig(`fs = ["ro:/usr", "ro:/lib", "ro:/lib64", "ro:/etc/ld.so.cache",]`)
+		s.givenRawConfig(`fs = ["ro:/usr", "ro:/lib", "ro:/lib64", "ro:/etc/ld.so.cache",]
+env = ["pass:PATH",]`)
 
 		s.whenRun("echo", "hello")
 
@@ -616,6 +618,44 @@ func Test_ConfiguringExecave_DuplicateSyscallAllowRulesRejected(t *testing.T) {
 	s.thenExitCode(1)
 	s.thenStderrContains("duplicate")
 	s.thenStderrContains("ptrace")
+}
+
+func Test_ConfiguringExecave_InvalidEnvRuleActionRejected(t *testing.T) {
+	// An env rule with an unrecognized action is rejected at config load time.
+	tests := []struct {
+		name       string
+		rule       string
+		wantStderr string
+	}{
+		{"set (intuitive but invalid)", "env:set:HOME", "invalid env rule action"},
+		{"allow (wrong paradigm)", "env:allow:HOME", "invalid env rule action"},
+		{"missing colon", "env:passHOME", "malformed env rule"},
+		{"empty name", "env:pass:", "variable name must not be empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newScenario(t)
+			s.givenRulesOnly(tt.rule)
+
+			s.whenRun("true")
+
+			s.thenExitCode(1)
+			s.thenStderrContains(tt.wantStderr)
+		})
+	}
+}
+
+func Test_ConfiguringExecave_DuplicateEnvRuleRejected(t *testing.T) {
+	// Two env rules for the same variable name are rejected at config load time.
+	s := newScenario(t)
+	s.givenRulesOnly("env:pass:HOME", "env:pass:HOME")
+
+	s.whenRun("true")
+
+	s.thenExitCode(1)
+	s.thenStderrContains("duplicate")
+	s.thenStderrContains("HOME")
 }
 
 func Test_ConfiguringExecave_SyscallNologRuleRejected(t *testing.T) {

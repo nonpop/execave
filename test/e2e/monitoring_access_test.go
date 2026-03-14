@@ -1063,9 +1063,9 @@ func Test_NoSandbox_WithoutMonitorExitsError(t *testing.T) {
 	s := newScenario(t)
 	s.givenRules()
 	markerPath := filepath.Join(t.TempDir(), "marker.txt")
-	s.whenRunNoSandbox("sh", "-c", "echo ran > "+markerPath)
-	s.thenExitCodeNonZero()
-	s.thenStderrContains("unknown flag: --no-sandbox")
+	result := runExecave(t, "", "--config", s.configPath, "--no-sandbox", "--", "sh", "-c", "echo ran > "+markerPath)
+	assertExitCode(t, result, 1)
+	assert.Contains(t, result.Stderr, "unknown flag: --no-sandbox")
 	_, err := os.Stat(markerPath)
 	require.Error(t, err)
 }

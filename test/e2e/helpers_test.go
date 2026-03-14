@@ -77,12 +77,13 @@ func failIfNoGcc(t *testing.T) {
 }
 
 // tomlConfig formats rules as a TOML config file.
-// Rules are grouped by prefix and emitted as flat key sections (fs, net, syscall).
+// Rules are grouped by prefix and emitted as flat key sections (fs, net, syscall, env).
 func tomlConfig(rules []string) []byte {
 	// Group rules by prefix
 	fsRules := []string{}
 	netRules := []string{}
 	syscallRules := []string{}
+	envRules := []string{}
 
 	for _, rule := range rules {
 		switch {
@@ -95,6 +96,9 @@ func tomlConfig(rules []string) []byte {
 		case strings.HasPrefix(rule, "syscall:"):
 			_, body, _ := strings.Cut(rule, ":")
 			syscallRules = append(syscallRules, body)
+		case strings.HasPrefix(rule, "env:"):
+			_, body, _ := strings.Cut(rule, ":")
+			envRules = append(envRules, body)
 		}
 	}
 
@@ -102,6 +106,7 @@ func tomlConfig(rules []string) []byte {
 	writeTomlSection(&sb, "fs", fsRules)
 	writeTomlSection(&sb, "net", netRules)
 	writeTomlSection(&sb, "syscall", syscallRules)
+	writeTomlSection(&sb, "env", envRules)
 	return []byte(sb.String())
 }
 
@@ -205,6 +210,7 @@ func systemPaths() []string {
 		"fs:ro:/lib",
 		"fs:ro:/lib64",
 		"fs:ro:/etc/ld.so.cache",
+		"env:pass:PATH",
 	}
 }
 
@@ -391,16 +397,6 @@ func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	execArgs = append(execArgs, "--config", s.configPath, "monitor")
 	execArgs = append(execArgs, flags...)
 	execArgs = append(execArgs, "--")
-	execArgs = append(execArgs, args...)
-	result := runExecave(s.t, "", execArgs...)
-	s.lastResult = &result
-}
-
-// whenRunNoSandbox executes execave with --no-sandbox on root flags.
-func (s *scenario) whenRunNoSandbox(args ...string) {
-	s.t.Helper()
-	execArgs := make([]string, 0, 4+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "--no-sandbox", "--")
 	execArgs = append(execArgs, args...)
 	result := runExecave(s.t, "", execArgs...)
 	s.lastResult = &result

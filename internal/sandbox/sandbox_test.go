@@ -70,6 +70,7 @@ func TestBuildBwrapArgs(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -111,6 +112,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithoutChildren_Chmod0000(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -141,6 +143,7 @@ func TestBuildBwrapArgs_NoneDirectoryWithChildRule_Chmod0111(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -169,6 +172,7 @@ func TestBuildBwrapArgs_NoneFile_NoChmod(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -193,6 +197,7 @@ func TestBuildBwrapArgs_NoShareNet(t *testing.T) {
 		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -224,6 +229,7 @@ func TestBuildBwrapArgs_WithNetworkPath(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -250,6 +256,7 @@ func TestPrepare_SetupExecves3(t *testing.T) {
 		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -267,6 +274,7 @@ func TestPrepare_InsertsSeccompAtFD(t *testing.T) {
 		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -285,6 +293,7 @@ func TestPrepare_DoesNotModifyOriginalArgs(t *testing.T) {
 		FSRules:      []fsrules.Rule{fsRule(fsrules.PermissionReadOnly, "/usr/bin")},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -313,6 +322,7 @@ func TestBuildBwrapArgs_IncludesInterpreterFromFSRules(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -334,6 +344,7 @@ func TestBuildBwrapArgs_NoInterpreterWhenNotInFSRules(t *testing.T) {
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}

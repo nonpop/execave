@@ -145,6 +145,7 @@ func createCwdTestProcessor(t *testing.T) (string, *monitor.Monitor, *bytes.Buff
 		FSRules:      []fsrules.Rule{roRule(tmpDir)},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -198,6 +199,7 @@ func Test_BwrapSetupPhaseDetection_IncompleteExecveChainStillProducesEntries(t *
 		},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 
 		ConfigPaths: nil,
@@ -258,6 +260,7 @@ func TestMonitor_CwdNotTrackedDuringSetup(t *testing.T) {
 		FSRules:      []fsrules.Rule{roRule(projectDir)},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -298,6 +301,7 @@ func TestMonitor_PerPidCwdIsolation(t *testing.T) {
 		FSRules:      []fsrules.Rule{roRule(dirA), roRule(dirB)},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -330,6 +334,7 @@ func TestMonitor_RelativeChdirJoinedWithExistingCwd(t *testing.T) {
 		FSRules:      []fsrules.Rule{roRule(tmpDir)},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}
@@ -445,6 +450,7 @@ func TestMonitor_SetupPhaseEOFBeforeExpectedExecves(t *testing.T) {
 		FSRules:      []fsrules.Rule{roRule("/usr")},
 		NetRules:     nil,
 		SyscallRules: nil,
+		EnvRules:     nil,
 		ManagedPaths: nil,
 		ConfigPaths:  nil,
 	}

@@ -1,9 +1,9 @@
 // Package config loads, merges, and validates execave TOML configuration files.
 //
 // [Load] traverses the "extends" chain, delegates rule parsing to [fsrules],
-// [netrules], and [syscallrules], merges and deduplicates, injects synthetic
-// rules, and validates the result. [RenderEffectiveTOML] renders the merged
-// config back to TOML for inspection.
+// [netrules], [syscallrules], and [envrules], merges and deduplicates, injects
+// synthetic rules, and validates the result. [RenderEffectiveTOML] renders the
+// merged config back to TOML for inspection.
 package config
 
 import (
@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+	"github.com/nonpop/execave/internal/envrules"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/netrules"
 	"github.com/nonpop/execave/internal/pathutil"
@@ -23,6 +24,7 @@ type Config struct {
 	FSRules      []fsrules.Rule      // Merged filesystem access rules.
 	NetRules     []netrules.Rule     // Merged network access rules.
 	SyscallRules []syscallrules.Rule // Merged syscall access rules.
+	EnvRules     []envrules.Rule     // Merged environment variable filtering rules.
 	ManagedPaths []string            // Sandbox-managed paths (e.g., /proc, /dev, /tmp).
 	ConfigPaths  []string            // Ordered list of config files loaded (root + extends).
 }
@@ -32,10 +34,11 @@ type rawConfig struct {
 	FS      []string `toml:"fs"`
 	Net     []string `toml:"net"`
 	Syscall []string `toml:"syscall"`
+	Env     []string `toml:"env"`
 }
 
 // buildConfig parses already-separated rule slices directly.
-func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) { //nolint:cyclop // linear pipeline; complexity from error handling
+func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) { //nolint:cyclop,funlen // linear pipeline; complexity from error handling
 	if !filepath.IsAbs(configPath) {
 		panic(fmt.Sprintf("execave bug: config built with relative path: %q", configPath))
 	}
@@ -67,6 +70,15 @@ func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []str
 		syscallAccess = append(syscallAccess, rule)
 	}
 
+	envAccess := make([]envrules.Rule, 0, len(raw.Env))
+	for i, r := range raw.Env {
+		rule, err := envrules.ParseRule(r, configPath)
+		if err != nil {
+			return nil, fmt.Errorf("parse env rule %d: %w", i, err)
+		}
+		envAccess = append(envAccess, rule)
+	}
+
 	if err := fsrules.ValidateRules(fsAccess, []string{configPath}, managedPaths); err != nil {
 		return nil, fmt.Errorf("validate fs rules: %w", err)
 	}
@@ -79,10 +91,15 @@ func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []str
 		return nil, fmt.Errorf("validate syscall rules: %w", err)
 	}
 
+	if err := envrules.ValidateRules(envAccess); err != nil {
+		return nil, fmt.Errorf("validate env rules: %w", err)
+	}
+
 	return &Config{
 		FSRules:      fsAccess,
 		NetRules:     netAccess,
 		SyscallRules: syscallAccess,
+		EnvRules:     envAccess,
 		ManagedPaths: managedPaths,
 		ConfigPaths:  []string{configPath},
 	}, nil
@@ -202,6 +219,7 @@ func mergeConfigs(configs []*Config, configPaths, managedPaths []string) (*Confi
 		FSRules:      mergeFSRules(configs),
 		NetRules:     mergeNetRules(configs),
 		SyscallRules: mergeSyscallRules(configs),
+		EnvRules:     mergeEnvRules(configs),
 		ManagedPaths: managedPaths,
 		ConfigPaths:  configPaths,
 	}
@@ -214,6 +232,9 @@ func mergeConfigs(configs []*Config, configPaths, managedPaths []string) (*Confi
 	}
 	if err := syscallrules.ValidateRules(merged.SyscallRules); err != nil {
 		return nil, fmt.Errorf("validate merged syscall rules: %w", err)
+	}
+	if err := envrules.ValidateRules(merged.EnvRules); err != nil {
+		return nil, fmt.Errorf("validate merged env rules: %w", err)
 	}
 
 	return merged, nil
@@ -297,6 +318,22 @@ func mergeSyscallRules(configs []*Config) []syscallrules.Rule {
 	result := make([]syscallrules.Rule, 0)
 	for _, cfg := range configs {
 		for _, rule := range cfg.SyscallRules {
+			key := rule.Canonical()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			result = append(result, rule)
+		}
+	}
+	return result
+}
+
+func mergeEnvRules(configs []*Config) []envrules.Rule {
+	seen := make(map[string]struct{})
+	result := make([]envrules.Rule, 0)
+	for _, cfg := range configs {
+		for _, rule := range cfg.EnvRules {
 			key := rule.Canonical()
 			if _, ok := seen[key]; ok {
 				continue

@@ -26,6 +26,8 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 **Network rules:** `<protocol>:<target>:<port>` where protocol is `http` or `none`. Target can be a domain, IP, or CIDR. Port is a number or `*` wildcard.
 
+**Environment rules:** `pass:<NAME>` forwards the named host environment variable into the sandbox. Without env rules, no host env vars enter the sandbox (default-deny).
+
 ```toml
 fs = [
   "ro:/usr",
@@ -41,6 +43,11 @@ net = [
   "http:api.example.com:443",
   "http:*.internal.corp:*",
   "none:evil.example.com:443",
+]
+
+env = [
+  "pass:HOME",
+  "pass:PATH",
 ]
 ```
 
@@ -95,7 +102,7 @@ execave config show
 execave --config /path/to/execave.toml config show
 ```
 
-The output is TOML with `fs`, `net`, and `syscall` sections plus `# source: ...` comments for each emitted rule.
+The output is TOML with `fs`, `net`, `syscall`, and `env` sections plus `# source: ...` comments for each emitted rule.
 
 ## Seccomp
 

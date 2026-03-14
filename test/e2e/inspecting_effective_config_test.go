@@ -79,8 +79,8 @@ func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T
 				t.Helper()
 				basePath := filepath.Join(dir, "base.toml")
 				rootPath := filepath.Join(dir, "execave.toml")
-				require.NoError(t, os.WriteFile(basePath, []byte("fs = [\"ro:/usr\"]\nnet = [\"http:api.example.com:443\"]\nsyscall = [\"allow:ptrace\"]"), 0o600))
-				require.NoError(t, os.WriteFile(rootPath, []byte("extends = [\"base.toml\"]\nfs = [\"rw:./workspace\"]\nnet = [\"none:blocked.example.com:443\"]\nsyscall = [\"allow:reboot\"]"), 0o600))
+				require.NoError(t, os.WriteFile(basePath, []byte("fs = [\"ro:/usr\"]\nnet = [\"http:api.example.com:443\"]\nsyscall = [\"allow:ptrace\"]\nenv = [\"pass:HOME\"]"), 0o600))
+				require.NoError(t, os.WriteFile(rootPath, []byte("extends = [\"base.toml\"]\nfs = [\"rw:./workspace\"]\nnet = [\"none:blocked.example.com:443\"]\nsyscall = [\"allow:reboot\"]\nenv = [\"pass:PATH\"]"), 0o600))
 				return rootPath
 			},
 			wantStdout: func(dir string) []string {
@@ -94,6 +94,8 @@ func Test_InspectingEffectiveConfig_ShowLayeredConfigWithProvenance(t *testing.T
 					"  # " + rootPath + "\n  \"none:blocked.example.com:443\",",
 					"  # " + basePath + "\n  \"allow:ptrace\",",
 					"  # " + rootPath + "\n  \"allow:reboot\",",
+					"  # " + basePath + "\n  \"pass:HOME\",",
+					"  # " + rootPath + "\n  \"pass:PATH\",",
 				}
 			},
 			wantNotStdout: nil,

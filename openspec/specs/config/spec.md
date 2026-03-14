@@ -16,55 +16,115 @@ The config capability loads and parses the execave configuration file. It reads 
 
 ### Requirement: Config file format
 
-The config file SHALL be valid TOML containing a `rules` array of strings. Rules are routed by resource prefix: `fs:` rules are parsed by the FS rules engine, `net:` rules are parsed by the net rules engine, `syscall:` rules are parsed by the syscall rules engine. Within each prefix, the action/permission determines whether the rule is an access rule or a log rule: `fs:ro`, `fs:rw`, `fs:none` are access rules; `fs:log`, `fs:nolog` are log rules; `net:http`, `net:none` are access rules; `net:log`, `net:nolog` are log rules; `syscall:allow` are access rules; `syscall:nolog` are log rules. Unknown prefixes or malformed rules SHALL cause Load to return an error.
+The config file SHALL be valid TOML with optional top-level array keys: `fs`, `net`, `syscall`, and `env` of strings. Rule strings within each section omit the resource-type prefix — the section determines the type. All four keys are optional; omitting a key means no rules of that type. Unknown or malformed rule bodies SHALL cause Load to return an error.
+
+Within `fs`: `ro`, `rw`, `none` prefixes are access rules. Within `net`: `http`, `none` prefixes are access rules. Within `syscall`: `allow` is the only valid action. Within `env`: `pass` is the only valid action.
 
 #### Scenario: Valid config with fs and net rules
 
 - **WHEN** config contains:
   ```toml
-  rules = ["fs:ro:/usr/bin", "net:http:api.anthropic.com:443"]
+  fs = ["ro:/usr/bin"]
+
+  net = ["http:api.anthropic.com:443"]
   ```
 - **THEN** Load returns a config with 1 FS rule and 1 net rule
 
-#### Scenario: Valid config with log rules
+#### Scenario: Empty config (no sections)
+
+- **WHEN** config contains no `fs`, `net`, `syscall`, or `env` keys
+- **THEN** Load returns a config with no FS rules and no net rules
+
+#### Scenario: Invalid rule rejected at config load
 
 - **WHEN** config contains:
   ```toml
-  rules = ["fs:ro:/usr/bin", "fs:nolog:/usr/bin", "net:http:api.example.com:443", "net:nolog:*.example.com:*"]
+  net = ["http:example.com"]
   ```
-- **THEN** Load returns a config with 1 FS access rule, 1 FS log rule, 1 net access rule, and 1 net log rule
-
-#### Scenario: Empty rules array
-
-- **WHEN** config contains `rules = []`
-- **THEN** Load returns a config with no FS rules, no net rules, no FS log rules, no net log rules, no syscall allow rules, and no syscall nolog rules
-
-#### Scenario: Unknown resource type
-- **WHEN** config contains rule `"dns:allow:example.com"`
-- **THEN** Load returns an error containing "unknown resource type"
-
-#### Scenario: Invalid rule rejected at config load
-- **WHEN** config contains rule `"net:http:example.com"` (missing port segment)
+  (missing port segment)
 - **THEN** Load returns an error containing "malformed rule"
 
 #### Scenario: Config with comments
-- **WHEN** config contains TOML line comments (`#`) and inline comments
+
+- **WHEN** config contains TOML line comments (`#`) and inline comments within the config
 - **THEN** Load parses successfully, ignoring all comments
 
 #### Scenario: Config with trailing comma
-- **WHEN** config contains a rules array with a trailing comma after the last element
+
+- **WHEN** config contains a `rules` array with a trailing comma after the last element
 - **THEN** Load parses successfully
 
-#### Scenario: Valid config with syscall rules
+#### Scenario: fs:nolog rule rejected
+
 - **WHEN** config contains:
   ```toml
-  rules = ["fs:ro:/usr/lib", "syscall:allow:ptrace", "syscall:nolog:bpf"]
+  fs = ["nolog:/usr/bin"]
   ```
-- **THEN** Load returns a config with 1 FS rule, 1 syscall allow rule, and 1 syscall nolog rule
+- **THEN** Load returns an error (unknown rule prefix)
 
-#### Scenario: Unknown syscall action rejected
-- **WHEN** config contains rule `"syscall:deny:ptrace"`
-- **THEN** Load returns an error (only `allow` and `nolog` are valid syscall actions)
+#### Scenario: net:nolog rule rejected
+
+- **WHEN** config contains:
+  ```toml
+  net = ["nolog:*.example.com:*"]
+  ```
+- **THEN** Load returns an error (unknown rule prefix)
+
+#### Scenario: syscall:nolog rule rejected
+
+- **WHEN** config contains:
+  ```toml
+  syscall = ["nolog:ptrace"]
+  ```
+- **THEN** Load returns an error (unknown action)
+
+### Requirement: Env section in config file format
+
+The config file SHALL accept an optional top-level `env` array of strings. Each string SHALL be parsed as an env rule. Unknown or malformed env rule bodies SHALL cause Load to return an error.
+
+#### Scenario: Valid config with env rules
+
+- **WHEN** config contains:
+  ```toml
+  env = ["pass:HOME", "pass:PATH"]
+  ```
+- **THEN** Load returns a config with 2 env rules
+
+#### Scenario: Empty env section
+
+- **WHEN** config contains:
+  ```toml
+  env = []
+  ```
+- **THEN** Load returns a config with no env rules
+
+#### Scenario: Invalid env rule rejected at config load
+
+- **WHEN** config contains:
+  ```toml
+  env = ["ro:HOME"]
+  ```
+- **THEN** Load returns an error containing "invalid action"
+
+#### Scenario: Duplicate env rule rejected at config load
+
+- **WHEN** config contains:
+  ```toml
+  env = ["pass:HOME", "pass:HOME"]
+  ```
+- **THEN** Load returns an error containing "duplicate env rule"
+
+### Requirement: ParseTOML includes env section
+
+`ParseTOML` SHALL unmarshal and validate the `env` key in addition to `fs`, `net`, and `syscall`.
+
+#### Scenario: Valid env rules parsed from bytes
+
+- **WHEN** ParseTOML is called with bytes containing:
+  ```toml
+  env = ["pass:HOME"]
+  ```
+- **THEN** it returns a Config with 1 env rule
 
 ### Requirement: Parse TOML from bytes
 
@@ -122,11 +182,11 @@ The config capability SHALL provide effective merged config rendering through `e
 - **THEN** execave prints TOML representing the effective merged config loaded from `/home/user/project/execave.toml`
 
 ### Requirement: Effective config output format and provenance
-Effective config output SHALL be TOML with typed sections (`fs`, `net`, `syscall`) and SHALL include source-path provenance as comment lines for emitted rules.
+Effective config output SHALL be TOML with typed sections (`fs`, `net`, `syscall`, `env`) and SHALL include source-path provenance as comment lines for emitted rules.
 
 #### Scenario: Output contains typed sections
 - **WHEN** `config show` succeeds
-- **THEN** stdout contains TOML arrays for configured sections (`fs`, `net`, and/or `syscall`) using rule bodies consistent with current config format
+- **THEN** stdout contains TOML arrays for configured sections (`fs`, `net`, `syscall`, and/or `env`) using rule bodies consistent with current config format
 
 #### Scenario: Output includes source comments for each emitted rule
 - **WHEN** `config show` emits a rule originating from layered config files

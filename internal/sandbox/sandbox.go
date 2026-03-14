@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/nonpop/execave/internal/config"
+	"github.com/nonpop/execave/internal/envrules"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/seccomp"
 	"github.com/nonpop/execave/internal/tunnel"
@@ -120,7 +121,14 @@ func (s *sandbox) buildBwrapArgs(command []string, seccompFD int) []string {
 		args = append(args, "--new-session")
 	}
 
-	// Environment variables pass through from host (no --clearenv)
+	// Default-deny environment filtering: clear all host env vars, then inject only those
+	// covered by pass rules. This prevents secrets from leaking into the sandbox.
+	args = append(args, "--clearenv")
+	resolver := envrules.NewResolver(s.cfg.EnvRules)
+	for _, entry := range resolver.Resolve(os.Environ()) {
+		name, value, _ := strings.Cut(entry, "=")
+		args = append(args, "--setenv", name, value)
+	}
 
 	// Note: No --chdir flag. The sandboxed process inherits host cwd.
 	// If cwd is not mounted, bwrap falls back to $HOME, or / if $HOME is also not mounted.

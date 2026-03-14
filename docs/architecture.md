@@ -16,6 +16,7 @@ flowchart TB
             FSRules[FS Rules]
             SyscallRules[Syscall Rules]
             NetRules[Net Rules]
+            EnvRules[Env Rules]
         end
 
         AccessLog[Access Log]
@@ -92,6 +93,7 @@ At runtime, the kernel enforces namespace isolation. Network traffic flows: proc
 | **FS Rules** | `internal/fsrules/` | Parses `<permission>:<path>` rules, most-specific-wins matching, symlink resolution. Used by sandbox (mounts) and monitor (attribution) |
 | **Net Rules** | `internal/netrules/` | Parses `<protocol>:<target>:<port>` rules (domains, wildcards, IPs, CIDRs), specificity matching, default-deny. Used by proxy |
 | **Syscall Rules** | `internal/syscallrules/` | Parses `allow:<name>` rules, validates against ruleable set from seccomp. Used by sandbox (seccomp filter) and monitor (strace tracing) |
+| **Env Rules** | `internal/envrules/` | Parses `pass:<NAME>` rules, default-deny env filtering. Used by sandbox to build `--clearenv`/`--setenv` bwrap args |
 | **Run** | `internal/run/` | Orchestrator. Wires together sandbox, monitor, proxy, resolvers, signal handling, and terminal state management |
 | **Sandbox** | `internal/sandbox/` | Translates FS rules to bwrap mount args, builds seccomp filter pipe, returns ready-to-exec `SandboxedCommand`. Full namespace isolation via `--unshare-all` |
 | **Seccomp** | `internal/seccomp/` | Builds cBPF deny-list filter blocking ~34 dangerous syscalls. Exposes raw bytes and pipe for bwrap `--seccomp <fd>` |
@@ -108,7 +110,7 @@ At runtime, the kernel enforces namespace isolation. Network traffic flows: proc
 **Automatic mounts:** `/dev`, `/proc`, `/tmp`, ELF interpreter (auto-detected from bwrap's PT_INTERP).
 **Everything else** (`/usr`, `/lib`, `/lib64`, user data, etc.) must be in the config.
 
-The sandboxed process inherits the host cwd (falls back to `/` if not mounted). Environment variables pass through. Network is fully isolated; the proxy-tunnel bridge is the only path out.
+The sandboxed process inherits the host cwd (falls back to `/` if not mounted). Environment variables are filtered by default-deny env rules: only variables with a `pass:<NAME>` rule in the `env` config section are forwarded into the sandbox via `--clearenv`/`--setenv` bwrap args. Network is fully isolated; the proxy-tunnel bridge is the only path out.
 
 ## Dependencies
 

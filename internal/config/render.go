@@ -20,11 +20,13 @@ func RenderEffectiveTOML(cfg *Config) string {
 	fsRules := renderFSRules(cfg)
 	netRules := renderNetRules(cfg)
 	syscallRules := renderSyscallRules(cfg)
+	envRules := renderEnvRules(cfg)
 
 	var builder strings.Builder
 	appendSection(&builder, "fs", fsRules, cfg.ConfigPaths)
 	appendSection(&builder, "net", netRules, cfg.ConfigPaths)
 	appendSection(&builder, "syscall", syscallRules, cfg.ConfigPaths)
+	appendSection(&builder, "env", envRules, cfg.ConfigPaths)
 	return builder.String()
 }
 
@@ -53,6 +55,17 @@ func renderNetRules(cfg *Config) []effectiveRule {
 func renderSyscallRules(cfg *Config) []effectiveRule {
 	rules := make([]effectiveRule, 0, len(cfg.SyscallRules))
 	for _, rule := range cfg.SyscallRules {
+		rules = append(rules, effectiveRule{
+			canonical: rule.Canonical(),
+			source:    rule.SourcePath,
+		})
+	}
+	return rules
+}
+
+func renderEnvRules(cfg *Config) []effectiveRule {
+	rules := make([]effectiveRule, 0, len(cfg.EnvRules))
+	for _, rule := range cfg.EnvRules {
 		rules = append(rules, effectiveRule{
 			canonical: rule.Canonical(),
 			source:    rule.SourcePath,
