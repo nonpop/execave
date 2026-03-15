@@ -359,6 +359,20 @@ Before merge, explicitly review:
 5. Cleanup errors:
    - report to stderr, do not mask primary run error.
 
+## Risks and Mitigations
+
+1. **Risk:** Incorrect rule-to-flag mapping over-permits access.
+   **Mitigation:** strict parser + deterministic mapping tests + security doc review.
+
+2. **Risk:** Proxy lifecycle leaks process/socket resources.
+   **Mitigation:** explicit stop/cleanup paths and integration tests for shutdown.
+
+3. **Risk:** Feature interaction with network tunnel or monitor paths.
+   **Mitigation:** integration tests covering combined modes.
+
+4. **Risk:** Users expect full bus behavior and hit denied calls.
+   **Mitigation:** clear docs and examples for expanding allowlists intentionally.
+
 ## Rollout Plan
 
 1. Land parser + tests first.

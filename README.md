@@ -2,7 +2,11 @@
 
 Filesystem and network sandbox for Linux using bubblewrap.
 
-⚠️ Personal project, not a security expert. Uses established tools but may have configuration bugs. See `docs/security-model.md`.
+> [!WARNING]
+> Personal project, not a security expert. Uses established tools but may have configuration bugs. See `docs/security-model.md`.
+
+> [!IMPORTANT]
+> I won't accept PRs or respond to issue reports unless they are about security bugs.
 
 ## Quick Start
 
@@ -49,13 +53,17 @@ env = [
   "pass:HOME",
   "pass:PATH",
 ]
+
+syscall = [
+  "allow:ptrace",   # allow ptrace (blocked by default)
+]
 ```
 
 **Automatic mounts** (not in config): `/dev`, `/proc`, `/tmp`
 
 **Network is isolated.** Only connections matching net rules are allowed; without net rules the proxy is deny-all. Apps that ignore `HTTP_PROXY`/`HTTPS_PROXY` have no network access regardless (no NIC inside the sandbox).
 
-**Intra-sandbox servers:** execave injects `HTTP_PROXY` into the sandboxed process's environment. HTTP clients route all connections—including to `localhost`—through the host-side proxy, which cannot reach servers inside the sandbox's network namespace. To connect to an intra-sandbox server, bypass the proxy: set `NO_PROXY=localhost,127.0.0.1`.
+**Intra-sandbox servers:** execave injects `HTTP_PROXY`/`HTTPS_PROXY` into the sandboxed process's environment. HTTP clients route all connections—including to `localhost`—through the host-side proxy, which cannot reach servers inside the sandbox's network namespace. To connect to an intra-sandbox server, bypass the proxy by setting `NO_PROXY=localhost,127.0.0.1` inside the sandbox (e.g. in the command itself or via env rules). Note: any host-side `NO_PROXY`/`no_proxy` values are stripped and do not carry into the sandbox.
 
 **Minimum paths vary by command.** Start with `/usr`, `/lib`, `/lib64`, `/etc/ld.so.cache` and use `monitor` to narrow down what's actually needed.
 
@@ -73,7 +81,7 @@ You're not expected to know every path a command needs upfront. Use `monitor` to
 
 ```bash
 execave monitor -- your-command                       # text log to stderr (buffered until exit)
-execave monitor --output access.log -- your-command   # text log to file (real-time, tailable)
+execave monitor --output-path access.log -- your-command   # text log to file (real-time, tailable)
 ```
 
 Both modes write one entry per line:
@@ -86,10 +94,11 @@ Both modes write one entry per line:
 | HTTP | api.example.com:443 | OK | http:api.example.com:443 |
 | HTTP | evil.example.com:80 | DENY | no-matching-rule |
 
-The file mode (`monitor --output <path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (default) buffers until the process exits, then writes to stderr.
+The file mode (`monitor --output-path <path>`) writes entries in real-time as syscalls happen (tailable with `tail -f`). The stderr mode (default) buffers until the process exits, then writes to stderr.
 
 **Filter flags** on `monitor` control which entries appear in the output:
 - `--show-allowed`: include OK (allowed) entries. Default: denied only.
+- `--no-sandbox`: run without the bubblewrap sandbox (filesystem and network rules are not enforced). Useful for tracing a command before writing any rules, but provides no isolation.
 
 **Workflow:** Start with `execave.toml.example`, run with `monitor`, check for DENY entries (filesystem paths are shown in shortened form relative to the config directory or home), edit the config, grant only what's necessary, repeat.
 
@@ -118,9 +127,13 @@ To allow a specific syscall, add `allow:<name>` to the `syscall` section of your
 
 ## Requirements
 
-- Linux, Go 1.25+, `bubblewrap` 0.11.x, `strace` 6.18 (for `monitor`)
+- Linux, Go 1.25+, `bubblewrap` 0.11.x, `strace` 6.19 (for `monitor`)
 
 Execave pins to specific known-good versions of `bwrap` and `strace` and checks the installed versions at startup. Older versions or major-version bumps cause execave to exit with an error; newer minor versions within the same major series print a warning but continue.
+
+## Reporting bugs
+
+If execave crashes with a message starting with `execave bug:`, that is an internal assertion failure. Please open an issue with the full message and the command you ran.
 
 ## Documentation
 

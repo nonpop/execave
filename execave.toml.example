@@ -1,11 +1,13 @@
 # Layered configs via `extends`
 #
 # To compose multiple configs, add an `extends` section at the top level:
+#
 # extends = ["~/.config/execave/base.toml", "~/.config/execave/codex.toml"]
 #
 # Paths may be absolute, relative to the extending file, or prefixed with `~`
-# (which expands to the invoking user’s home directory). Extending simply
-# includes all rules from the extended config files.
+# (which expands to the invoking user’s home directory; `~username` is not
+# supported). Extending simply includes all rules from the extended config
+# files.
 
 fs = [
   # Comprehensive baseline config for sandboxing most standard tools.
@@ -74,22 +76,43 @@ fs = [
   "ro:/etc/pki/ca-trust",
   "ro:/etc/ca-certificates",
 
-  # TODO: add example for including global gitconfig, gitignore
-
   # -- Working directory --
   # The only read-write entry. "." resolves to the config file's directory.
   # Scoped to one directory; everything outside remains inaccessible. The
   # sandboxed process must read and write project files.
   "rw:.",
-  "ro:.git",
+  "ro:.git",  # lower permission on a subpath overrides the parent
+
+  # -- Deny rules --
+  # Use `none:` to carve out sensitive subdirectories under a broader rule.
+  # "none:.secrets",
 ]
 
-# net = [
-#   # "http:example.com:443",
-#   # "http:*.example.com:*",
-# ]
+env = [
+  # Default-deny: only listed variables are passed into the sandbox.
+  # Without any pass rules, the sandbox starts with a near-empty environment;
+  # HTTP_PROXY/HTTPS_PROXY are always injected by the tunnel regardless of env rules.
 
-# syscall = [
-#   # Seccomp overrides (uncomment to use)
-#   # "allow:keyctl",
-# ]
+  "pass:HOME",
+  "pass:PATH",
+  "pass:LANG",
+  "pass:TERM",
+  # "pass:EDITOR",
+  # "pass:XDG_CONFIG_HOME",
+]
+
+net = [
+  # Default-deny: only listed destinations are reachable from the sandbox.
+
+  # "http:example.com:443",
+  # "http:*.example.com:*",
+  # "http:10.0.0.0/8:*",
+  # "http:[::1]:8080",
+  # "none:internal.example.com:*",  # deny a specific destination
+]
+
+syscall = [
+  # Seccomp filter overrides. Use to allow syscalls blocked by the default policy.
+
+  # "allow:keyctl",
+]

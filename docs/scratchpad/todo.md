@@ -1,7 +1,5 @@
 # execave TODOs
 
-- nit lint
-
 - env/set:VAR=VAL rules?
 - trim openspec config.yaml
 
