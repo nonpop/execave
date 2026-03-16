@@ -17,8 +17,11 @@ sudo apt install bubblewrap strace
 # Install
 go install ./cmd/execave
 
-# Run
+# Run (with config file)
 execave --config execave.toml.example run -- ls -la
+
+# Run with inline rules (no config file)
+execave --no-config --fs ro:/usr --fs ro:/lib --fs ro:/lib64 -- ls -la
 
 # If execave command not found, add Go's bin directory to PATH:
 export PATH="$PATH:$(go env GOPATH)/bin"
@@ -71,9 +74,35 @@ syscall = [
 
 See `execave.toml.example` for a comprehensive config that supports most standard tools.
 
+### Inline rules via CLI flags
+
+Rules can be specified directly on the command line without a config file. Each flag is repeatable:
+
+```bash
+# Override or supplement a config file
+execave --fs ro:/extra/path --net http:api.example.com:443 -- python script.py
+
+# No config file at all — only CLI rules apply
+execave --no-config --fs ro:/usr --fs ro:/lib --fs ro:/lib64 --env pass:HOME -- ls -la
+```
+
+Available flags (all work with `run`, `monitor`, and `config show`):
+
+| Flag | Example |
+|------|---------|
+| `--fs <rule>` | `--fs ro:/usr` |
+| `--net <rule>` | `--net http:api.example.com:443` |
+| `--syscall <rule>` | `--syscall allow:ptrace` |
+| `--env <rule>` | `--env pass:HOME` |
+| `--extends <path>` | `--extends ~/shared/base.toml` |
+
+Think of the CLI flags as constructing a virtual config file that implicitly extends the file-based config (if any) and becomes the root config.
+
 ### Layered configs via extends
 
 Configs can load additional files with `extends = ["../base/execave.toml", "~/shared/execave.toml"]`. Each path is expanded (absolute paths stay absolute, relative paths resolve next to the extending file, and `~` expands to the invoking user’s home directory).
+
+The `--extends` CLI flag loads base files the same way, resolving paths relative to the current working directory.
 
 ### Building your config with monitor
 
@@ -109,9 +138,10 @@ Use `config show` to inspect the merged effective config that `run` and `monitor
 ```bash
 execave config show
 execave --config /path/to/execave.toml config show
+execave --no-config --fs ro:/usr --fs ro:/lib config show
 ```
 
-The output is TOML with `fs`, `net`, `syscall`, and `env` sections plus `# source: ...` comments for each emitted rule.
+The output is TOML with `fs`, `net`, `syscall`, and `env` sections plus `# <source>` comments showing which file (or `<cli>`) each rule came from.
 
 ## Seccomp
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/nonpop/execave/internal/accesslog"
 	"github.com/nonpop/execave/internal/binutil"
+	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/exitcode"
 	"github.com/nonpop/execave/internal/fsrules"
 	"github.com/nonpop/execave/internal/monitor"
@@ -32,10 +33,11 @@ import (
 
 // SandboxConfig holds parameters for [Run].
 type SandboxConfig struct {
-	ConfigPath    string         // Path to execave config file.
-	TargetArgv    []string       // Command and arguments to execute.
-	TunnelBinary  string         // Override tunnel binary; empty uses os.Executable().
-	MonitorConfig *MonitorConfig // Nil disables monitoring.
+	ConfigPath    string          // Path to execave config file.
+	CLIRules      config.CLIRules // Inline rules from CLI flags; zero value uses only config file.
+	TargetArgv    []string        // Command and arguments to execute.
+	TunnelBinary  string          // Override tunnel binary; empty uses os.Executable().
+	MonitorConfig *MonitorConfig  // Nil disables monitoring.
 }
 
 // MonitorConfig holds parameters for access monitoring within [Run].
@@ -47,7 +49,7 @@ type MonitorConfig struct {
 
 // Run executes the target command inside the sandbox. Returns the process exit code.
 func Run(sandboxCfg SandboxConfig) (_ int, err error) { //nolint:gocognit,gocyclo,cyclop,funlen,maintidx // orchestration function with load-bearing defer ordering
-	runtimeCfg, cleanup, err := LoadRuntimeConfig(sandboxCfg.ConfigPath)
+	runtimeCfg, cleanup, err := LoadRuntimeConfig(sandboxCfg.ConfigPath, sandboxCfg.CLIRules)
 	if err != nil {
 		return 0, fmt.Errorf("load config: %w", err)
 	}

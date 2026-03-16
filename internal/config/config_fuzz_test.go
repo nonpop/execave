@@ -39,7 +39,7 @@ syscall = []`)
 			t.Fatal("failed to write config file")
 		}
 
-		cfg, err := config.Load(configPath, nil, "", "", "")
+		cfg, err := config.Load(configPath, config.CLIRules{FS: nil, Net: nil, Syscall: nil, Env: nil, Extends: nil, NoConfig: false, ConfigExplicitlySet: false}, nil, "", "", "")
 		if err != nil {
 			return // Invalid input is fine
 		}

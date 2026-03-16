@@ -41,7 +41,7 @@ flowchart LR
 
 **Terminal** — TIOCSTI injection blocked by kernel (Linux 6.2+) or `--new-session` fallback (older kernels).
 
-**Config protection** — merged validation rejects `rw` rules in the `fs` section targeting any config file in the extends chain; runtime adds forced read-only overlays when inherited rules would otherwise resolve a config path as writable.
+**Config protection** — merged validation rejects `rw` rules in the `fs` section targeting any config file in the extends chain; runtime adds forced read-only overlays when inherited rules would otherwise resolve a config path as writable. CLI flags (`--fs`, `--net`, etc.) flow through the same merge and validation pipeline as TOML-sourced rules.
 
 **Binary validation** — bwrap and strace must be root-owned (Lstat check, blocks symlink injection). Strace is validated because it wraps bwrap from outside the sandbox with full host access.
 

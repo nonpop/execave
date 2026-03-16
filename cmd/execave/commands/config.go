@@ -26,13 +26,17 @@ var configShowCmd = &cobra.Command{
 	Short:        "Show the effective merged configuration as TOML",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
-	RunE: func(_ *cobra.Command, _ []string) error {
-		return showConfig()
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return showConfig(cmd)
 	},
 }
 
-func showConfig() error {
-	runtimeCfg, cleanup, err := run.LoadRuntimeConfig(configPath)
+func showConfig(cmd *cobra.Command) error {
+	cliRules, err := buildCLIRules(cmd)
+	if err != nil {
+		return err
+	}
+	runtimeCfg, cleanup, err := run.LoadRuntimeConfig(configPath, cliRules)
 	if err != nil {
 		return fmt.Errorf("load effective config: %w", err)
 	}

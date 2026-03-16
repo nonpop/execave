@@ -92,11 +92,7 @@ func appendSection(builder *strings.Builder, section string, rules []effectiveRu
 		if i > 0 {
 			builder.WriteString("\n")
 		}
-		if sourcePath == "" {
-			builder.WriteString("  # <synthetic>\n")
-		} else {
-			fmt.Fprintf(builder, "  # %s\n", sourcePath)
-		}
+		fmt.Fprintf(builder, "  # %s\n", sourcePath)
 		for _, body := range grouped[sourcePath] {
 			fmt.Fprintf(builder, "  %q,\n", body)
 		}
@@ -104,17 +100,15 @@ func appendSection(builder *strings.Builder, section string, rules []effectiveRu
 	builder.WriteString("]\n")
 }
 
-// orderedSourcePaths returns source paths in a stable order: config-file order first,
-// then the empty (synthetic) source last.
+// orderedSourcePaths returns source paths in a stable order matching configPaths:
+// file paths first, then SourceCLI (if present), then SourceSynthetic (if present).
+// Only paths with at least one rule are included.
 func orderedSourcePaths(grouped map[string][]string, configPaths []string) []string {
 	ordered := make([]string, 0, len(configPaths))
 	for _, path := range configPaths {
 		if len(grouped[path]) > 0 {
 			ordered = append(ordered, path)
 		}
-	}
-	if len(grouped[""]) > 0 {
-		ordered = append(ordered, "")
 	}
 	return ordered
 }

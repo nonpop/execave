@@ -6,12 +6,20 @@ import (
 	"os"
 	"strings"
 
+	"github.com/nonpop/execave/internal/config"
 	"github.com/nonpop/execave/internal/run"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func init() {
 	rootCmd.PersistentFlags().StringVar(&configPath, "config", defaultConfigPath, "Configuration file path")
+	rootCmd.PersistentFlags().StringArrayVar(&cliFSRules, "fs", nil, "Filesystem rule (repeatable, e.g. ro:/usr)")
+	rootCmd.PersistentFlags().StringArrayVar(&cliNetRules, "net", nil, "Network rule (repeatable, e.g. http:example.com:443)")
+	rootCmd.PersistentFlags().StringArrayVar(&cliSyscallRules, "syscall", nil, "Syscall rule (repeatable, e.g. allow:ptrace)")
+	rootCmd.PersistentFlags().StringArrayVar(&cliEnvRules, "env", nil, "Env rule (repeatable, e.g. pass:HOME)")
+	rootCmd.PersistentFlags().StringArrayVar(&cliExtends, "extends", nil, "Extend a base config file (repeatable, resolved relative to cwd)")
+	rootCmd.PersistentFlags().BoolVar(&noConfig, "no-config", false, "Run without a config file (mutually exclusive with --config)")
 	rootCmd.AddCommand(runCmd)
 	rootCmd.SetUsageFunc(rootUsageFunc)
 }
@@ -21,12 +29,91 @@ const defaultConfigPath = "./execave.toml"
 // subcmdNameWidth is the column width for subcommand name alignment in usage output.
 const subcmdNameWidth = 16
 
-// configPath is the --config flag value shared by all subcommands.
-var configPath string
+var (
+	// configPath is the --config flag value shared by all subcommands.
+	configPath string
+	// CLI rule flags shared by all subcommands.
+	cliFSRules      []string
+	cliNetRules     []string
+	cliSyscallRules []string
+	cliEnvRules     []string
+	cliExtends      []string
+	noConfig        bool
+)
+
+// buildCLIRules builds a config.CLIRules from the current persistent flag values.
+// cmd is used to determine whether --config was explicitly set.
+// Returns an error if --config and --no-config are both set.
+func buildCLIRules(cmd *cobra.Command) (config.CLIRules, error) {
+	configChanged := cmd.Root().PersistentFlags().Lookup("config").Changed
+	if noConfig && configChanged {
+		return config.CLIRules{}, errors.New("--config and --no-config are mutually exclusive")
+	}
+	return config.CLIRules{
+		FS:                  cliFSRules,
+		Net:                 cliNetRules,
+		Syscall:             cliSyscallRules,
+		Env:                 cliEnvRules,
+		Extends:             cliExtends,
+		NoConfig:            noConfig,
+		ConfigExplicitlySet: configChanged,
+	}, nil
+}
 
 // Execute runs the root Cobra command.
 func Execute() error {
 	return rootCmd.Execute() //nolint:wrapcheck
+}
+
+// configFlagNames are the persistent flags in the Configuration group.
+var configFlagNames = []string{"config", "no-config", "extends"}
+
+// ruleFlagNames are the persistent flags in the Rules group.
+var ruleFlagNames = []string{"fs", "net", "syscall", "env"}
+
+// groupedFlagUsages renders flags from flags into labelled groups: Configuration, Rules, and
+// Other (catch-all for any future flags). Each group is only included when non-empty.
+func groupedFlagUsages(flags *pflag.FlagSet) string {
+	groups := []struct {
+		header string
+		names  []string
+	}{
+		{"Configuration", configFlagNames},
+		{"Rules", ruleFlagNames},
+	}
+
+	knownNames := make(map[string]bool)
+	for _, g := range groups {
+		for _, n := range g.names {
+			knownNames[n] = true
+		}
+	}
+
+	var other pflag.FlagSet
+	flags.VisitAll(func(f *pflag.Flag) {
+		if !knownNames[f.Name] {
+			other.AddFlag(f)
+		}
+	})
+
+	var b strings.Builder
+	for _, g := range groups {
+		var fs pflag.FlagSet
+		for _, name := range g.names {
+			if f := flags.Lookup(name); f != nil {
+				fs.AddFlag(f)
+			}
+		}
+		if usages := fs.FlagUsages(); usages != "" {
+			b.WriteString("\n" + g.header + ":\n")
+			b.WriteString(usages)
+		}
+	}
+	if usages := other.FlagUsages(); usages != "" {
+		b.WriteString("\nOther:\n")
+		b.WriteString(usages)
+	}
+	return b.String()
 }
 
 func rootUsageFunc(cmd *cobra.Command) error {
@@ -40,8 +127,11 @@ func rootUsageFunc(cmd *cobra.Command) error {
 				}
 			}
 		}
-		if cmd.HasAvailableFlags() {
-			cmd.Printf("\nFlags:\n%s", cmd.Flags().FlagUsages())
+		if cmd.HasAvailableLocalFlags() {
+			cmd.Printf("\nFlags:\n%s", cmd.LocalFlags().FlagUsages())
+		}
+		if cmd.HasAvailableInheritedFlags() {
+			cmd.Print(groupedFlagUsages(cmd.InheritedFlags()))
 		}
 		return nil
 	}
@@ -57,8 +147,7 @@ Subcommands:
 			usage.WriteString("  " + subcmd.Name() + strings.Repeat(" ", subcmdNameWidth-len(subcmd.Name())) + subcmd.Short + "\n")
 		}
 	}
-	usage.WriteString("\nFlags:\n")
-	usage.WriteString(cmd.LocalFlags().FlagUsages())
+	usage.WriteString(groupedFlagUsages(cmd.LocalFlags()))
 	cmd.Print(usage.String())
 	return nil
 }
@@ -110,8 +199,13 @@ func runCommand(cmd *cobra.Command, args []string) error {
 		targetArgv = args[argsLenAtDash:]
 	}
 
+	cliRules, err := buildCLIRules(cmd)
+	if err != nil {
+		return err
+	}
 	sandboxCfg := run.SandboxConfig{
 		ConfigPath:    configPath,
+		CLIRules:      cliRules,
 		TargetArgv:    targetArgv,
 		TunnelBinary:  "",
 		MonitorConfig: nil,

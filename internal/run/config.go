@@ -19,7 +19,7 @@ type RuntimeConfig struct {
 
 // LoadRuntimeConfig loads config, resolves binaries, and creates the proxy
 // directory. The returned cleanup removes the proxy directory; defer it.
-func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
+func LoadRuntimeConfig(cfgPath string, cliRules config.CLIRules) (*RuntimeConfig, func(), error) {
 	tunnelBinary, err := os.Executable()
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve executable path: %w", err)
@@ -41,10 +41,10 @@ func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
 	}
 	managedPaths := sandbox.ManagedDirs()
 
-	cfg, err := config.Load(cfgPath, managedPaths, interpPath, tunnelBinary, udsPath)
+	cfg, err := config.Load(cfgPath, cliRules, managedPaths, interpPath, tunnelBinary, udsPath)
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("load config from %s: %w", cfgPath, err)
+		return nil, nil, fmt.Errorf("load config: %w", err)
 	}
 
 	return &RuntimeConfig{

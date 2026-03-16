@@ -346,7 +346,8 @@ func Test_SandboxingFilesystem_RelativePathsInRulesResolvedRelativeToConfigDirec
 		testFile := src.file("test.txt", "hello")
 
 		s.givenRulesInDir(work.String(), "fs:ro:./src")
-		s.whenRunWithDefaultConfig(work.String(), "cat", testFile)
+		s.givenWorkDir(work.String())
+		s.whenRunWithDefaultConfig("cat", testFile)
 
 		s.thenExitCode(0)
 		s.thenStdoutContains("hello")

@@ -33,8 +33,13 @@ var monitorCmd = &cobra.Command{
 			targetArgv = args[argsLenAtDash:]
 		}
 
+		cliRules, err := buildCLIRules(cmd)
+		if err != nil {
+			return err
+		}
 		sandboxCfg := run.SandboxConfig{
 			ConfigPath:   configPath,
+			CLIRules:     cliRules,
 			TargetArgv:   targetArgv,
 			TunnelBinary: "",
 			MonitorConfig: &run.MonitorConfig{

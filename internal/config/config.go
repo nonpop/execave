@@ -2,14 +2,16 @@
 //
 // [Load] traverses the "extends" chain, delegates rule parsing to [fsrules],
 // [netrules], [syscallrules], and [envrules], merges and deduplicates, injects
-// synthetic rules, and validates the result. [RenderEffectiveTOML] renders the
-// merged config back to TOML for inspection.
+// synthetic rules, and validates the result. CLI rules are always merged after
+// file-based rules; pass a zero-value [CLIRules] when no CLI flags are set.
+// [RenderEffectiveTOML] renders the merged config back to TOML for inspection.
 package config
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/nonpop/execave/internal/envrules"
@@ -19,6 +21,26 @@ import (
 	"github.com/nonpop/execave/internal/syscallrules"
 )
 
+// SourceCLI is the SourcePath sentinel for rules supplied via CLI flags.
+const SourceCLI = "<cli>"
+
+// SourceSynthetic is the SourcePath sentinel for rules injected by the runtime
+// (e.g. forced read-only rules for config files, interpreter auto-mount).
+const SourceSynthetic = "<synthetic>"
+
+// CLIRules holds the raw rule strings from CLI flags passed to [Load].
+// NoConfig skips loading the config file; all rules must come from CLI flags and Extends.
+// NoConfig and ConfigExplicitlySet are mutually exclusive; Load returns an error if both are true.
+type CLIRules struct {
+	FS                  []string // Values from --fs flags.
+	Net                 []string // Values from --net flags.
+	Syscall             []string // Values from --syscall flags.
+	Env                 []string // Values from --env flags.
+	Extends             []string // Values from --extends flags.
+	NoConfig            bool     // True when --no-config is set.
+	ConfigExplicitlySet bool     // True when --config was explicitly provided (not defaulted).
+}
+
 // Config represents the merged, validated configuration from one or more TOML files.
 type Config struct {
 	FSRules      []fsrules.Rule      // Merged filesystem access rules.
@@ -26,7 +48,7 @@ type Config struct {
 	SyscallRules []syscallrules.Rule // Merged syscall access rules.
 	EnvRules     []envrules.Rule     // Merged environment variable filtering rules.
 	ManagedPaths []string            // Sandbox-managed paths (e.g., /proc, /dev, /tmp).
-	ConfigPaths  []string            // Ordered list of config files loaded (root + extends).
+	ConfigPaths  []string            // Ordered list of config files loaded (root + extends + sentinels).
 }
 
 type rawConfig struct {
@@ -38,8 +60,9 @@ type rawConfig struct {
 }
 
 // buildConfig parses already-separated rule slices directly.
+// configPath must be an absolute path or a sentinel constant (SourceCLI).
 func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []string) (*Config, error) { //nolint:cyclop,funlen // linear pipeline; complexity from error handling
-	if !filepath.IsAbs(configPath) {
+	if !filepath.IsAbs(configPath) && configPath != SourceCLI {
 		panic(fmt.Sprintf("execave bug: config built with relative path: %q", configPath))
 	}
 
@@ -105,21 +128,59 @@ func buildConfig(raw rawConfig, configDir, configPath string, managedPaths []str
 	}, nil
 }
 
-// Load reads, merges, and validates a configuration file and its extends chain.
+// Load constructs a virtual CLI config node from cliRules (inline FS, Net,
+// Syscall, and Env rules), then populates its extends list: configPath is
+// prepended unless cliRules.NoConfig is true, followed by any cliRules.Extends
+// entries. The full config tree rooted at that node is then read, merged, and
+// validated using cwd as the base directory for relative paths in the CLI node.
+// configPath may be relative; cliRules.Extends entries may be relative or use tilde.
 // Injects synthetic read-only rules for config files, interpreterPath,
 // tunnelBinary, and tunnelUDS (empty strings are skipped).
-func Load(path string, managedPaths []string, interpreterPath, tunnelBinary, tunnelUDS string) (*Config, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve absolute path %s: %w", path, err)
-	}
-	absPath = filepath.Clean(absPath)
-
-	cfgGraph, err := readConfigGraph(absPath)
-	if err != nil {
-		return nil, fmt.Errorf("read config %s: %w", absPath, err)
+func Load(configPath string, cliRules CLIRules, managedPaths []string, interpreterPath, tunnelBinary, tunnelUDS string) (*Config, error) { //nolint:cyclop // linear pipeline; branches are error checks
+	if cliRules.NoConfig && cliRules.ConfigExplicitlySet {
+		panic("execave bug: CLIRules.NoConfig and CLIRules.ConfigExplicitlySet are mutually exclusive")
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+
+	// Build the CLI raw config: extends = config file (unless --no-config) + resolved --extends.
+	cliRaw := rawConfig{FS: cliRules.FS, Net: cliRules.Net, Syscall: cliRules.Syscall, Env: cliRules.Env, Extends: nil}
+
+	if !cliRules.NoConfig {
+		absConfig, err := filepath.Abs(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve config path: %w", err)
+		}
+		cliRaw.Extends = append(cliRaw.Extends, filepath.Clean(absConfig))
+	}
+
+	for i, entry := range cliRules.Extends {
+		if entry == "" {
+			return nil, fmt.Errorf("empty --extends entry at position %d", i)
+		}
+		cliRaw.Extends = append(cliRaw.Extends, entry)
+	}
+
+	cfgNodes, err := readConfigGraph(cliRaw, cwd)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	// Use the config file path for merge-error context; fall back to SourceCLI.
+	contextPath := SourceCLI
+	if !cliRules.NoConfig && len(cliRaw.Extends) > 0 {
+		contextPath = cliRaw.Extends[0]
+	}
+
+	return buildFromGraph(cfgNodes, managedPaths, interpreterPath, tunnelBinary, tunnelUDS, contextPath)
+}
+
+// buildFromGraph runs the buildConfig → mergeConfigs → synthetic-rules pipeline
+// on an already-ordered list of config nodes.
+func buildFromGraph(cfgGraph []*cfgNode, managedPaths []string, interpreterPath, tunnelBinary, tunnelUDS, contextLabel string) (*Config, error) {
 	configs := make([]*Config, 0, len(cfgGraph))
 	configPaths := make([]string, 0, len(cfgGraph))
 	for _, node := range cfgGraph {
@@ -133,13 +194,14 @@ func Load(path string, managedPaths []string, interpreterPath, tunnelBinary, tun
 
 	merged, err := mergeConfigs(configs, configPaths, managedPaths)
 	if err != nil {
-		return nil, fmt.Errorf("merge %s: %w", absPath, err)
+		return nil, fmt.Errorf("merge %s: %w", contextLabel, err)
 	}
 
 	merged.FSRules = appendForcedReadOnlyRules(merged.FSRules, merged.ConfigPaths, merged.ManagedPaths)
 	merged.FSRules = appendSyntheticRORule(merged.FSRules, interpreterPath, merged.ManagedPaths)
 	merged.FSRules = appendSyntheticRORule(merged.FSRules, tunnelBinary, merged.ManagedPaths)
 	merged.FSRules = appendSyntheticRORule(merged.FSRules, tunnelUDS, merged.ManagedPaths)
+	merged.ConfigPaths = append(merged.ConfigPaths, SourceSynthetic)
 
 	return merged, nil
 }
@@ -150,12 +212,36 @@ type cfgNode struct {
 	raw  rawConfig
 }
 
-func readConfigGraph(root string) ([]*cfgNode, error) { //nolint:cyclop // recursive graph walk; complexity from error handling
+// readRawConfig reads and decodes a TOML config file. path must be absolute.
+func readRawConfig(path string) (rawConfig, string, error) {
+	data, err := os.ReadFile(path) //nolint:gosec // path is constructed from validated absolute paths
+	if err != nil {
+		if os.IsNotExist(err) {
+			return rawConfig{}, "", fmt.Errorf("file not found: %s", path)
+		}
+		return rawConfig{}, "", fmt.Errorf("read %s: %w", path, err)
+	}
+	var raw rawConfig
+	md, err := toml.Decode(string(data), &raw)
+	if err != nil {
+		return rawConfig{}, "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	if undecoded := md.Undecoded(); len(undecoded) > 0 {
+		return rawConfig{}, "", fmt.Errorf("parse %s: unknown config key %q", path, undecoded[0])
+	}
+	return raw, filepath.Dir(path), nil
+}
+
+// readConfigGraph traverses the extends chain rooted at root, using rootDir as
+// the base directory for resolving extends paths in root. The root is stored as
+// a SourceCLI node; file nodes use their absolute path. Returns nodes in
+// depth-first post-order (extends before the node that references them).
+func readConfigGraph(root rawConfig, rootDir string) ([]*cfgNode, error) {
 	visited := make(map[string]*cfgNode)
 	inStack := make(map[string]struct{})
 	var ordered []*cfgNode
 
-	var visit func(string) error
+	var visit func(path string) error
 	visit = func(path string) error {
 		if _, ok := visited[path]; ok {
 			return nil
@@ -167,48 +253,42 @@ func readConfigGraph(root string) ([]*cfgNode, error) { //nolint:cyclop // recur
 		inStack[path] = struct{}{}
 		defer delete(inStack, path)
 
-		data, err := os.ReadFile(path) //nolint:gosec // path is constructed from validated absolute paths
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("file not found: %s", path)
-			}
-			return fmt.Errorf("read %s: %w", path, err)
-		}
-
 		var raw rawConfig
-		md, err := toml.Decode(string(data), &raw)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		if undecoded := md.Undecoded(); len(undecoded) > 0 {
-			return fmt.Errorf("parse %s: unknown config key %q", path, undecoded[0])
+		var baseDir, nodePath string
+		if path == "" {
+			raw = root
+			baseDir = rootDir
+			nodePath = SourceCLI
+		} else {
+			var err error
+			raw, baseDir, err = readRawConfig(path)
+			if err != nil {
+				return err
+			}
+			nodePath = path
 		}
 
-		baseDir := filepath.Dir(path)
+		src := nodePath // for error messages
 		for _, entry := range raw.Extends {
 			if entry == "" {
-				return fmt.Errorf("empty extends entry in %s", path)
+				return fmt.Errorf("empty extends entry in %s", src)
 			}
 			resolved, err := pathutil.ExpandPath(entry, baseDir)
 			if err != nil {
-				return fmt.Errorf("invalid extends entry %q in %s: %w", entry, path, err)
+				return fmt.Errorf("invalid extends entry %q in %s: %w", entry, src, err)
 			}
 			if err := visit(resolved); err != nil {
 				return err
 			}
 		}
 
-		file := &cfgNode{
-			path: path,
-			dir:  baseDir,
-			raw:  raw,
-		}
-		visited[path] = file
-		ordered = append(ordered, file)
+		node := &cfgNode{path: nodePath, dir: baseDir, raw: raw}
+		visited[path] = node
+		ordered = append(ordered, node)
 		return nil
 	}
 
-	if err := visit(root); err != nil {
+	if err := visit(""); err != nil {
 		return nil, err
 	}
 	return ordered, nil
@@ -247,6 +327,10 @@ func appendForcedReadOnlyRules(rules []fsrules.Rule, configPaths, managedPaths [
 	resolver := fsrules.NewResolver(rules, managedPaths)
 	seen := make(map[string]struct{})
 	for _, path := range configPaths {
+		if strings.HasPrefix(path, "<") {
+			// Skip sentinel constants like SourceCLI and SourceSynthetic.
+			continue
+		}
 		if _, ok := seen[path]; ok {
 			continue
 		}
@@ -256,7 +340,7 @@ func appendForcedReadOnlyRules(rules []fsrules.Rule, configPaths, managedPaths [
 				Permission: fsrules.PermissionReadOnly,
 				Path:       path,
 				RawRule:    "ro:" + path,
-				SourcePath: "",
+				SourcePath: SourceSynthetic,
 			})
 		}
 	}
@@ -277,7 +361,7 @@ func appendSyntheticRORule(rules []fsrules.Rule, path string, managedPaths []str
 		Permission: fsrules.PermissionReadOnly,
 		Path:       path,
 		RawRule:    "ro:" + path,
-		SourcePath: "",
+		SourcePath: SourceSynthetic,
 	})
 }
 

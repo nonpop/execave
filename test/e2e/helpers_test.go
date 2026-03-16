@@ -280,6 +280,8 @@ type scenario struct {
 	configPath string
 	configDir  string
 	lastResult *execaveResult
+	cliFlags   []string // extra CLI flags inserted before subcommand
+	workDir    string   // working directory for runExecave
 }
 
 // newScenario creates a new scenario, failing if bwrap is not available.
@@ -291,6 +293,8 @@ func newScenario(t *testing.T) *scenario {
 		tmpDir:     testTempDir(t),
 		configPath: "",
 		configDir:  "",
+		cliFlags:   nil,
+		workDir:    "",
 		lastResult: nil,
 	}
 }
@@ -339,6 +343,27 @@ func (s *scenario) givenRulesInDir(dir string, rules ...string) {
 	s.configDir = dir
 }
 
+// givenCLIFlags appends flag-value pairs (e.g., "--fs", "ro:/path") to cliFlags.
+func (s *scenario) givenCLIFlags(flags ...string) {
+	s.cliFlags = append(s.cliFlags, flags...)
+}
+
+// givenWorkDir sets the working directory for subsequent when* calls.
+func (s *scenario) givenWorkDir(dir string) {
+	s.workDir = dir
+}
+
+// execPrefix builds the flag prefix shared by all when* methods:
+// [...cliFlags, --config <path>?].
+func (s *scenario) execPrefix() []string {
+	prefix := make([]string, 0, len(s.cliFlags)+2)
+	prefix = append(prefix, s.cliFlags...)
+	if s.configPath != "" {
+		prefix = append(prefix, "--config", s.configPath)
+	}
+	return prefix
+}
+
 // givenRawConfig writes raw config content (not rules array) to a config file.
 func (s *scenario) givenRawConfig(content string) {
 	s.t.Helper()
@@ -354,22 +379,21 @@ func (s *scenario) givenRawConfig(content string) {
 // Resets the last result but keeps the config.
 func (s *scenario) whenRun(args ...string) {
 	s.t.Helper()
-	execArgs := make([]string, 0, 5+len(args))
-	if s.configPath != "" {
-		execArgs = append(execArgs, "--config", s.configPath)
-	}
-	execArgs = append(execArgs, "run")
-	execArgs = append(execArgs, "--")
+	prefix := s.execPrefix()
+	execArgs := make([]string, 0, len(prefix)+3+len(args))
+	execArgs = append(execArgs, prefix...)
+	execArgs = append(execArgs, "run", "--")
 	execArgs = append(execArgs, args...)
-	result := runExecave(s.t, "", execArgs...)
+	result := runExecave(s.t, s.workDir, execArgs...)
 	s.lastResult = &result
 }
 
 // whenRunWithDefaultConfig executes execave without --config, relying on default config location.
-func (s *scenario) whenRunWithDefaultConfig(workDir string, args ...string) {
+// Set the working directory via givenWorkDir before calling this method.
+func (s *scenario) whenRunWithDefaultConfig(args ...string) {
 	s.t.Helper()
 	execArgs := append([]string{"run", "--"}, args...)
-	result := runExecave(s.t, workDir, execArgs...)
+	result := runExecave(s.t, s.workDir, execArgs...)
 	s.lastResult = &result
 }
 
@@ -378,14 +402,16 @@ func (s *scenario) whenRunWithDefaultConfig(workDir string, args ...string) {
 func (s *scenario) whenRunTextLog(outputPath string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
-	execArgs := make([]string, 0, 7+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor")
+	prefix := s.execPrefix()
+	execArgs := make([]string, 0, len(prefix)+4+len(args))
+	execArgs = append(execArgs, prefix...)
+	execArgs = append(execArgs, "monitor")
 	if outputPath != "" {
 		execArgs = append(execArgs, "--output-path="+outputPath)
 	}
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
-	result := runExecave(s.t, "", execArgs...)
+	result := runExecave(s.t, s.workDir, execArgs...)
 	s.lastResult = &result
 }
 
@@ -393,12 +419,14 @@ func (s *scenario) whenRunTextLog(outputPath string, args ...string) {
 func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 	s.t.Helper()
 	failIfNoStrace(s.t)
-	execArgs := make([]string, 0, 7+len(flags)+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor")
+	prefix := s.execPrefix()
+	execArgs := make([]string, 0, len(prefix)+3+len(flags)+len(args))
+	execArgs = append(execArgs, prefix...)
+	execArgs = append(execArgs, "monitor")
 	execArgs = append(execArgs, flags...)
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
-	result := runExecave(s.t, "", execArgs...)
+	result := runExecave(s.t, s.workDir, execArgs...)
 	s.lastResult = &result
 }
 
@@ -406,14 +434,27 @@ func (s *scenario) whenRunTextLogWithFlags(flags []string, args ...string) {
 // If outputPath is empty, output goes to stderr (the default). Otherwise output goes to the given file.
 func (s *scenario) whenRunNoSandboxMonitorFile(outputPath string, args ...string) {
 	s.t.Helper()
-	execArgs := make([]string, 0, 8+len(args))
-	execArgs = append(execArgs, "--config", s.configPath, "monitor", "--no-sandbox")
+	prefix := s.execPrefix()
+	execArgs := make([]string, 0, len(prefix)+4+len(args))
+	execArgs = append(execArgs, prefix...)
+	execArgs = append(execArgs, "monitor", "--no-sandbox")
 	if outputPath != "" {
 		execArgs = append(execArgs, "--output-path="+outputPath)
 	}
 	execArgs = append(execArgs, "--")
 	execArgs = append(execArgs, args...)
-	result := runExecave(s.t, "", execArgs...)
+	result := runExecave(s.t, s.workDir, execArgs...)
+	s.lastResult = &result
+}
+
+// whenRunConfigShow executes execave config show.
+func (s *scenario) whenRunConfigShow() {
+	s.t.Helper()
+	prefix := s.execPrefix()
+	execArgs := make([]string, 0, len(prefix)+2)
+	execArgs = append(execArgs, prefix...)
+	execArgs = append(execArgs, "config", "show")
+	result := runExecave(s.t, s.workDir, execArgs...)
 	s.lastResult = &result
 }
 

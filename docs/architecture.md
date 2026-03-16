@@ -77,7 +77,7 @@ flowchart TB
 
 ## Execution Flow
 
-CLI parses args → loads TOML config → creates rule resolvers → dispatches:
+CLI parses args → loads config → creates rule resolvers → dispatches:
 
 - **`run`** command: sandbox only. `run.Run()` starts proxy, prepares bwrap+seccomp, executes command.
 - **`monitor`** command: sandbox + strace. Logs filesystem, syscall, and network access with rule attribution. Output to file (`--output`) or stderr.

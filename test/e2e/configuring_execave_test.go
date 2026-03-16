@@ -15,8 +15,9 @@ func Test_ConfiguringExecave_DefaultConfigLocation(t *testing.T) {
 	s := newScenario(t)
 	workDir := s.givenDir("work")
 	s.givenRulesInDir(workDir.String())
+	s.givenWorkDir(workDir.String())
 
-	s.whenRunWithDefaultConfig(workDir.String(), "echo", "hello")
+	s.whenRunWithDefaultConfig("echo", "hello")
 
 	s.thenExitCode(0)
 	s.thenStdoutContains("hello")
