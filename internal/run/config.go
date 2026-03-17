@@ -1,7 +1,6 @@
 package run
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -55,13 +54,13 @@ func LoadRuntimeConfig(cfgPath string) (*RuntimeConfig, func(), error) {
 	}, cleanup, nil
 }
 
-// CreateProxyDir creates a temporary directory under XDG_RUNTIME_DIR for the
-// proxy UDS. Returns an error if XDG_RUNTIME_DIR is not set. The caller must
+// CreateProxyDir creates a temporary directory for the proxy UDS. It uses
+// XDG_RUNTIME_DIR when set, falling back to /run/user/<uid>. The caller must
 // remove the directory when done.
 func CreateProxyDir() (string, error) {
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
-		return "", errors.New("create proxy dir: XDG_RUNTIME_DIR not set")
+		runtimeDir = fmt.Sprintf("/run/user/%d", os.Getuid())
 	}
 	dir, err := os.MkdirTemp(runtimeDir, "execave-*")
 	if err != nil {
