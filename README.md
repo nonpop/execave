@@ -37,19 +37,21 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 
 ```toml
 fs = [
+  # Executables and shared libraries
   "ro:/usr",
   "ro:/lib",
   "ro:/lib64",
+
+  # Dynamic linker configuration
   "ro:/etc/ld.so.cache",
 
-  "rw:~/project",   # tilde expands to home directory
-  "none:.",
-]
+  # DNS resolution and TLS certificates
+  "ro:/etc/hosts",
+  "ro:/etc/resolv.conf",
+  "ro:/etc/ssl/certs",
 
-net = [
-  "http:api.example.com:443",
-  "http:*.internal.corp:*",
-  "none:evil.example.com:443",
+  # Project directory (read-write)
+  "rw:.",
 ]
 
 env = [
@@ -57,8 +59,13 @@ env = [
   "pass:PATH",
 ]
 
+net = [
+  # "http:example.com:443",
+  # "http:*.example.com:*",
+]
+
 syscall = [
-  "allow:ptrace",   # allow ptrace (blocked by default)
+  # "allow:ptrace",
 ]
 ```
 
@@ -96,7 +103,7 @@ Available flags (all work with `run`, `monitor`, and `config show`):
 | `--env <rule>` | `--env pass:HOME` |
 | `--extends <path>` | `--extends ~/shared/base.toml` |
 
-Think of the CLI flags as constructing a virtual config file that implicitly extends the file-based config (if any) and becomes the root config.
+Think of the CLI flags as constructing a virtual config file that implicitly extends the file-based config (if any) and becomes the root config. Paths in CLI rules are resolved relative to the current working directory (unlike config-file rules, which resolve relative to the config file).
 
 ### Layered configs via extends
 
@@ -163,7 +170,7 @@ Execave pins to specific known-good versions of `bwrap` and `strace` and checks 
 
 ## Reporting bugs
 
-If execave crashes with a message starting with `execave bug:`, that is an internal assertion failure. Please open an issue with the full message and the command you ran.
+If you encounter a security-related bug or misfeature, please open an issue. For any other bugs, including crashes, you may open issues/PRs but I cannot guarantee I have time to respond in any way.
 
 ## Documentation
 
