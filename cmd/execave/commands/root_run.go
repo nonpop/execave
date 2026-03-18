@@ -96,26 +96,27 @@ func groupedFlagUsages(flags *pflag.FlagSet) string {
 		}
 	})
 
-	var b strings.Builder
-	for _, g := range groups {
+	var sb strings.Builder
+	for _, group := range groups {
 		var fs pflag.FlagSet
-		for _, name := range g.names {
+		for _, name := range group.names {
 			if f := flags.Lookup(name); f != nil {
 				fs.AddFlag(f)
 			}
 		}
 		if usages := fs.FlagUsages(); usages != "" {
-			b.WriteString("\n" + g.header + ":\n")
-			b.WriteString(usages)
+			sb.WriteString("\n" + group.header + ":\n")
+			sb.WriteString(usages)
 		}
 	}
 	if usages := other.FlagUsages(); usages != "" {
-		b.WriteString("\nOther:\n")
-		b.WriteString(usages)
+		sb.WriteString("\nOther:\n")
+		sb.WriteString(usages)
 	}
-	return b.String()
+	return sb.String()
 }
 
+//nolint:cyclop,nestif
 func rootUsageFunc(cmd *cobra.Command) error {
 	if cmd != rootCmd {
 		cmd.Printf("Usage:\n  %s\n", cmd.UseLine())

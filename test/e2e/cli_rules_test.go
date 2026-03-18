@@ -283,6 +283,7 @@ func Test_CLIRules_ConfigShow(t *testing.T) {
 	}
 }
 
+//nolint:funlen
 func Test_CLIRules_InvalidSyntaxRejected(t *testing.T) {
 	// Invalid CLI rule syntax is rejected at config load time; the command never runs.
 	tests := []struct {
@@ -320,6 +321,24 @@ func Test_CLIRules_InvalidSyntaxRejected(t *testing.T) {
 			flag:       "--env",
 			value:      "allow:HOME",
 			wantStderr: "invalid env rule action",
+		},
+		{
+			name:       "--env pass HTTP_PROXY rejected",
+			flag:       "--env",
+			value:      "pass:HTTP_PROXY",
+			wantStderr: "managed by the tunnel",
+		},
+		{
+			name:       "--env pass HTTPS_PROXY rejected",
+			flag:       "--env",
+			value:      "pass:HTTPS_PROXY",
+			wantStderr: "managed by the tunnel",
+		},
+		{
+			name:       "--env pass no_proxy rejected",
+			flag:       "--env",
+			value:      "pass:no_proxy",
+			wantStderr: "managed by the tunnel",
 		},
 	}
 

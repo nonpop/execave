@@ -37,6 +37,7 @@ linters:
         - sb strings.Builder
         - s *scenario
         - ok bool
+        - fs pflag.FlagSet
 
     exhaustive:
       default-signifies-exhaustive: true

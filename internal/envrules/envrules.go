@@ -38,6 +38,11 @@ func ParseRule(rawRule, configPath string) (Rule, error) {
 		return Rule{}, fmt.Errorf("invalid env rule %q: variable name must not be empty", rawRule)
 	}
 
+	switch name {
+	case "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY", "no_proxy":
+		return Rule{}, fmt.Errorf("env rule %q: %s is managed by the tunnel and cannot be passed from the host", rawRule, name)
+	}
+
 	return Rule{
 		Name:       name,
 		RawRule:    rawRule,
