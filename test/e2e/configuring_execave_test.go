@@ -248,6 +248,21 @@ func Test_ConfiguringExecave_DuplicateFilesystemPathsRejected(t *testing.T) {
 	}
 }
 
+func Test_ConfiguringExecave_SingleFilesystemPathAccepted(t *testing.T) {
+	// A config with a single filesystem rule is accepted without error. This is the
+	// positive counterpart to Test_ConfiguringExecave_DuplicateFilesystemPathsRejected
+	// and ensures the duplicate check fires only on actual duplicates, not on the
+	// presence of any rule.
+	failIfNoBwrap(t)
+	s := newScenario(t)
+	dir := s.givenDir("data")
+	s.givenRules("fs:ro:" + dir.String())
+
+	s.whenRun("true")
+
+	s.thenExitCode(0)
+}
+
 func Test_ConfiguringExecave_TildeDuplicatePathRejected(t *testing.T) {
 	// Two rules that resolve to the same absolute path after tilde expansion are rejected,
 	// regardless of whether one or both rules use tilde notation.
