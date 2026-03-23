@@ -1,5 +1,10 @@
 # execave TODOs
 
+- how to allow claude to create `~/.claude.lock` etc?
+- allow mounting /tmp/.X11-unix?
+
+
+
 - env/set:VAR=VAL rules?
 - trim openspec config.yaml
 
