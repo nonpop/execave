@@ -101,7 +101,7 @@ At runtime, the kernel enforces namespace isolation. Network traffic flows: proc
 | **Proxy** | `internal/proxy/` | HTTP forward proxy on UDS (host-side). CONNECT tunneling + HTTP forwarding, checked against net rules |
 | **Tunnel** | `internal/tunnel/` | TCP-to-UDS bridge inside sandbox. Listens on loopback, relays to proxy, injects `HTTP_PROXY`/`HTTPS_PROXY`. Fail-closed |
 | **Access Log** | `internal/accesslog/` | Logger with dedup and infrastructure path filtering. Writes formatted entries to an `io.Writer`. Shared sink for monitor and proxy |
-| **Bin Util** | `internal/binutil/` | Resolves bwrap/strace via PATH with root-ownership validation, version checks (pinned: bwrap 0.11.x, strace 6.19), ELF interpreter detection |
+| **Bin Util** | `internal/binutil/` | Resolves bwrap/strace via PATH with root-ownership validation, version checks (pinned: bwrap 0.11.x, strace 7.0), ELF interpreter detection |
 | **Path Util** | `internal/pathutil/` | `ExpandPath` (tilde, relative→absolute) and `ShortenPath` (absolute→display form) |
 | **Exit Code** | `internal/exitcode/` | Exit code propagation from sandboxed process |
 

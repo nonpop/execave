@@ -243,22 +243,22 @@ CheckBwrapVersion SHALL run `bwrap --version`, parse the version string, and cla
 
 ### Requirement: strace version check
 
-CheckStraceVersion SHALL run `strace --version`, parse the version string, and classify it against the pinned version 6.18.
+CheckStraceVersion SHALL run `strace --version`, parse the version string, and classify it against the pinned version 7.0.
 
-- OK tier (`6.18`): return `("", nil)`.
-- WARN tier (`6.19` through `6.x`): return `(warning, nil)`.
-- ERROR tier (`< 6.18` or `>= 7.0`): return `("", error)`.
+- OK tier (`7.0`): return `("", nil)`.
+- WARN tier (`7.1` through `7.x`): return `(warning, nil)`.
+- ERROR tier (`< 7.0` or `>= 8.0`): return `("", error)`.
 
 #### Scenario: Exact pinned version — OK
-- **WHEN** strace reports version `6.18`
+- **WHEN** strace reports version `7.0`
 - **THEN** CheckStraceVersion returns `("", nil)`
 
-#### Scenario: Higher minor, same major 6 — WARN
-- **WHEN** strace reports version `6.19`
+#### Scenario: Higher minor, same major 7 — WARN
+- **WHEN** strace reports version `7.1`
 - **THEN** CheckStraceVersion returns a non-empty warning and nil error
 
 #### Scenario: Older version — ERROR
-- **WHEN** strace reports version `6.17`
+- **WHEN** strace reports version `6.99`
 - **THEN** CheckStraceVersion returns a non-nil error
 
 #### Scenario: Major version bump — ERROR

@@ -18,7 +18,7 @@ var PinnedBwrapVersion = [3]int{0, 11, 0}
 // PinnedStraceVersion is the known-good strace version.
 //
 //nolint:gochecknoglobals // package-level constant-like value
-var PinnedStraceVersion = [2]int{6, 19}
+var PinnedStraceVersion = [2]int{7, 0}
 
 // compatLevel represents a version compatibility tier.
 type compatLevel int
@@ -136,9 +136,9 @@ func bwrapCompatLevel(ver [3]int) compatLevel {
 // straceCompatLevel returns the compatibility tier for a strace version.
 //
 // Tiers:
-//   - OK:    6.19 (exact match)
-//   - WARN:  6.20–6.x (higher minor within major 6)
-//   - ERROR: < 6.19 or ≥ 7.0
+//   - OK:    7.0 (exact match)
+//   - WARN:  7.1–7.x (higher minor within major 7)
+//   - ERROR: < 7.0 or ≥ 8.0
 func straceCompatLevel(ver [2]int) compatLevel {
 	if ver[0] != PinnedStraceVersion[0] {
 		return compatError

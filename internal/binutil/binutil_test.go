@@ -93,12 +93,12 @@ func TestCheckStraceVersion(t *testing.T) {
 		wantWarn    bool
 		wantErr     string
 	}{
-		{name: "older_minor_incompatible", versionLine: "strace -- version 6.18\n", wantWarn: false, wantErr: "incompatible"},
-		{name: "pinned_compatible", versionLine: "strace -- version 6.19\n", wantWarn: false, wantErr: ""},
-		{name: "newer_minor_warns", versionLine: "strace -- version 6.20\n", wantWarn: true, wantErr: ""},
-		{name: "major_bump_incompatible", versionLine: "strace -- version 7.0\n", wantWarn: false, wantErr: "incompatible"},
-		{name: "second_line", versionLine: "strace\nversion 6.19 something\n", wantWarn: false, wantErr: ""},
-		{name: "extracts_first_match", versionLine: "strace 6.19 (other 7.0)\n", wantWarn: false, wantErr: ""},
+		{name: "older_minor_incompatible", versionLine: "strace -- version 6.99\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "pinned_compatible", versionLine: "strace -- version 7.0\n", wantWarn: false, wantErr: ""},
+		{name: "newer_minor_warns", versionLine: "strace -- version 7.1\n", wantWarn: true, wantErr: ""},
+		{name: "major_bump_incompatible", versionLine: "strace -- version 8.0\n", wantWarn: false, wantErr: "incompatible"},
+		{name: "second_line", versionLine: "strace\nversion 7.0 something\n", wantWarn: false, wantErr: ""},
+		{name: "extracts_first_match", versionLine: "strace 7.0 (other 8.0)\n", wantWarn: false, wantErr: ""},
 		{name: "empty_output", versionLine: "", wantWarn: false, wantErr: "no version found"},
 		{name: "no_version_match", versionLine: "strace\nno version here\n", wantWarn: false, wantErr: "no version found"},
 	}
